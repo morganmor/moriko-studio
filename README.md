@@ -112,16 +112,7 @@ pnpm sync
 ```
 
 `pnpm dev` refreshes snapshots older than 24 hours on its own before starting,
-and when you are offline it keeps the current snapshot and starts anyway. Set
-`MORIKO_NO_SYNC=1` to skip that freshness check entirely (CI, offline machines).
-
-### Streaming
-
-Answers arrive token by token as the model writes them, with the reasoning
-trace (when a model has one) shown in a collapsible panel and token usage
-reported at the end. Pressing **Stop** cancels instantly: the browser aborts
-its request, the local server aborts the call to the provider, and everything
-unwinds in one motion.
+and when you are offline it keeps the current snapshot and starts anyway.
 
 ---
 
@@ -140,10 +131,9 @@ Providers → **Add provider** → pick a template or fill in the fields.
 Saved providers appear in the Run settings dropdown immediately. The
 **API format** choice decides which adapter the proxy uses:
 
-- **OpenAI-compatible** — the default. Covers OpenRouter, Groq, DeepSeek,
-  Mistral, Together, Fireworks, vLLM, Ollama, LM Studio, and most others.
-- **Gemini** — needed for thinking budgets.
-- **Anthropic** — needed for extended thinking and the Messages API shape.
+- **OpenAI-compatible**
+- **Gemini**
+- **Anthropic**
 
 ### How thinking level maps to each provider
 
@@ -153,36 +143,21 @@ Saved providers appear in the Run settings dropdown immediately. The
 | Low | `low` | 1,024 tokens | 2,048 tokens |
 | Medium | `medium` | 8,192 tokens | 8,192 tokens |
 | High | `high` | 24,576 tokens | 16,384 tokens |
-
-Anthropic rejects `temperature` alongside extended thinking, so the adapter
-omits it whenever thinking is enabled.
+| Xhigh | `xhigh` | - | - |
+| Max | `max` | - | - |
 
 ---
 
-## Configuration
+### Configuration
+**You can change proxy port at :**
+- vite.config.ts — Line  6: const proxyTarget = process.env.PROXY_TARGET ?? 'http://127.0.0.1:8826'
+- server/index.ts — Line  123: const PORT = Number(process.env.PORT ?? 8826)
 
-All server settings are environment variables. See `.env.example` for the full
-list.
+**For webdev port :**
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `PORT` | `8791` | Proxy port. |
-| `CORS_ORIGIN` | — | Comma-separated allowed origins. Empty allows all. |
-| `MORIKO_HOME` | `~/.moriko-studio` | Where ALL app data lives (providers, key vault, chats, images, agent state). Also settable from Settings → Data; the pick is persisted in `.env`. |
-| `DATA_DIR` | — | *Legacy:* only names the old `.data/` folder the boot migration reads from. |
-| `PROXY_TARGET` | `http://127.0.0.1:8791` | *Vite-side* proxy target. |
-| `<NAME>_API_KEY` | — | Any provider whose key is set is exposed as ready. |
-| `<NAME>_BASE_URL` | provider default | Override a built-in base URL (e.g. an Azure gateway). |
+- vite.config.ts — Line 15: port: 5588
 
-Keys can live in either place:
-
-- **Providers menu** (in-app) — the normal flow: pick a provider, paste its
-  key, save. Every key — custom and built-in alike — goes into the
-  `~/.moriko-studio/api-keys.json` vault, each entry beside the provider endpoint it
-  is used against, and never sent back to the browser.
-- **`.env`** — for headless setups or CI: `OPENAI_API_KEY`, and any
-  `<NAME>_API_KEY` / `<NAME>_BASE_URL` overrides. Env keys win at request
-  time when both are present.
+---
 
 ### Where your data lives
 
@@ -191,28 +166,29 @@ One root, overridable with `MORIKO_HOME` (also from **Settings → Data**, persi
 source tree:
 
 ```
-~/.moriko-studio/                 everything the app persists
-├── providers.json                custom provider DEFINITIONS (no secrets)
-├── api-keys.json                 the key vault: { apiKey, baseUrl } per provider
-├── vision.json                   agent__vision provider/model
-├── mcp.json                      registered MCP servers
-├── agents.json                   agent workspace registry + settings
-├── settings.json                 server settings (image retention, …)
-├── reminders.json                scheduled reminders
-├── audit/ jobs/ read-state/ vault/   agent harness state
+~/.moriko-studi(or you custom location)/                 
+├── providers.json                
+├── api-keys.json                 
+├── vision.json                   
+├── mcp.json                      
+├── agents.json                   
+├── settings.json                 
+├── reminders.json                
+├── audit/ jobs/ read-state/ vault/   
 ├── conversation/
-│   ├── index.json                chat summaries (the list view)
-│   ├── manifest.json             folder mapping + chat order
+│   ├── index.json                
+│   ├── manifest.json             
 │   ├── chat-001-20260919/
-│   │   ├── chat-data.json        the full conversation record
-│   │   └── goals-plan.json       this session's agent goals
-│   └── detached/<session>.json   goals of chats with no folder
+│   │   ├── chat-data.json        
+│   │   └── goals-plan.json       
+│   └── detached/<session>.json   
 ├── image-session/
-│   ├── data.json                 Image Studio sessions
-│   ├── images/                   generated files (+ sidecar meta)
-│   └── task-state.json · tasks.jsonl
+│   ├── data.json                 
+│   ├── images/                   
+│   ├── task-state.json · 
+│   └── tasks.jsonl
 └── gallery/
-    └── data.json                 the permanent gallery
+    └── data.json                 
 ```
 
 On the first boot after restructuring, the proxy migrates the old flat stores
@@ -225,7 +201,7 @@ renamed to `*.migrated`, never deleted.
 
 Moriko speaks the [Model Context Protocol](https://modelcontextprotocol.io) —
 register tool servers in **Settings → MCP servers** and turn on **Use MCP**
-(Configuration → Tools) so the model can call their tools mid-conversation.
+(Sidebar Configuration → Tools), so the model can call their tools mid-conversation.
 
 Two transports:
 
@@ -242,11 +218,6 @@ Two transports:
   auth headers. Example: `https://mcp.deepwiki.com/mcp` with
   `Authorization: Bearer …` headers when required.
 
-Press the flask icon to connect and list a server's tools. When **Use MCP** is
-on, every tool from every enabled server (namespaced `mcp__<server>__<tool>`)
-is offered to the model; its tool calls run against your servers and the
-results stream back into the conversation (shown under "Used N tools" in the
-thread). With the toggle off, MCP is never used.
 
 Notes:
 
@@ -254,10 +225,7 @@ Notes:
   making useful calls, with spin-guards that catch a model repeating itself. A
   single tool call times out after 90 s, and tool output is truncated before it
   re-enters the model context.
-- Stdio servers are arbitrary programs you chose to run — only register
-  servers you trust, and keep filesystem roots scoped to directories you are
-  willing to expose.
-- Server configs live in `~/.moriko-studio/mcp.json`; header/env secrets never leave
+- Server configs live in `~/.moriko-studio/mcp.json` header/env secrets never leave
   the server (the settings UI only ever sees masked values).
 
 ---
@@ -265,7 +233,7 @@ Notes:
 ## Agents (Agent mode)
 
 Agent mode turns the current conversation into a working coding agent — no
-separate view, chat ⇄ agent stays in the same session. Flip it via the
+separate view, chat agent stays in the same session. Flip it via the
 **Chat | Agent** separator above the composer (empty state), the composer's
 **Tools** menu, or Configuration → Tools.
 
@@ -281,9 +249,6 @@ What keeps it safe:
   root and refused if they escape it; running commands and touching anything
   outside asks for your approval first (off / ask / auto for allow-listed
   programs).
-- **It reads before it writes.** Editing a file the agent never read is
-  refused, so the classic "overwrote content it had not seen" failure cannot
-  happen.
 - **Every change is undoable.** Each edit and delete snapshots the previous
   state into a local vault first, so a bad change is one step from restored.
 - **Broken code never ships.** When the harness edits itself, the change is
@@ -301,21 +266,19 @@ trail — audit log, snapshots, read state — lives beside the other data under
 | Command | Description |
 | --- | --- |
 | `npm run dev` | Proxy + Vite dev server together. |
-| `npm run dev:web` | Vite only (UI on 5178). |
+| `npm run dev:web` | Vite only |
 | `npm run dev:server` | Proxy only, reloading on change. |
 | `npm run build` | Typecheck, then build to `dist/`. |
 | `npm start` | Serve the built app from the proxy (production). |
 | `npm run typecheck` | Types only, no emit. |
-| `pnpm sync` | Refresh the model-support snapshots (see [Updating model support](#updating-model-support)). |
+| `pnpm sync` | Refresh the model-support snapshots. |
 
 ---
 
 ## Security notes
 
-- **Keys never reach the browser** for built-in providers; the client sends a
+- **Keys never reach the browser** for built-in providers, the client sends a
   provider id, the server attaches the credential.
-- **Model output is untrusted.** `react-markdown` runs without `rehype-raw`, so
-  HTML in a response is rendered as text and cannot execute.
 - **Imports are validated.** Every field of an imported bundle is coerced and
   clamped; malformed conversations are dropped rather than trusted.
 - **The proxy binds to localhost.** It is a development tool — put real auth in
@@ -329,5 +292,4 @@ trail — audit log, snapshots, read state — lives beside the other data under
   resolvable by anyone else, since threads live in `localStorage`.
 - Code execution and function calling are passed to the model as instructions,
   not executed locally.
-- The run settings panel is a fixed column at `lg` and a slide-in drawer below
-  it, so model, provider, and system prompt stay reachable on phones.
+- For Vault, the agent currently does not read the full code, so for now Vault will only restore files rather than the selected code areas.
