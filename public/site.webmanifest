@@ -1,0 +1,17 @@
+{
+  "name": "Moriko Studio",
+  "short_name": "Moriko",
+  "description": "An AI chat workspace with system instructions, thinking levels, tools, and custom providers.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#191919",
+  "theme_color": "#191919",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

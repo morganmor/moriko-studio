@@ -1,0 +1,687 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --c-canvas: 246 245 245;
+    --c-surface: 255 255 255;
+    --c-elevated: 254 243 230;
+    --c-hairline: 226 228 235;
+    --c-ink: 24 26 33;
+    --c-muted: 65 16 0;
+    --c-faint: 65 16 0;
+    --c-accent: 210 113 73;
+    --c-accent-ink: 255 255 255;
+    --c-accent-soft: 255 237 226;
+    --c-danger: 200 45 55;
+    --c-success: 21 122 74;
+    --c-warning: 158 98 10;
+    --c-user-bubble: 255 255 255;
+    --c-rail-dot: 140 146 158;
+  }
+
+  .dark {
+    --c-canvas: 16 15 15;
+    --c-surface: 15 14 14;
+    --c-elevated: 22 22 22;
+    --c-hairline: 42 45 52;
+    --c-ink: 238 240 245;
+    --c-muted: 156 162 175;
+    --c-faint: 122 128 142;
+    --c-accent: 255 138 42;
+    --c-accent-ink: 42 22 2;
+    --c-user-bubble: 37 37 37;
+    --c-accent-soft: 56 30 8;
+    --c-danger: 255 122 128;
+    --c-success: 92 205 154;
+    --c-warning: 255 194 14;
+    --c-rail-dot: 64 68 78;
+  }
+
+  .mocha {
+    --c-canvas: 28 24 23;
+	--c-surface: 30 20 20;
+    --c-elevated: 38 30 28;
+    --c-hairline: 58 49 45;
+    --c-user-bubble: 51 42 39;
+    --c-rail-dot: 82 70 62;
+  }
+
+  * {
+    border-color: rgb(var(--c-hairline));
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  html {
+    background-color: rgb(var(--c-canvas));
+  }
+
+  #root {
+    width: calc(100% / var(--app-zoom, 1));
+    height: calc(100dvh / var(--app-zoom, 1));
+    transform: scale(var(--app-zoom, 1));
+    transform-origin: 0 0;
+  }
+
+  html,
+  body {
+    overflow: hidden;
+  }
+
+  .ctx-zoom {
+    zoom: calc(var(--ctx-scale, 1) / var(--app-zoom, 1));
+  }
+
+  body {
+    @apply bg-canvas text-ink antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+    text-rendering: optimizeLegibility;
+  }
+
+  html[data-font='mono'] body {
+    font-family: 'JetBrains Mono', SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  html[data-font='system'] body {
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  }
+
+  :focus-visible {
+    outline: 2px solid rgb(var(--c-accent));
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(var(--c-hairline));
+    border: 3px solid transparent;
+    background-clip: content-box;
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--c-faint));
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  html {
+    scrollbar-color: rgb(var(--c-hairline)) transparent;
+  }
+}
+
+@layer components {
+  .surface-card {
+    @apply rounded-card border border-hairline bg-surface;
+  }
+
+  .user-bubble {
+    background-color: rgb(var(--c-user-bubble));
+  }
+
+  .icon-button {
+    @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-control
+           text-muted transition-colors duration-150
+           hover:bg-elevated hover:text-ink
+           disabled:pointer-events-none disabled:opacity-40;
+  }
+
+  .pill-button {
+    @apply inline-flex items-center gap-2 rounded-control px-3 py-2 text-sm font-medium
+           transition-colors duration-150 disabled:pointer-events-none disabled:opacity-40;
+  }
+
+  .field {
+    @apply w-full rounded-control border border-hairline bg-canvas px-3 py-2 text-sm text-ink
+           placeholder:text-faint focus:border-accent focus:outline-none;
+  }
+
+  .field-label {
+    @apply mb-1.5 block text-xs font-medium text-muted;
+  }
+
+  /* CatEyeModeToggle: kursor blok berkedip di status 'AGENT MODE ACTIVE' /
+     'CHAT MODE ONLY' (pola agblink dari agent_input_panel_cat_eye.html). */
+  .cat-eye-cursor {
+    display: inline-block;
+    width: 7px;
+    height: 12px;
+    margin-left: 5px;
+    background: currentColor;
+    animation: cat-eye-cursor 1s steps(2, start) infinite;
+  }
+}
+
+@keyframes cat-eye-cursor {
+  to {
+    visibility: hidden;
+  }
+}
+
+@layer utilities {
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
+  .retro-text {
+    background-image: linear-gradient(
+      100deg,
+      #ff7e00 0%,
+      #ffc20e 55%,
+      #b15700 100%
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    filter: drop-shadow(0 0 6px rgb(255 126 0 / 0.35));
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Markdown rendering
+ * Prose styles live here rather than in the component so both chat surfaces
+ * (thread and preview) stay identical.
+ * --------------------------------------------------------------------------- */
+.md-body {
+  @apply text-[15px] leading-[1.7] text-ink;
+  overflow-wrap: anywhere;
+}
+.md-body > * + * {
+  margin-top: 0.85em;
+}
+.md-body h1,
+.md-body h2,
+.md-body h3,
+.md-body h4 {
+  @apply font-semibold leading-snug text-ink;
+  margin-top: 1.5em;
+}
+.md-body h1 {
+  @apply text-xl;
+}
+.md-body h2 {
+  @apply text-lg;
+}
+.md-body h3 {
+  @apply text-base;
+}
+.md-body a {
+  @apply text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent;
+}
+.md-body ul,
+.md-body ol {
+  @apply space-y-1.5 pl-5;
+}
+.md-body ul {
+  @apply list-disc;
+}
+.md-body ol {
+  @apply list-decimal;
+}
+.md-body li::marker {
+  @apply text-faint;
+}
+.md-body blockquote {
+  @apply border-l-2 border-hairline pl-4 text-muted;
+}
+.md-body code {
+  @apply rounded bg-elevated px-1.5 py-0.5 font-mono text-[0.85em] text-ink;
+}
+.md-body pre {
+  @apply overflow-x-auto rounded-control border border-hairline bg-canvas p-3.5;
+}
+.md-body pre code {
+  @apply bg-transparent p-0 text-[13px] leading-relaxed;
+}
+.md-body table {
+  @apply block w-full overflow-x-auto border-collapse text-sm;
+}
+.md-body th,
+.md-body td {
+  @apply border border-hairline px-3 py-2 text-left;
+}
+.md-body th {
+  @apply bg-elevated font-semibold;
+}
+.md-body hr {
+  @apply border-hairline;
+}
+.md-body img {
+  @apply max-w-full rounded-control;
+}
+
+/* COMPACT PROSE — OUTPUT rows inside the activity pill (the o─o-marked
+   intermediate output): deliberately LARGER and full-ink so real model output
+   contrasts with the dim 13px muted reasoning beside it. text-ink follows the
+   active theme (near-white on dark/mocha, near-black on light). */
+.md-body.md-compact {
+  @apply text-[14px] leading-relaxed text-ink;
+}
+.md-body.md-compact > * + * {
+  margin-top: 0.6em;
+}
+.md-body.md-compact h1,
+.md-body.md-compact h2,
+.md-body.md-compact h3,
+.md-body.md-compact h4 {
+  @apply font-semibold leading-snug text-ink;
+  margin-top: 1.1em;
+}
+.md-body.md-compact h1 {
+  @apply text-[17px];
+}
+.md-body.md-compact h2 {
+  @apply text-[15.5px];
+}
+.md-body.md-compact h3,
+.md-body.md-compact h4 {
+  @apply text-[14px];
+}
+.md-body.md-compact ul,
+.md-body.md-compact ol {
+  @apply space-y-1 pl-4;
+}
+.md-body.md-compact code {
+  @apply px-1 py-0;
+}
+.md-body.md-compact pre {
+  @apply p-2.5;
+}
+.md-body.md-compact pre code {
+  @apply text-[13px];
+}
+.md-body.md-compact table {
+  @apply text-[13.5px];
+}
+.md-body.md-compact th,
+.md-body.md-compact td {
+  @apply px-2 py-1.5;
+}
+
+.katex-display {
+  @apply overflow-x-auto overflow-y-hidden py-1;
+}
+
+/* REASONING INDICATOR — inlined reasoning_loop.svg beside the label. Its
+   built-in traveling-light animation runs ONLY while reasoning is live;
+   .is-idle pauses it at the static cat outline, and reduced-motion users get
+   the static pose always. The SVG rides its own <style> (global classes .an/
+   .t/.h), so these selectors merely add the play-state gate. */
+.reasoning-loop {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  align-self: center;
+}
+.reasoning-loop svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.reasoning-loop.is-idle svg .an {
+  animation-play-state: paused;
+}
+@media (prefers-reduced-motion: reduce) {
+  .reasoning-loop svg .an {
+    animation-play-state: paused;
+  }
+}
+
+.inner-scroll {
+  overscroll-behavior: contain;
+}
+
+.cv-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 160px;
+}
+
+@keyframes drawer-slide-left {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+@keyframes drawer-slide-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+.drawer-slide-left {
+  animation: drawer-slide-left 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.drawer-slide-right {
+  animation: drawer-slide-right 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Right-dock panel SWITCH: a subtle slide+fade played when the dock swaps
+   between Config / Tree / Addons — remount via key on the panel wrapper. */
+@keyframes dock-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.dock-panel-in {
+  /* NO fill-mode: once the entrance finishes, the computed transform must
+     return to `none` — a retained transform makes the wrapper the containing
+     block for every position:fixed inside the panel (model picker, popovers),
+     trapping them inside the dock instead of the viewport. */
+  animation: dock-panel-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes tc-shimmer-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(220%);
+  }
+}
+
+.tc-running {
+  position: relative;
+  isolation: isolate;
+}
+
+.tc-shimmer {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: 6px;
+}
+
+.tc-shimmer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 45%;
+  background: linear-gradient(
+    100deg,
+    transparent 0%,
+    color-mix(in srgb, var(--color-accent, #58a6ff) 14%, transparent) 45%,
+    color-mix(in srgb, var(--color-accent, #58a6ff) 22%, transparent) 55%,
+    transparent 100%
+  );
+  animation: tc-shimmer-sweep 1.6s cubic-bezier(0.45, 0, 0.4, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tc-shimmer::before {
+    animation: none;
+    transform: none;
+    left: 0;
+    right: 0;
+    width: 100%;
+    background: color-mix(in srgb, var(--color-accent, #58a6ff) 8%, transparent);
+  }
+}
+
+/**
+ * ACTIVITY PILL (spec v2) — ONE pill panel per assistant turn. A conic-gradient
+ * comet rotates around the PANEL border while running; collapsed it reads as a
+ * small chip ([▼ Doing Work ●●●]), expanding animates the panel height open.
+ * The label swaps status words every 2s with a soft fade while RUNNING.
+ */
+.activity-ticker {
+  position: relative;
+  border-radius: 14px;
+  padding: 1.5px;
+  isolation: isolate;
+}
+
+/* Register the ring angle so the conic gradient itself animates — the comet
+   sweeps around the BORDER CIRCLE while the pill element never rotates. */
+@property --ticker-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+/* Ring: STATIC dim orange by default (DONE pill). Only the RUNNING pill gets
+   the animated light comet — registered angle so the conic gradient itself
+   rotates while the pill element never does. */
+.activity-ticker::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: color-mix(in srgb, rgb(var(--c-accent)) 40%, transparent);
+  opacity: 0.5;
+}
+
+.activity-ticker.is-running::before {
+  background: conic-gradient(
+    from var(--ticker-angle),
+    transparent 0deg,
+    rgb(var(--c-accent)) 55deg,
+    transparent 130deg,
+    transparent 180deg,
+    color-mix(in srgb, rgb(var(--c-accent)) 45%, transparent) 225deg,
+    transparent 300deg
+  );
+  animation: activity-ring-spin 2.8s linear infinite;
+  opacity: 1;
+}
+
+/* Hollow: the ring shows only on the border band — the body stays transparent
+   so the chat background passes through, exactly like the mockup's outline. */
+.activity-ticker::after {
+  content: '';
+  position: absolute;
+  inset: 1.5px;
+  border-radius: inherit;
+  /* Theme-aware: the pill body follows canvas/surface per theme (light, dark,
+     mocha) instead of a hardcoded dark fallback. */
+  background: rgb(var(--c-canvas));
+  transition: background 0.3s ease-in-out;
+}
+
+.activity-ticker > * {
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes activity-ring-spin {
+  to {
+    --ticker-angle: 360deg;
+  }
+}
+
+.activity-ticker-word {
+  animation: activity-word-in 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* --- Pill width animation (chip <-> full panel) --------------------------
+   Collapsed = an intrinsic fit-content chip; expanded = full width.
+   `interpolate-size: allow-keywords` (Chromium 129+) animates the keyword;
+   unsupported browsers snap — safe, because the chip width IS its content. */
+.reason-chunk {
+  /* Virtualized reasoning slice: off-viewport chunks skip layout and paint.
+     Size estimate is `auto <lines * 21px>` per chunk — after first render the
+     real size is remembered, so the scrollbar only settles once. */
+  content-visibility: auto;
+}
+
+.activity-pill-wrap {
+  width: fit-content;
+  interpolate-size: allow-keywords;
+  transition: width 300ms ease-in-out;
+}
+
+.activity-pill-wrap.is-open {
+  width: 100%;
+}
+
+/* The pill's stack is the size container: `100cqw` always equals the pill's
+   OPEN width, independent of the width animation. */
+.activity-stack {
+  container-type: inline-size;
+}
+
+/* Inline-size containment: the fit-content target above is ALWAYS the chip
+   header — never the panel rows. Without it the rows' max-content holds the
+   close animation at full width until they unmount (330ms), then the pill
+   snaps shut in one frame. */
+.activity-panel {
+  contain: inline-size;
+}
+
+/* Rows pin their layout width to the OPEN width (container width minus the
+   1.5px ring band each side): text never rewraps while the outline animates,
+   so the height fold stays monotonic and the rows are simply clipped. */
+.activity-panel-scroll {
+  width: calc(100cqw - 3px);
+}
+
+/* RUNNING dots pulse in sequence; they only exist while the pill is running. */
+.activity-ticker .ticker-dot {
+  animation: ticker-dot-pulse 1.2s ease-in-out infinite;
+}
+
+.activity-ticker .ticker-dot-2 {
+  animation-delay: 150ms;
+}
+
+.activity-ticker .ticker-dot-3 {
+  animation-delay: 300ms;
+}
+
+/* ROW FADE-IN — a pill row eases in the first time it mounts: a new tool/
+   read/reasoning/steer row arriving mid-stream, and the whole panel content
+   on reopen. Animation runs on MOUNT only — streaming re-renders never
+   replay it (same pattern as dock-panel-in). */
+@keyframes pill-row-enter {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.pill-row-enter {
+  animation: pill-row-enter 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pill-row-enter {
+    animation: none;
+  }
+}
+
+@keyframes ticker-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+}
+
+@keyframes activity-word-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+	filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+	filter: blur(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-ticker.is-running::before {
+    animation: none;
+    background: rgb(var(--c-accent));
+    opacity: 0.55;
+  }
+  .activity-ticker-word,
+  .activity-ticker .ticker-dot {
+    animation: none;
+  }
+}
+
+.fold {
+  overflow: hidden;
+  transition:
+    width 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s linear 260ms;
+  visibility: hidden;
+}
+.fold-open {
+  transition:
+    width 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s;
+  visibility: visible;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/**
+ * CHECKPOINT RAIL — fish-eye turn dots on the thread's right edge.
+ * Foreground marks, NOT borders: the inactive dot used to reuse bg-hairline
+ * (226,228,235 on the light canvas 246 → invisible in light mode, made worse
+ * by a 0.7 opacity; komplain user 2026-10). Every theme carries its own
+ * --c-rail-dot; active/hover reuse the theme's accent/ink tokens. Unlayered
+ * on purpose — it outranks Tailwind's layered utilities, and no bg-* utility
+ * competes here anymore.
+ */
+.rail-dot {
+  background-color: rgb(var(--c-rail-dot));
+  opacity: 0.7;
+}
+
+.rail-dot--active {
+  background-color: rgb(var(--c-accent));
+  opacity: 1;
+}
+
+.rail-dot--hover {
+  background-color: rgb(var(--c-ink));
+  opacity: 1;
+}

@@ -1,0 +1,405 @@
+/**
+ * Browser View panel styles — loaded ONLY by browser-view.html (the separate
+ * tab the SPA opens). The chat app never sees this file: the panel is fully
+ * standalone, dark-first (it renders browser content, which is mostly light —
+ * dark chrome around it reduces glare), and self-contained.
+ */
+
+.bp-root {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: #17181b;
+  color: #eef0f5;
+  font-family: -apple-system, 'Segoe UI', sans-serif;
+  outline: none;
+}
+
+
+.bp-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 8px 0 14px;
+  background: #17181b;
+  border-bottom: 1px solid #26282e;
+  flex-shrink: 0;
+}
+
+.bp-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+}
+
+.bp-mode-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.bp-mode-agent {
+  color: #9ecbff;
+}
+
+.bp-mode-agent .bp-mode-dot {
+  background: #58a6ff;
+  box-shadow: 0 0 6px rgba(88, 166, 255, 0.6);
+}
+
+.bp-mode-takeover {
+  color: #6ede7d;
+}
+
+.bp-mode-takeover .bp-mode-dot {
+  background: #3fb950;
+  box-shadow: 0 0 6px rgba(63, 185, 80, 0.6);
+}
+
+.bp-url {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #8b93a1;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11.5px;
+}
+
+.bp-conn {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.bp-conn-ok {
+  background: #3fb950;
+}
+
+.bp-conn-down {
+  background: #d29922;
+  animation: bp-blink 1.1s ease-in-out infinite;
+}
+
+@keyframes bp-blink {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+
+.bp-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0b0c0e;
+  overflow: hidden;
+}
+
+.bp-frame {
+  position: relative;
+  /*aspect-ratio: 16 / 9; */
+  /*width: min(100%, calc((100vh - 41px) * 16 / 9)); */
+  width: 100%;
+  height: 100%;
+  box-shadow: 0 0 0 1px #26282e;
+}
+
+.bp-frame video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: fill;
+  background: #0b0c0e;
+}
+
+.bp-frame video,
+.bp-ripples {
+  cursor: default;
+}
+
+.bp-root:focus-within .bp-frame video {
+  cursor: auto;
+}
+
+
+.bp-cursor {
+  position: absolute;
+  width: 28px;
+  height: 28px;
+  margin: -14px 0 0 -14px;
+  border: 2.5px solid #58a6ff;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 5;
+  transition: opacity 160ms ease;
+  filter: drop-shadow(0 0 6px rgba(88, 166, 255, 0.55));
+}
+
+.bp-cursor::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 50%;
+  background: #58a6ff;
+}
+
+.bp-cursor-hidden {
+  opacity: 0 !important;
+}
+
+
+.bp-ripples {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 6;
+  overflow: hidden;
+}
+
+.bp-ripple {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border: 2px solid #58a6ff;
+  border-radius: 50%;
+  animation: bp-ripple 0.55s ease-out forwards;
+}
+
+@keyframes bp-ripple {
+  from {
+    transform: scale(0.4);
+    opacity: 0.9;
+  }
+  to {
+    transform: scale(3.2);
+    opacity: 0;
+  }
+}
+
+.bp-drag-trail {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 6;
+  pointer-events: none;
+  animation: bp-drag-fade 0.6s ease-out forwards;
+}
+
+.bp-drag-trail polyline {
+  fill: none;
+  stroke: #58a6ff;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.85;
+}
+
+@keyframes bp-drag-fade {
+  from {
+    opacity: 0.85;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+
+.bp-urlbar {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 7;
+  width: min(62%, 560px);
+}
+
+.bp-urlbar input {
+  width: 100%;
+  padding: 7px 16px;
+  border-radius: 999px;
+  border: 1px solid #333842;
+  background: rgba(14, 15, 17, 0.9);
+  color: #eef0f5;
+  font-size: 12px;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  outline: none;
+  backdrop-filter: blur(6px);
+}
+
+.bp-urlbar input:focus {
+  border-color: #58a6ff;
+}
+
+
+.bp-user-cursor {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  background: #f0883e;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 8px rgba(240, 136, 62, 0.7);
+  z-index: 6;
+  pointer-events: none;
+  transition: opacity 200ms ease;
+}
+
+.bp-annotation,
+.bp-annotation-ghost {
+  position: absolute;
+  z-index: 7;
+  pointer-events: none;
+  border: 2px solid #f0883e;
+  background: rgba(240, 136, 62, 0.12);
+  border-radius: 3px;
+}
+
+.bp-annotation {
+  animation: bp-annot-fade 4.5s ease-in forwards;
+}
+
+@keyframes bp-annot-fade {
+  0%,
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.bp-annotation-ghost {
+  border-style: dashed;
+}
+
+.bp-menu-active {
+  background: rgba(240, 136, 62, 0.15);
+  color: #f0883e;
+}
+
+
+.bp-menu-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.bp-kebab {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: #9aa1ad;
+  font-size: 16px;
+  line-height: 1;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.bp-kebab:hover {
+  background: #26282e;
+  color: #eef0f5;
+}
+
+.bp-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 8;
+}
+
+.bp-menu {
+  position: absolute;
+  top: 32px;
+  right: 0;
+  z-index: 9;
+  min-width: 180px;
+  padding: 4px;
+  background: #1e2024;
+  border: 1px solid #2c2f36;
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+
+.bp-menu-item {
+  display: block;
+  width: 100%;
+  padding: 7px 12px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: #eef0f5;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.bp-menu-item:hover {
+  background: #2a2d33;
+}
+
+.bp-menu-danger {
+  color: #f85149;
+}
+
+.bp-menu-danger:hover {
+  background: rgba(248, 81, 73, 0.12);
+}
+
+/* WebRTC video transport status overlay */
+.bp-video-note {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(8, 9, 11, 0.72);
+  color: #b9c0cc;
+  font-size: 13px;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.bp-video-note button {
+  pointer-events: auto;
+  padding: 4px 14px;
+  border: 1px solid #3a4048;
+  border-radius: 6px;
+  background: #1d2127;
+  color: #dfe4ec;
+  cursor: pointer;
+}
+
+.bp-video-note button:hover {
+  background: #262b33;
+}
+
+.bp-menu-info {
+  padding: 4px 14px 8px;
+  font-size: 11px;
+  color: #8a93a3;
+  border-bottom: 1px solid #262b33;
+  white-space: nowrap;
+}

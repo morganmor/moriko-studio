@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="moriko-ascii" viewBox="0 0 42 9" width="168" height="36" role="img" aria-label="Moriko">
+  <title>Moriko — wordmark pixel dither retro (vektor murni, tanpa font)</title>
+  <style>
+    .moriko-ascii{--mo-ink:#D97706;--mo-dot:#92400E;--mo-shadow:#FDE68A;--mo-glow:none}
+    @media (prefers-color-scheme:dark){
+      .moriko-ascii{--mo-ink:#FBBF24;--mo-dot:#B45309;--mo-shadow:#78350F;--mo-glow:drop-shadow(0 0 0.3px rgba(251,191,36,.55))}
+    }
+    :is(.dark,[data-theme="dark"]) .moriko-ascii{--mo-ink:#FBBF24;--mo-dot:#B45309;--mo-shadow:#78350F;--mo-glow:drop-shadow(0 0 0.3px rgba(251,191,36,.55))}
+    .moriko-ascii *{shape-rendering:crispEdges}
+    .moriko-ascii .mo-shadow{fill:var(--mo-shadow)}
+    .moriko-ascii .mo-ink{fill:var(--mo-ink);filter:var(--mo-glow)}
+    .moriko-ascii .mo-dot{fill:var(--mo-dot);fill-opacity:.55}
+  </style>
+  <defs>
+    <path id="mo-glyph" d="
+      M0 0h1v7h-1zM4 0h1v7h-1zM1 1h1v1h-1zM3 1h1v1h-1zM2 2h1v1h-1z
+      M8 0h3v1h-3zM8 6h3v1h-3zM7 1h1v5h-1zM11 1h1v5h-1z
+      M14 0h1v7h-1zM15 0h3v1h-3zM18 1h1v2h-1zM15 3h3v1h-3zM16 4h1v1h-1zM17 5h1v1h-1zM18 6h1v1h-1z
+      M21 0h5v1h-5zM21 6h5v1h-5zM23 1h1v5h-1z
+      M28 0h1v7h-1zM32 0h1v1h-1zM31 1h1v1h-1zM30 2h1v1h-1zM29 3h1v1h-1zM30 4h1v1h-1zM31 5h1v1h-1zM32 6h1v1h-1z
+      M36 0h3v1h-3zM36 6h3v1h-3zM35 1h1v5h-1zM39 1h1v5h-1z"/>
+    <clipPath id="mo-clip"><use href="#mo-glyph"/></clipPath>
+    <pattern id="mo-dither" width="1" height="1" patternUnits="userSpaceOnUse">
+      <rect class="mo-dot" x="0" y="0" width="0.5" height="0.5"/>
+      <rect class="mo-dot" x="0.5" y="0.5" width="0.5" height="0.5"/>
+    </pattern>
+  </defs>
+  <g transform="translate(1 1)">
+    <use href="#mo-glyph" class="mo-shadow" x="0.5" y="0.5"/>
+    <use href="#mo-glyph" class="mo-ink"/>
+    <rect width="40" height="7" fill="url(#mo-dither)" clip-path="url(#mo-clip)"/>
+  </g>
+</svg>

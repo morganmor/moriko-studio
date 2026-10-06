@@ -1,0 +1,79 @@
+/**
+ * Adapter registry + per-provider adapter resolution.
+ *
+ * Selection order for a provider:
+ *   1. explicit `imageAdapter` on the stored provider record
+ *      ('declarative' additionally requires `imageConfig` — see phase 4)
+ *   2. a host-based rule that protects existing ModelScope providers
+ *   3. the most common default for new gateways
+ */
+
+import type { ImageAdapter, ImageCredentials } from './types.js';
+import { createDeclarativeAdapter, type DeclarativeImageConfig } from './declarative.js';
+import { modelscopeAdapter } from './modelscope.js';
+import { openaiSyncAdapter } from './openaiSync.js';
+import { civitaiAdapter } from './civitai.js';
+
+const registry = new Map<string, ImageAdapter>();
+
+export function registerImageAdapter(adapter: ImageAdapter): void {
+  registry.set(adapter.id, adapter);
+}
+
+export function getImageAdapter(id: string): ImageAdapter | undefined {
+  return registry.get(id);
+}
+
+export function listImageAdapterIds(): string[] {
+  return [...registry.keys()];
+}
+
+registerImageAdapter(modelscopeAdapter);
+registerImageAdapter(openaiSyncAdapter);
+registerImageAdapter(civitaiAdapter);
+
+/** Optional image-routing fields on a stored provider record. */
+export interface ImageProviderSelection {
+  imageAdapter?: string;
+  imageConfig?: Record<string, unknown>;
+}
+
+/**
+ * The default when a provider says nothing about images. ModelScope keeps its
+ * async-task flow; every other gateway is assumed OpenAI-shaped (sync).
+ */
+export function defaultAdapterIdFor(baseUrl: string): string {
+  return /modelscope/i.test(baseUrl) ? 'modelscope-async' : 'openai-sync';
+}
+
+/**
+ * Resolves the adapter for one provider. Throws a plain Error for
+ * configuration mistakes (unknown adapter id, malformed declarative config) —
+ * those are 500s, not upstream rejections.
+ */
+export function resolveImageAdapter(
+  selection: ImageProviderSelection | undefined,
+  baseUrl: string,
+): ImageAdapter {
+  const explicit = selection?.imageAdapter?.trim();
+  if (explicit) {
+    if (explicit === 'declarative') {
+      return createDeclarativeAdapter(
+        (selection?.imageConfig ?? {}) as unknown as DeclarativeImageConfig,
+      );
+    }
+    const adapter = registry.get(explicit);
+    if (!adapter) {
+      throw new Error(
+        `Unknown image adapter "${explicit}". Available: ${listImageAdapterIds().join(', ')}.`,
+      );
+    }
+    return adapter;
+  }
+  return registry.get(defaultAdapterIdFor(baseUrl)) ?? modelscopeAdapter;
+}
+
+/** Convenience for callers that only have credentials in hand. */
+export function resolveImageAdapterForCredentials(credentials: ImageCredentials): ImageAdapter {
+  return resolveImageAdapter(undefined, credentials.baseUrl);
+}

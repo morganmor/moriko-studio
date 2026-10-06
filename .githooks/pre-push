@@ -1,0 +1,17 @@
+#!/bin/sh
+# PRE-PUSH GATE: the full test suite must pass before anything leaves the
+# machine. Typecheck stays the ONLY reload gate (tests are slower and reload
+# speed matters for the harness workflow); pushing is the point where a
+# broken state would affect others. Windows note: sh is available via Git
+# for Windows; if a future environment lacks it, replace with a .mjs twin.
+echo "pre-push: running test suite..."
+pnpm test
+result=$?
+if [ $result -ne 0 ]; then
+  echo ""
+  echo "pre-push: TESTS FAILED — push aborted."
+  echo "Fix the failures (see test-fail.txt for full output), or push with --no-verify to skip this gate."
+  exit 1
+fi
+echo "pre-push: all tests passed."
+exit 0
