@@ -21,6 +21,15 @@
 
 ---
 
+## Quick start
+
+```bash
+npm install
+npm run dev
+```
+
+---
+
 ## What's inside
 
 | Area | What it does |
@@ -46,27 +55,6 @@ server/agents/systemPrompt.ts
 - For harness tools catalogue, you can modify it in :
 ```
 server/agents/tools/catalogue.ts
-```
-
----
-
-## Quick start
-
-```bash
-npm install
-npm run dev
-```
-
-Open **http://localhost:5178** — no `.env` editing required. Configure your
-providers (API keys, custom OpenAI-compatible endpoints, models) from the
-**Providers** menu inside the app; keys are stored locally by the proxy.
-
-The header printed by the proxy lists which providers are ready:
-
-```
-  Moriko Studio proxy → http://127.0.0.1:8791
-  Providers ready:    OpenAI
-  App data (~/.moriko-studio): C:/Users/you/.moriko-studio
 ```
 
 ---

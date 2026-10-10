@@ -2,8 +2,12 @@ allowBuilds:
   esbuild: true
 # Security override (Dependabot GHSA-x5fp-wj9c-mxmx, GHSA-4mjr-xmp4-gh2g):
 # shell-quote GHSA-w7jw-789q-3c3m, source-map-js GHSA-5rqg-jm4f-cqx7 (Dependabot #5)
+# katex prototype pollution (Dependabot #6): rehype-katex@7.0.1 / micromark-extension-math
+# masih meminta ^0.16.0, jadi copy transitive-nya di-pin ke versi patched. 0.18.11
+# di-deprecate npm ("accidentally published with breaking changes") -> pakai 0.19.0.
 overrides:
   qs: '>=6.16.0'
   proxy-addr: '>=2.0.8'
   shell-quote: '>=1.11.0'
   source-map-js: '>=1.2.2'
+  katex: '^0.19.0'

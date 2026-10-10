@@ -1,10 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Activity,
   Bell,
   Check,
   ChevronDown,
-  Code2,
   Download,
   Folder,
   MoreHorizontal,
@@ -19,8 +17,6 @@ import {
 import { NoticeCenter, cx } from './ui';
 import { DIcon } from './designIcons';
 import { Popover } from './Popover';
-import { exportUi } from '../lib/exportUi';
-import { exportPill } from '../lib/exportPill';
 import { useStore } from '../store/useStore';
 
 interface TopBarProps {
@@ -421,33 +417,6 @@ export function TopBar({ title, onShare, onOpenNav, onPickWorkspace, workspaceLa
                 <span>Export this chat</span>
               </button>
             ) : null}
-
-            {}
-            <button
-              type="button"
-              role="menuitem"
-              className="mi"
-              onClick={() => {
-                setDropOpen(false);
-                void exportUi();
-              }}
-            >
-              <Code2 className="ic" aria-hidden="true" />
-              <span>Export UI (HTML)</span>
-            </button>
-
-            <button
-              type="button"
-              role="menuitem"
-              className="mi"
-              onClick={() => {
-                setDropOpen(false);
-                void exportPill();
-              }}
-            >
-              <Activity className="ic" aria-hidden="true" />
-              <span>Export pill panel (HTML)</span>
-            </button>
 
             <button
               type="button"

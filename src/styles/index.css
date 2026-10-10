@@ -3053,3 +3053,38 @@ kbd {
 @media (min-width:768px){.mp-grid{grid-template-columns:220px minmax(0,1fr)}}
 /* Di dalam right-dock (~340px) picker menumpuk satu kolom. */
 .dock-in .mp-grid{grid-template-columns:minmax(0,1fr)}
+
+/* Shimmer Effect */
+@keyframes shimmer {
+  0% {
+    transform: translateX(-150%) skewX(-20deg);
+  }
+  100% {
+    transform: translateX(250%) skewX(-20deg);
+  }
+}
+
+.shimmer-effect {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+}
+
+.shimmer-effect::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.4),
+    transparent
+  );
+  transform: translateX(-150%) skewX(-20deg);
+  animation: shimmer 2s infinite ease-in-out;
+  pointer-events: none;
+}

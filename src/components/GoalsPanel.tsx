@@ -264,7 +264,7 @@ export function GoalsPanel({ open, onClose }: GoalsPanelProps) {
                     <>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px 0' }}>
                         <span
-                          className="cap"
+                          className={`cap ${goal.status === 'running' ? 'shimmer-effect' : ''}`}
                           style={{
                             flexShrink: 0,
                             fontSize: 10,
@@ -272,7 +272,6 @@ export function GoalsPanel({ open, onClose }: GoalsPanelProps) {
                             textTransform: 'uppercase',
                             letterSpacing: '.05em',
                             ...STATUS_STYLE[goal.status],
-                            animation: goal.status === 'running' ? 'breathe 2s ease-in-out infinite' : undefined,
                           }}
                         >
                           {goal.status}
