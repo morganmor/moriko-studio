@@ -7,7 +7,7 @@
 </p>
 
 <details>
-  <summary><b>🔍 Lihat screenshot lainnya (Preview 2 - 5)</b></summary>
+  <summary><b>🔍 See more screenshots (Preview 2 - 5)</b></summary>
   <br>
 
   | Preview 2 | Preview 3 |

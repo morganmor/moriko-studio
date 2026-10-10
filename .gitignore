@@ -25,7 +25,7 @@ AGENTS.md
 .attachments/
 /assets/
 *.tsbuildinfo
-.githooks
+.githooks/
 
 *.log
 .DS_Store
