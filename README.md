@@ -1,5 +1,17 @@
 # Moriko Studio
-![Preview](./docs/preview.png)
+
+## Preview
+
+| Preview 1 | Preview 2 |
+| :---: | :---: |
+| <img src="./docs/preview1.PNG" alt="Preview 1" width="100%"/> | <img src="./docs/preview2.PNG" alt="Preview 2" width="100%"/> |
+| **Preview 3** | **Preview 4** |
+| <img src="./docs/preview3.PNG" alt="Preview 3" width="100%"/> | <img src="./docs/preview4.PNG" alt="Preview 4" width="100%"/> |
+
+<p align="center">
+  <b>Preview 5</b><br>
+  <img src="./docs/preview5.PNG" alt="Preview 5" width="75%"/>
+</p>
 
 ---
 
@@ -140,11 +152,16 @@ Saved providers appear in the Run settings dropdown immediately. The
 | Level | OpenAI | Gemini | Anthropic |
 | --- | --- | --- | --- |
 | Off | param omitted | `thinkingBudget: 0` | thinking omitted |
-| Low | `low` | 1,024 tokens | 2,048 tokens |
-| Medium | `medium` | 8,192 tokens | 8,192 tokens |
-| High | `high` | 24,576 tokens | 16,384 tokens |
-| Xhigh | `xhigh` | - | - |
-| Max | `max` | - | - |
+| Low | `low` | 5% of max-out | 5% of max-out |
+| Medium | `medium` | 15% of max-out | 15% of max-out |
+| High | `high` | 30% of max-out | 30% of max-out |
+| Xhigh | `xhigh` | 50% of max-out | 50% of max-out |
+| Max | `max` | **64K** | **128K** |
+
+Budgets scale with the model's own max-output (models.dev). **Max uses the
+full allowance, capped at 64K (Gemini) / 128K (Anthropic)** — the Anthropic
+adapter sends `budget + 1024` as `max_tokens`, so the budget keeps 1,024
+tokens of headroom inside that 128K.
 
 ---
 

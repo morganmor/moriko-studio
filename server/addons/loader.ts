@@ -75,7 +75,6 @@ async function loadOneAddon(dir: string): Promise<LoadedAddon | null> {
   };
   if (!loaded.enabled) return loaded;
 
-  // Dynamic import register.ts
   const registerPath = path.join(dir, 'register.ts');
   const registerJsPath = path.join(dir, 'register.js');
   const entryPath = existsSync(registerPath) ? registerPath : existsSync(registerJsPath) ? registerJsPath : null;
@@ -83,12 +82,6 @@ async function loadOneAddon(dir: string): Promise<LoadedAddon | null> {
     try {
       const url = pathToFileURL(entryPath).href;
       const mod = await import(url) as Record<string, unknown>;
-      // Resolve register() across ESM and CJS-interop shapes. esbuild
-      // transpiles register.ts to CJS (the addons dir has no package.json),
-      // and the CJS->ESM interop then hides the real export one level deep:
-      //   - named export:   { register: fn }
-      //   - default export: { default: fn } | { default: { register: fn } }
-      //   - full CJS wrap:  { default: { default: fn | { register: fn } } }
       const pick = (v: unknown): AddonRegisterFn | undefined =>
         typeof v === 'function' ? (v as AddonRegisterFn) : undefined;
       const fromObj = (obj: unknown): AddonRegisterFn | undefined => {
@@ -138,8 +131,6 @@ export async function reloadAddon(id: string, enabledOverride?: boolean): Promis
   unregisterAddon(id);
   const addon = await loadOneAddon(dir);
   if (!addon) return false;
-  // enabledOverride: runtime enable/disable state wins over the manifest — a
-  // toggle must survive subsequent file-watch reloads.
   if (enabledOverride !== undefined) addon.enabled = enabledOverride;
   registerAddon(addon.manifest.id, addon);
   return true;
@@ -157,7 +148,6 @@ export function startAddonWatcher(onChange: () => void): void {
       }, 500);
     });
   } catch {
-    // recursive watch may not work on all platforms — non-fatal
   }
 }
 

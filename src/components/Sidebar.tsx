@@ -1,37 +1,26 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import {
-  ChevronDown,
-  Database,
-  Folder,
-  History,
-  Image as ImageIcon,
-  Images,
-  Loader2,
-  MessageSquare,
-  MoreHorizontal,
-  Pencil,
-  Plus,
-  Search,
-  Settings,
-  Settings2,
-  Sun,
-  Moon,
-  Trash2,
-  X,
-} from './icons';
+import { Popover } from './Popover';
+import { ChatIcon, DashboardIcon, DIcon, GalleryIcon, HistoryIcon, ProviderIcon, SettingsIcon } from './designIcons';
 
 import { brandCatHeadSvgUrl, brandWordmarkSvgUrl } from '../lib/brandAssets';
+import { CommandPalette } from './CommandPalette';
+import { Download, Pin } from './icons';
 import { isPhantomConversation, useStore } from '../store/useStore';
 import { refreshLiveStreamsNow, subscribeLivePolls, type LiveStreamSnapshot } from '../store/livePoller';
 import type { Conversation, ViewId } from '../types';
 import { storage } from '../lib/storage';
+import { resolveTheme } from '../lib/appearance';
 import { Tip, cx } from './ui';
+import { MobileWatching } from './MobileWatching';
+import { ShortcutsDialog } from './ShortcutsDialog';
 
 interface SidebarProps {
   onOpenProviders: () => void;
   /** Opens the workspace preferences dialog (font, theme, data). */
   onOpenSettings?: () => void;
+  /** NATIVE folder picker: register + activate a folder as the workspace
+   *  (sama dengan pill TopBar / composer — tanpa harus buka chat dulu). */
+  onBindWorkspace?: () => void;
   /** Called after any navigation, so a mobile drawer can close itself. */
   onNavigate?: () => void;
   /** Drag-resizable rail width (device-persisted); 248 default. */
@@ -59,27 +48,20 @@ function NavItem({
   ...rest
 }: NavItemProps) {
   return (
-    <Tip label={placeholder ? 'Coming soon' : undefined} className="w-full">
+    <Tip label={placeholder ? 'Coming soon' : undefined} className="nav-tip">
       <button
         type="button"
         onClick={placeholder ? undefined : onClick}
         disabled={placeholder}
         aria-current={active ? 'page' : undefined}
         {...rest}
-      className={cx(
-        'flex w-full items-center gap-3 rounded-control px-3 py-2 text-left text-sm',
-        'transition-colors duration-150',
-        active
-          ? 'bg-elevated font-medium text-ink'
-          : 'text-muted hover:bg-elevated/60 hover:text-ink',
-        placeholder && 'cursor-default opacity-40 hover:bg-transparent hover:text-muted',
-      )}
-    >
-      <span className="shrink-0 text-current" aria-hidden="true">
-        {icon}
-      </span>
-      <span className="min-w-0 flex-1 truncate">{label}</span>
-      {trailing}
+        className="nav"
+      >
+        <span className="nav-ic" aria-hidden="true">
+          {icon}
+        </span>
+        <span className="nav-lbl">{label}</span>
+        {trailing}
       </button>
     </Tip>
   );
@@ -104,18 +86,12 @@ function SubItem({
       type="button"
       onClick={onClick}
       aria-current={active ? 'page' : undefined}
-      className={cx(
-        'flex w-full items-center gap-2.5 rounded-control py-2 pl-[42px] pr-3 text-left text-[13px]',
-        'transition-colors duration-150',
-        active
-          ? 'bg-elevated font-medium text-ink'
-          : 'text-muted hover:bg-elevated/60 hover:text-ink',
-      )}
+      className="nav sub"
     >
-      <span className="shrink-0 text-current" aria-hidden="true">
+      <span className="nav-ic" aria-hidden="true">
         {icon}
       </span>
-      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <span className="nav-lbl">{label}</span>
       {trailing}
     </button>
   );
@@ -148,12 +124,8 @@ function CollapseSection({
   }, [open]);
 
   return (
-    <div
-      className={cx('grid transition-[grid-template-rows] duration-300 ease-in-out', className)}
-      style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
-      aria-hidden={!open}
-    >
-      <div className={cx('min-h-0 overflow-hidden', contentClassName)}>
+    <div className={cx('col', !open && 'shut', className)} aria-hidden={!open}>
+      <div className={cx('col-in', contentClassName)}>
         {contentMounted ? children : null}
       </div>
     </div>
@@ -167,6 +139,7 @@ function NavGroup({
   active,
   open,
   onToggle,
+  count,
   children,
 }: {
   icon: React.ReactNode;
@@ -174,6 +147,7 @@ function NavGroup({
   active?: boolean;
   open: boolean;
   onToggle: () => void;
+  count?: number;
   children: React.ReactNode;
 }) {
   return (
@@ -185,17 +159,16 @@ function NavGroup({
         onClick={onToggle}
         aria-expanded={open}
         trailing={
-          <ChevronDown
-            className={cx(
-              'h-3.5 w-3.5 shrink-0 text-faint transition-transform duration-200',
-              open && 'rotate-180',
-            )}
-            aria-hidden="true"
-          />
+          <>
+            {typeof count === 'number' && count > 0 ? (
+              <span className="cnt">{count}</span>
+            ) : null}
+            <DIcon name="chev-d" className="chev" aria-hidden="true" />
+          </>
         }
       />
-      <CollapseSection open={open} className="mt-0.5">
-        <div className="space-y-0.5">{children}</div>
+      <CollapseSection open={open} contentClassName="navsub">
+        {children}
       </CollapseSection>
     </div>
   );
@@ -203,9 +176,7 @@ function NavGroup({
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <p className="px-3 pb-1.5 pt-5 text-[12px] font-semibold uppercase tracking-wider text-faint">
-      {children}
-    </p>
+    <p className="sec-label">{children}</p>
   );
 }
 
@@ -235,11 +206,10 @@ const RecentItem = memo(function RecentItem({
 }) {
   const renameConversation = useStore((state) => state.renameConversation);
   const deleteConversation = useStore((state) => state.deleteConversation);
+  const patchConversation = useStore((state) => state.patchConversation);
+  const showNotice = useStore((state) => state.showNotice);
 
   const triggerRef = useRef<HTMLButtonElement>(null);
-  /** Viewport anchor captured when the menu opens: the floating menu mounts
-   *  BESIDE the row via a body portal, never inside the scrolling list. */
-  const [menuAnchor, setMenuAnchor] = useState<{ top: number; left: number } | null>(null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(conversation.title);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -267,14 +237,14 @@ const RecentItem = memo(function RecentItem({
 
   return (
     <div
-      className="group relative"
+      className={cx('crow', active && 'on')}
       onMouseDown={(event) => event.stopPropagation()}
       onKeyDown={(event) => {
         if (event.key === 'Escape' && editing) setEditing(false);
       }}
     >
       {editing ? (
-        <div className="px-1 py-0.5">
+        <div className="crow-edit">
           <input
             ref={inputRef}
             type="text"
@@ -288,7 +258,6 @@ const RecentItem = memo(function RecentItem({
               }
             }}
             aria-label={`Rename chat "${conversation.title}"`}
-            className="field px-2 py-1.5 text-[13px]"
           />
         </div>
       ) : (
@@ -297,75 +266,82 @@ const RecentItem = memo(function RecentItem({
             type="button"
             onClick={() => onSelect(conversation.id)}
             aria-current={active ? 'true' : undefined}
-            className={cx(
-              'flex w-full items-center gap-2 rounded-control py-2 pl-3 pr-8 text-left text-[13px]',
-              'transition-colors duration-150',
-              active
-                ? 'bg-elevated font-medium text-ink'
-                : 'text-muted hover:bg-elevated/60 hover:text-ink',
-            )}
+            className="crow-t"
           >
-            {running ? (
-              <Tip label="Agent active — generating in this chat">
-              <span
-                className="relative flex h-2 w-2 shrink-0"
-                aria-hidden="true"
-              >
-                {}
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-accent" />
-              </span>
-              </Tip>
-            ) : null}
-            <span className="truncate">{conversation.title}</span>
-            {running ? (
-              <span className="ml-auto flex shrink-0 items-center gap-1 pr-1 text-[10px] font-medium text-accent">
-                <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
-                <span className="sr-only">generating</span>
-              </span>
-            ) : null}
+            {running ? <span className="spin" aria-hidden="true" /> : null}
+            <span className="ct">{conversation.title}</span>
+            {conversation.pinned ? <Pin className="pinic" aria-hidden="true" /> : null}
+            {running ? <span className="sr-only">generating</span> : null}
           </button>
           <button
             type="button"
             ref={triggerRef}
             onMouseDown={(event) => event.stopPropagation()}
-            onClick={() => {
-              if (!menuOpen) {
-                const rect = triggerRef.current?.getBoundingClientRect();
-                setMenuAnchor(rect ? { top: rect.top, left: rect.right + 6 } : null);
-              }
-              onMenuToggle(conversation.id);
-            }}
+            onClick={() => onMenuToggle(conversation.id)}
             aria-label={`Chat options for "${conversation.title}"`}
             aria-expanded={menuOpen}
-            className="icon-button absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+            className="crow-m"
           >
-            <MoreHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+            <DIcon name="more" className="ic" aria-hidden="true" />
           </button>
 
-          {}
-          {menuOpen && menuAnchor
-            ? createPortal(
-                <div
-                  role="menu"
-                  aria-label={`Options for "${conversation.title}"`}
-                  onMouseDown={(event) => event.stopPropagation()}
-                  style={{
-                    position: 'fixed',
-                    left: menuAnchor.left,
-                    top: Math.min(menuAnchor.top, window.innerHeight - 96),
-                  }}
-                  className="z-[70] w-36 rounded-card border border-hairline bg-surface p-1 shadow-popover"
-                >
+          <Popover
+            open={menuOpen}
+            onClose={() => onMenuToggle(conversation.id)}
+            anchorRef={triggerRef}
+            label={`Options for "${conversation.title}"`}
+            placement="right-start"
+            width={220}
+          >
                   <button
                     type="button"
                     role="menuitem"
                     onClick={startRename}
-                    className="flex w-full items-center gap-2 rounded-control px-2.5 py-1.5 text-left text-[13px] text-muted transition-colors hover:bg-elevated/60 hover:text-ink"
+                    className="mi"
                   >
-                    <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                    <DIcon name="edit" className="ic" aria-hidden="true" />
                     Rename
                   </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      // Design chat options: pin sorts the chat to the top of Recent.
+                      patchConversation(conversation.id, { pinned: !conversation.pinned });
+                      onMenuToggle(conversation.id);
+                    }}
+                    className="mi"
+                  >
+                    <Pin className="ic" aria-hidden="true" />
+                    {conversation.pinned ? 'Unpin' : 'Pin'}
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      onMenuToggle(conversation.id);
+                      void (async () => {
+                        const { buildConversationExport, downloadJson, hydrateConversationPayloads } = await import('../lib/api');
+                        await hydrateConversationPayloads([conversation]);
+                        const slug =
+                          conversation.title
+                            .toLowerCase()
+                            .replace(/[^a-z0-9]+/g, '-')
+                            .replace(/^-+|-+$/g, '')
+                            .slice(0, 40) || 'chat';
+                        downloadJson(
+                          `moriko-chat-${slug}-${new Date().toISOString().slice(0, 10)}.json`,
+                          buildConversationExport(conversation),
+                        );
+                        showNotice('export.conversationDone');
+                      })();
+                    }}
+                    className="mi"
+                  >
+                    <Download className="ic" aria-hidden="true" />
+                    Export JSON
+                  </button>
+                  <div className="sep" />
                   <button
                     type="button"
                     role="menuitem"
@@ -373,15 +349,12 @@ const RecentItem = memo(function RecentItem({
                       onMenuToggle(conversation.id);
                       deleteConversation(conversation.id);
                     }}
-                    className="flex w-full items-center gap-2 rounded-control px-2.5 py-1.5 text-left text-[13px] text-danger transition-colors hover:bg-danger/10"
+                    className="mi danger"
                   >
-                    <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    <DIcon name="trash" className="ic" aria-hidden="true" />
                     Delete
                   </button>
-                </div>,
-                document.body,
-              )
-            : null}
+          </Popover>
         </>
       )}
     </div>
@@ -396,9 +369,11 @@ const RecentItem = memo(function RecentItem({
  * open, so nothing sinks behind the fixed footer; Recent Chat yields (bounded
  * list) while Workspace always shows in full — workspace outranks chat.
  */
-export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, width }: SidebarProps) {
+export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, onBindWorkspace, width }: SidebarProps) {
   const theme = useStore((state) => state.theme);
   const setTheme = useStore((state) => state.setTheme);
+  /** 'system' resolves through the OS so the toggle label/flip stay truthful. */
+  const effectiveTheme = resolveTheme(theme);
   const view = useStore((state) => state.view);
   const setView = useStore((state) => state.setView);
   const conversations = useStore((state) => state.conversations);
@@ -433,6 +408,7 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, width }: 
   const selectConversation = useStore((state) => state.selectConversation);
   const imageSessions = useStore((state) => state.imageSessions);
   const loadImageSessions = useStore((state) => state.loadImageSessions);
+  const galleryImages = useStore((state) => state.galleryImages);
   const agentWorkspaces = useStore((state) => state.agentWorkspaces);
   const showNotice = useStore((state) => state.showNotice);
   const handleSelect = useCallback(
@@ -493,16 +469,7 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, width }: 
   /** '+' in the Workspace header: start a chat bound to a picked workspace
    *  WITHOUT switching the active workspace. Closed on outside mousedown. */
   const [newChatPickerOpen, setNewChatPickerOpen] = useState(false);
-  const newChatPickerRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!newChatPickerOpen) return;
-    const close = (event: MouseEvent) => {
-      if (newChatPickerRef.current?.contains(event.target as Node)) return;
-      setNewChatPickerOpen(false);
-    };
-    window.addEventListener('mousedown', close);
-    return () => window.removeEventListener('mousedown', close);
-  }, [newChatPickerOpen]);
+  const newChatPickerRef = useRef<HTMLButtonElement | null>(null);
   /** Collapsible playground groups; start expanded around the active view. */
   const [chatOpen, setChatOpen] = useState(savedSections.chat ?? view === 'playground');
   const [imageOpen, setImageOpen] = useState(savedSections.image ?? view === 'imagestudio');
@@ -518,17 +485,49 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, width }: 
   }, [chatOpen, imageOpen, workspaceOpen, recentOpen, expandedWorkspaceId]);
   /** The recent-chat row menus are Sidebar-owned: only ONE open at a time. */
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  /** Command palette ("Search or jump…", Ctrl K) — also opened from the brand row. */
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  /** Design plus menu's "Slash command" row opens the palette via this event. */
+  useEffect(() => {
+    const onOpenPalette = () => setPaletteOpen(true);
+    window.addEventListener('moriko:open-palette', onOpenPalette);
+    return () => window.removeEventListener('moriko:open-palette', onOpenPalette);
+  }, []);
+  const toggleSidebar = useStore((state) => state.toggleSidebar);
+  const sidebarCollapsed = useStore((state) => state.sidebarCollapsed);
+  /** Reference design's footer affordance: the `?` key opens the cheat-sheet. */
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  /** /help slash command — same cheat-sheet as the footer's ? button. */
+  useEffect(() => {
+    const onOpenShortcuts = () => setShortcutsOpen(true);
+    window.addEventListener('moriko:open-shortcuts', onOpenShortcuts);
+    return () => window.removeEventListener('moriko:open-shortcuts', onOpenShortcuts);
+  }, []);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setPaletteOpen((open) => !open);
+      }
+      if (event.key === '?') {
+        const target = event.target;
+        if (
+          target instanceof HTMLElement &&
+          (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))
+        ) {
+          return;
+        }
+        event.preventDefault();
+        setShortcutsOpen((open) => !open);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   useEffect(() => {
     void loadImageSessions();
   }, [loadImageSessions]);
-
-  useEffect(() => {
-    if (!openMenuId) return;
-    const close = () => setOpenMenuId(null);
-    window.addEventListener('mousedown', close);
-    return () => window.removeEventListener('mousedown', close);
-  }, [openMenuId]);
 
   /** Chats that actually exist: unused "New chat" phantoms never show. */
   const visibleConversations = useMemo(
@@ -538,7 +537,9 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, width }: 
 
   const filtered = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    const sorted = [...visibleConversations].sort((a, b) => b.updatedAt - a.updatedAt);
+    const sorted = [...visibleConversations].sort(
+      (a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.updatedAt - a.updatedAt,
+    );
     if (!query) return sorted;
     return sorted.filter(
       (conversation) =>
@@ -565,111 +566,112 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, width }: 
     if (!options?.keepDrawer) onNavigate?.();
   };
 
+  /** Desktop instance only: collapsed renders the reference's 64px icon rail. */
+  const railSm = sidebarCollapsed && width !== undefined;
+
   return (
     <aside
-      className="flex h-full shrink-0 flex-col border-r-0 border-hairline bg-canvas"
-      style={{ width: width ?? 248 }}
+      className={cx('rail', railSm && 'rail-sm')}
+      style={{ width: railSm ? 64 : width ?? 260 }}
     >
       {}
-      {/* BRAND ROW — fixed px box (the old em-sized box let the cat img
-          overflow it at smaller root font sizes), 3px looser gap and a bit
-          more vertical air. */}
-      <div className="flex items-center gap-3 px-4 pt-5 pb-2 -mb-2">
+      <div className="rail-full">
+      {}
+      <div className="brand">
         <span
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent-soft"
+          className="logo"
           aria-hidden="true"
-        >
-          <img
-            src={brandCatHeadSvgUrl}
-            alt=""
-            draggable={false}
-            width={152}
-            height={100}
-            style={{ aspectRatio: '152 / 100' }}
-            className="h-5 w-auto"
-          />
-        </span>
-        <img
-          src={brandWordmarkSvgUrl}
-          alt="Moriko Studio"
-          draggable={false}
-          width={42}
-          height={9}
-          style={{ aspectRatio: '42 / 9' }}
-          className="h-5 w-auto"
+          style={{ '--img-cat': `url("${brandCatHeadSvgUrl}")` } as React.CSSProperties}
         />
+        <span
+          className="wm"
+          role="img"
+          aria-label="Moriko Studio"
+          style={{ '--img-wm': `url("${brandWordmarkSvgUrl}")` } as React.CSSProperties}
+        />
+        <span className="grow" />
       </div>
 
       {}
-      <div className="px-3 pb-1" />
+      <button
+        type="button"
+        onClick={() => setPaletteOpen(true)}
+        className="rsearch"
+      >
+        <DIcon name="search" className="ic" aria-hidden="true" />
+        <span>Search or jump…</span>
+        <kbd>Ctrl K</kbd>
+      </button>
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        onOpenSettings={() => {
+          setPaletteOpen(false);
+          onOpenSettings?.();
+        }}
+      />
 
-      <nav className="flex min-h-0 flex-1 flex-col overflow-y-auto" aria-label="Main">
+      <nav className="rscroll" aria-label="Main">
         <SectionLabel>Playground</SectionLabel>
-        <div className="space-y-0.5 px-2">
+        <div>
           {}
+          {/* Parent panels never light up — only sub-items and conversations do. */}
           <NavGroup
-            icon={<MessageSquare className="h-5 w-5" />}
+            icon={<ChatIcon />}
             label="Chat"
-            active={view === 'playground' || view === 'history'}
             open={chatOpen}
             onToggle={() => setChatOpen((open) => !open)}
+            count={visibleConversations.length}
           >
             <SubItem
-              icon={<Plus className="h-5 w-5" />}
-              label="New Chat"
+              icon={<DIcon name="plus" className="ic" />}
+              label="New chat"
+              trailing={<kbd>Alt N</kbd>}
               onClick={() => {
                 newConversation();
                 onNavigate?.();
               }}
             />
             <SubItem
-              icon={<History className="h-5 w-5" />}
+              icon={<HistoryIcon />}
               label="History"
               active={view === 'history'}
               onClick={() => go('history')}
-              trailing={
-                visibleConversations.length > 0 ? (
-                  <span className="rounded-full bg-elevated px-1.5 py-0.5 text-[10px] tabular-nums text-faint">
-                    {visibleConversations.length}
-                  </span>
-                ) : null
-              }
             />
           </NavGroup>
 
           {}
+          {/* Parent panels never light up — only sub-items and conversations do. */}
           <NavGroup
-            icon={<ImageIcon className="h-5 w-5" />}
+            icon={<DIcon name="image" className="ic" />}
             label="Image Studio"
-            active={view === 'imagestudio' || view === 'gallery' || view === 'imagehistory'}
             open={imageOpen}
             onToggle={() => setImageOpen((open) => !open)}
+            count={imageSessions.length}
           >
             <SubItem
-              icon={<Plus className="h-5 w-5" />}
-              label="New Session"
+              icon={<DIcon name="wand" className="ic" />}
+              label="New session"
               onClick={() => {
                 void createImageSession();
                 go('imagestudio');
               }}
             />
             <SubItem
-              icon={<History className="h-5 w-5" />}
-              label="History"
+              icon={<HistoryIcon />}
+              label="Image history"
               active={view === 'imagehistory'}
               onClick={() => go('imagehistory')}
-              trailing={
-                imageSessions.length > 0 ? (
-                  <span className="rounded-full bg-elevated px-1.5 py-0.5 text-[10px] tabular-nums text-faint">
-                    {imageSessions.length}
-                  </span>
-                ) : null
-              }
             />
             <SubItem
-              icon={<Images className="h-5 w-5" />}
+              icon={<GalleryIcon />}
               label="Gallery"
               active={view === 'gallery'}
+              trailing={
+                galleryImages.length > 0 ? (
+                  <span className="cnt">{galleryImages.length}</span>
+                ) : null
+              }
               onClick={() => go('gallery')}
             />
           </NavGroup>
@@ -678,42 +680,39 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, width }: 
         {}
 
         {}
-        <div className="mt-4 flex items-center pr-3">
+        <div className="sec-row" >
           <button
             type="button"
             onClick={() => setWorkspaceOpen((open) => !open)}
             aria-expanded={workspaceOpen}
-            className="flex flex-1 items-center gap-1.5 px-5 pb-1.5 text-[12px] font-semibold uppercase tracking-wider text-faint transition-colors hover:text-muted"
+            className="sec-label tog"
           >
-            Workspace
-            <ChevronDown
-              className={cx(
-                'h-3 w-3 transition-transform duration-200',
-                !workspaceOpen && '-rotate-90',
-              )}
-              aria-hidden="true"
-            />
+            <span>Workspace</span>
+            <DIcon name="chev-d" className="chev" aria-hidden="true" />
           </button>
-          <div className="relative" ref={newChatPickerRef}>
+          <div className="pop-host">
             <button
+              ref={newChatPickerRef}
               type="button"
               onClick={() => setNewChatPickerOpen((open) => !open)}
               aria-haspopup="menu"
               aria-expanded={newChatPickerOpen}
               aria-label="New chat in a workspace"
-              className="icon-button h-5 w-5 text-faint hover:text-ink"
+              className="ib xs"
             >
-              <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+              <DIcon name="plus" className="ic" aria-hidden="true" />
             </button>
-            {newChatPickerOpen ? (
-              <div
-                role="menu"
-                aria-label="New chat in a workspace"
-                className="absolute right-0 top-full z-50 mt-1 max-h-[220px] min-w-[190px] overflow-y-auto rounded-control border border-hairline bg-elevated py-1 shadow-popover"
-              >
+            <Popover
+              open={newChatPickerOpen}
+              onClose={() => setNewChatPickerOpen(false)}
+              anchorRef={newChatPickerRef}
+              label="New chat in a workspace"
+              placement="bottom-end"
+              width={240}
+            >
                 {agentWorkspaces.length === 0 ? (
-                  <p className="px-2.5 py-1.5 text-[11px] leading-snug text-faint">
-                    No workspaces registered — bind one from a chat&rsquo;s workspace pill first.
+                  <p className="ws-empty">
+                    No workspaces yet — bind one below or from a chat&rsquo;s workspace pill.
                   </p>
                 ) : (
                   agentWorkspaces.map((workspace) => (
@@ -726,84 +725,97 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, width }: 
                         setNewChatPickerOpen(false);
                         onNavigate?.();
                       }}
-                      className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-muted transition-colors hover:bg-accent/10 hover:text-ink"
+                      className="mi"
                     >
-                      <Folder className="h-3.5 w-3.5 shrink-0 text-accent/80" aria-hidden="true" />
-                      <span className="min-w-0 flex-1 truncate">{workspace.label}</span>
+                      <DIcon name="folder" className="ic ic-ac" aria-hidden="true" />
+                      <span>{workspace.label}</span>
                     </button>
                   ))
                 )}
-              </div>
-            ) : null}
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    newConversation();
+                    setNewChatPickerOpen(false);
+                    onNavigate?.();
+                  }}
+                  className="mi"
+                >
+                  <DIcon name="plus" className="ic ic-ac" aria-hidden="true" />
+                  <span>No workspace</span>
+                </button>
+            </Popover>
+
           </div>
         </div>
 
-        <CollapseSection open={workspaceOpen} className="px-2 pb-3">
+        <CollapseSection open={workspaceOpen}>
+          {/* BIND A FOLDER... — register+activate workspace langsung dari sidebar,
+               bukan cuma lewat pill TopBar (kebutuhan chat aktif). */}
+          <button
+            type="button"
+            className="ws-bind"
+            onClick={() => {
+              onBindWorkspace?.();
+              onNavigate?.();
+            }}
+          >
+            <DIcon name="plus" className="ic ic-ac" aria-hidden="true" />
+            <span>Bind a folder…</span>
+          </button>
           {agentWorkspaces.length === 0 ? (
-            <p className="px-3 py-2 text-[11.5px] leading-relaxed text-faint">
-              No workspaces yet — bind one from a chat&rsquo;s workspace pill.
+            <p className="ws-empty">
+              No workspaces yet — bind one below.
             </p>
           ) : (
             agentWorkspaces.map((workspace) => {
               const chats = chatsByWorkspace.get(workspace.id) ?? [];
               const expanded = expandedWorkspaceId === workspace.id;
               return (
-                <div key={workspace.id} className="group/ws rounded-control">
+                <div key={workspace.id} className="ws">
                   {}
-                  <div className="flex items-center">
+                  <div className="ws-row">
                     <button
                       type="button"
                       onClick={() => setExpandedWorkspaceId(expanded ? null : workspace.id)}
                       aria-expanded={expanded}
-                      className="flex min-w-0 w-full flex-1 items-center gap-1.5 rounded-control px-3 py-1.5 text-left text-[14px] text-muted transition-colors hover:bg-elevated/60 hover:text-ink"
+                      className="ws-h"
                     >
-                      <ChevronDown
-                        className={cx(
-                          'h-3 w-3 shrink-0 text-faint transition-transform duration-200',
-                          !expanded && '-rotate-90',
-                        )}
-                        aria-hidden="true"
-                      />
-                      <Folder className="h-4 w-4 shrink-0 text-accent/80" aria-hidden="true" />
-                      <span className="min-w-0 flex-1 truncate font-medium">{workspace.label}</span>
-                      <span className="shrink-0 text-[12px] text-faint">{chats.length}</span>
+                      <DIcon name="folder" className="ic ic-ac" aria-hidden="true" />
+                      <span className="ws-name">{workspace.label}</span>
+                      <span className="cnt">{chats.length}</span>
+                      <DIcon name="chev-d" className="chev" aria-hidden="true" />
                     </button>
                     {}
                       <button
                         type="button"
                         onClick={() => void handleRemoveWorkspace(workspace.id)}
                         aria-label={`Unregister workspace ${workspace.label}`}
-                        className="icon-button h-6 w-6 mr-1 shrink-0 text-faint opacity-0 transition-opacity hover:text-ink group-hover/ws:opacity-100 focus-visible:opacity-100"
+                        className="ws-del"
                       >
-                        <Trash2 className="h-4 w-4" aria-hidden="true" />
+                        <DIcon name="trash" className="ic" aria-hidden="true" />
                       </button>
                   </div>
-                  <CollapseSection open={expanded}>
-                    <div className="mt-0.5 space-y-0.5 border-l border-hairline pl-3 ml-4">
-                      {chats.length === 0 ? (
-                        <p className="px-2 py-1 text-[11px] text-faint">No sessions bound.</p>
-                      ) : (
-                        chats.map((conversation) => (
-                          <button
-                            key={conversation.id}
-                            type="button"
-                            onClick={() => handleSelect(conversation.id)}
-                            className={cx(
-                              'flex w-full items-center gap-2.5 rounded-control px-2.5 py-1.5 text-left text-[14px] transition-colors',
-                              conversation.id === activeId
-                                ? 'bg-elevated text-ink'
-                                : 'text-muted hover:bg-elevated/60 hover:text-ink',
-                            )}
-                          >
-                            <MessageSquare className="h-4 w-4 shrink-0 text-faint" aria-hidden="true" />
-                            <span className="min-w-0 flex-1 truncate">{conversation.title || 'Untitled'}</span>
-                            {Boolean(genRunning[conversation.id]) ? (
-                              <Loader2 className="h-3 w-3 shrink-0 animate-spin text-faint" aria-hidden="true" />
-                            ) : null}
-                          </button>
-                        ))
-                      )}
-                    </div>
+                  <CollapseSection open={expanded} contentClassName="ws-in">
+                    {chats.length === 0 ? (
+                      <p className="ws-empty">No sessions bound.</p>
+                    ) : (
+                      chats.map((conversation) => (
+                        /* Same triple-dot options menu as Recent Chat —
+                           RecentItem is the full row (menu, rename, pin,
+                           export, delete), so workspace chats share it. */
+                        <RecentItem
+                          key={conversation.id}
+                          conversation={conversation}
+                          active={conversation.id === activeId}
+                          running={Boolean(genRunning[conversation.id])}
+                          menuOpen={openMenuId === conversation.id}
+                          onMenuToggle={handleMenuToggle}
+                          onSelect={handleSelect}
+                        />
+                      ))
+                    )}
                   </CollapseSection>
                 </div>
               );
@@ -812,104 +824,80 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, width }: 
         </CollapseSection>
 
         {}
-        <button
-          type="button"
-          onClick={() => setRecentOpen((open) => !open)}
-          aria-expanded={recentOpen}
-          className={cx(
-            'flex items-center gap-1.5 px-5 pb-1.5 text-[12px] font-semibold uppercase tracking-wider text-faint transition-colors hover:text-muted',
-            !workspaceOpen && 'mt-4',
-          )}
-        >
-          Recent Chat
-          <ChevronDown
-            className={cx(
-              'h-3 w-3 transition-transform duration-200',
-              !recentOpen && '-rotate-90',
-            )}
-            aria-hidden="true"
-          />
-        </button>
+        <div className="sec-row">
+          <button
+            type="button"
+            onClick={() => setRecentOpen((open) => !open)}
+            aria-expanded={recentOpen}
+            className="sec-label tog"
+          >
+            <span>Recent Chat</span>
+            <DIcon name="chev-d" className="chev" aria-hidden="true" />
+          </button>
+        </div>
 
         <CollapseSection open={recentOpen}>
-          <div className="flex min-h-0 flex-1 flex-col">
-            {}
-            <div className="px-3 pb-1.5">
-              <div className="relative">
-                <Search
-                  className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-faint"
-                  aria-hidden="true"
-                />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="Search chats"
-                  aria-label="Search recent chats"
-                  className={cx(
-                    'w-full rounded-control border border-hairline bg-elevated/60 py-1.5 pl-8 text-[14px]',
-                    'text-ink outline-none transition-colors placeholder:text-faint focus:border-accent/50',
-                    searchQuery ? 'pr-7' : 'pr-2.5',
-                  )}
-                />
-                {searchQuery ? (
-                  <button
-                    type="button"
-                    onClick={() => setSearchQuery('')}
-                    aria-label="Clear search"
-                    className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-faint transition-colors hover:text-ink"
-                  >
-                    <X className="h-3.5 w-3.5" aria-hidden="true" />
-                  </button>
-                ) : null}
-              </div>
-            </div>
+          <div className="filter">
+            <DIcon name="search" className="ic" aria-hidden="true" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Filter chats"
+              aria-label="Filter chats"
+            />
+            {searchQuery ? (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                aria-label="Clear search"
+                className="filter-x"
+              >
+                <DIcon name="x" className="ic" aria-hidden="true" />
+              </button>
+            ) : null}
+          </div>
 
-            <div className="max-h-[40vh] space-y-0.5 overflow-y-auto px-2 pb-2">
-              {filtered.map((conversation) => (
-                <RecentItem
-                  key={conversation.id}
-                  conversation={conversation}
-                  active={conversation.id === activeId}
-                  running={
-                    Boolean(genRunning[conversation.id]) ||
-                    (Boolean(serverRunning[conversation.id]) && !stoppedRuns[conversation.id])
-                  }
-                  menuOpen={openMenuId === conversation.id}
-                  onMenuToggle={handleMenuToggle}
-                  onSelect={handleSelect}
-                />
-              ))}
-              {filtered.length === 0 ? (
-                <p className="px-3 py-2 text-[11.5px] leading-relaxed text-faint">
-                  {searchQuery.trim()
-                    ? 'No chats match your search.'
-                    : 'Chats appear here once you send a message.'}
-                </p>
-              ) : null}
-            </div>
+          <div className="crow-list">
+            {filtered.map((conversation) => (
+              <RecentItem
+                key={conversation.id}
+                conversation={conversation}
+                active={conversation.id === activeId}
+                running={
+                  Boolean(genRunning[conversation.id]) ||
+                  (Boolean(serverRunning[conversation.id]) && !stoppedRuns[conversation.id])
+                }
+                menuOpen={openMenuId === conversation.id}
+                onMenuToggle={handleMenuToggle}
+                onSelect={handleSelect}
+              />
+            ))}
+            {filtered.length === 0 ? (
+              <p className="ws-empty">
+                {searchQuery.trim()
+                  ? 'No chats match your search.'
+                  : 'Chats appear here once you send a message.'}
+              </p>
+            ) : null}
           </div>
         </CollapseSection>
-        {!recentOpen ? <div className="flex-1" /> : null}
       </nav>
 
       {}
-      <div
-        className="flex shrink-0 items-center gap-2 border-t border-hairline px-3 py-2.5"
-        aria-label="Sidebar footer"
-      >
-        <Tip label="Settings" align="start">
+      <div className="rfoot" aria-label="Sidebar footer">
+        <Tip label="Settings" align="start" className="sf-item">
           <button
             type="button"
             onClick={() => onOpenSettings?.()}
             aria-label="Settings"
-            className="icon-button h-8 w-8 text-muted transition-colors hover:text-ink"
+            className="ib"
           >
-            <Settings className="h-4.5 w-4.5" aria-hidden="true" />
+            <SettingsIcon />
           </button>
         </Tip>
 
-        <Tip label="Provider" align="start">
+        <Tip label="Provider" align="start" className="sf-item">
           <button
             type="button"
             onClick={() => {
@@ -917,41 +905,156 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, width }: 
               onNavigate?.();
             }}
             aria-label="Provider"
-            className="icon-button h-8 w-8 text-muted transition-colors hover:text-ink"
+            className="ib"
           >
-            <Database className="h-4.5 w-4.5" aria-hidden="true" />
+            <ProviderIcon />
           </button>
         </Tip>
 
-        <Tip label="Dashboard" align="start">
+        <Tip label="Dashboard" align="start" className="sf-item">
           <button
             type="button"
             onClick={() => go('dashboard')}
             aria-label="Dashboard"
-            className={cx(
-              'icon-button h-8 w-8 transition-colors hover:text-ink',
-              view === 'dashboard' ? 'text-ink' : 'text-muted',
-            )}
+            aria-current={view === 'dashboard' ? 'page' : undefined}
+            className="ib"
           >
-            <Settings2 className="h-4.5 w-4.5" aria-hidden="true" />
+            <DashboardIcon />
           </button>
         </Tip>
 
-        <Tip label={theme === 'dark' ? 'Day mode' : 'Night mode'} align="start">
+        <Tip label="Keyboard shortcuts · ?" align="start" className="sf-item">
           <button
             type="button"
-            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-            aria-label="Toggle day/night theme"
-            className="icon-button h-8 w-8 text-muted transition-colors hover:text-ink"
+            onClick={() => setShortcutsOpen(true)}
+            aria-label="Keyboard shortcuts"
+            aria-haspopup="dialog"
+            className="ib"
           >
-            {theme === 'dark' ? (
-              <Sun className="h-4.5 w-4.5" aria-hidden="true" />
-            ) : (
-              <Moon className="h-4.5 w-4.5" aria-hidden="true" />
-            )}
+            <DIcon name="keyboard" className="ic" aria-hidden="true" />
+          </button>
+        </Tip>
+
+        <Tip label={effectiveTheme === 'light' ? 'Night mode' : 'Day mode'} align="start" className="sf-item">
+          <button
+            type="button"
+            onClick={(event) => setTheme(effectiveTheme === 'light' ? 'dark' : 'light', event)}
+            aria-label="Toggle day/night theme"
+            className="ib theme-tg"
+          >
+            <DIcon name="sun" className="ic sun" aria-hidden="true" />
+            <DIcon name="moon" className="ic moon" aria-hidden="true" />
+          </button>
+        </Tip>
+
+        <span className="grow" />
+        <span className="livechip">
+          <span className="ld" aria-hidden="true" />
+          <MobileWatching />
+        </span>
+      </div>
+      </div>
+
+      <div className="rail-mini">
+        <button
+          type="button"
+          className="logo"
+          aria-label="Expand sidebar"
+          onClick={toggleSidebar}
+          style={{ '--img-cat': `url("${brandCatHeadSvgUrl}")` } as React.CSSProperties}
+        />
+        <Tip label="New chat">
+          <button
+            type="button"
+            aria-label="New chat"
+            onClick={() => {
+              newConversation();
+              onNavigate?.();
+            }}
+            className="ib"
+          >
+            <DIcon name="plus" className="ic" aria-hidden="true" />
+          </button>
+        </Tip>
+        <Tip label="Search · Ctrl K">
+          <button
+            type="button"
+            aria-label="Search"
+            onClick={() => setPaletteOpen(true)}
+            className="ib"
+          >
+            <DIcon name="search" className="ic" aria-hidden="true" />
+          </button>
+        </Tip>
+        <Tip label="History">
+          <button
+            type="button"
+            aria-label="History"
+            aria-current={view === 'history' ? 'page' : undefined}
+            onClick={() => go('history')}
+            className="ib"
+          >
+            <HistoryIcon />
+          </button>
+        </Tip>
+        <Tip label="Image Studio">
+          <button
+            type="button"
+            aria-label="Image Studio"
+            aria-current={view === 'imagestudio' ? 'page' : undefined}
+            onClick={() => go('imagestudio')}
+            className="ib"
+          >
+            <DIcon name="image" className="ic" aria-hidden="true" />
+          </button>
+        </Tip>
+        <Tip label="Gallery">
+          <button
+            type="button"
+            aria-label="Gallery"
+            aria-current={view === 'gallery' ? 'page' : undefined}
+            onClick={() => go('gallery')}
+            className="ib"
+          >
+            <GalleryIcon />
+          </button>
+        </Tip>
+        <span className="grow" />
+        <Tip label="Dashboard">
+          <button
+            type="button"
+            aria-label="Dashboard"
+            aria-current={view === 'dashboard' ? 'page' : undefined}
+            onClick={() => go('dashboard')}
+            className="ib"
+          >
+            <DashboardIcon />
+          </button>
+        </Tip>
+        <Tip label="Settings">
+          <button
+            type="button"
+            aria-label="Settings"
+            onClick={() => onOpenSettings?.()}
+            className="ib"
+          >
+            <SettingsIcon />
+          </button>
+        </Tip>
+        <Tip label={effectiveTheme === 'light' ? 'Night mode' : 'Day mode'}>
+          <button
+            type="button"
+            aria-label="Toggle day/night theme"
+            onClick={(event) => setTheme(effectiveTheme === 'light' ? 'dark' : 'light', event)}
+            className="ib theme-tg"
+          >
+            <DIcon name="sun" className="ic sun" aria-hidden="true" />
+            <DIcon name="moon" className="ic moon" aria-hidden="true" />
           </button>
         </Tip>
       </div>
+
+      <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
     </aside>
   );
 }

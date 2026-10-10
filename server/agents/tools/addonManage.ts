@@ -59,7 +59,6 @@ function scaffoldAddon(id: string, args: AddonManageArgs): string {
   };
   writeFileSync(path.join(dir, 'addon.json'), JSON.stringify(manifest, null, 2), 'utf-8');
 
-  // register.ts — the entry point; a widget draw is included when client code is given
   const register = args.registerCode
     ?? `export function register(on, $) {\n${args.clientCode ? `  $.ui.draw('thread-sidebar', { type: 'widget', component: './client/index.tsx' });\n` : ''}  $.ui.log('${id} loaded');\n}\n`;
   writeFileSync(path.join(dir, 'register.ts'), register, 'utf-8');
@@ -110,7 +109,6 @@ export async function addonManageTool(args: AddonManageArgs): Promise<HarnessToo
         const full = safeJoin(args.id, rel);
         if (!full) return err('file path escapes the addon root.');
         if (!existsSync(full) || statSync(full).isDirectory()) {
-          // A directory read lists its contents instead of erroring.
           if (existsSync(full) && statSync(full).isDirectory()) {
             return ok(readdirSync(full).join('\n'));
           }
@@ -128,8 +126,6 @@ export async function addonManageTool(args: AddonManageArgs): Promise<HarnessToo
         if (!full) return err('file path escapes the addon root.');
         mkdirSync(path.dirname(full), { recursive: true });
         writeFileSync(full, args.content, 'utf-8');
-        // The file watcher reloads in ~500ms; reload synchronously so the very
-        // next tool round already sees the change.
         await loadAllAddons();
         return ok(`Written ${args.id}/${rel} — addon reloaded, change is live.`);
       }
@@ -141,14 +137,12 @@ export async function addonManageTool(args: AddonManageArgs): Promise<HarnessToo
         if (!addon) return err(`Addon "${args.id}" not found.`);
         const want = action === 'enable';
         if (addon.enabled === want) return ok(`Addon "${args.id}" is already ${want ? 'enabled' : 'disabled'}.`);
-        // Persist to the manifest first (same as the UI toggle route) so the
-        // state survives restarts and file-watch reloads.
         try {
           const manifestPath = path.join(ADDONS_ROOT(), args.id, 'addon.json');
           const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
           manifest.enabled = want;
           writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
-        } catch { /* manifest write failed — toggle still applies in memory */ }
+        } catch {  }
         const done = await reloadAddon(args.id, want);
         if (!done) return err(`Reload failed for "${args.id}".`);
         return ok(`Addon "${args.id}" ${want ? 'enabled' : 'disabled'}.`);

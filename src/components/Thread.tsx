@@ -4,6 +4,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -12,9 +13,12 @@ import {
 import {
   AlertTriangle,
   Archive,
+  Bell,
   BookOpen,
+  Braces,
   Check,
   ChevronDown,
+  Cpu,
   ChevronUp,
   CircleAlert,
   Clock3,
@@ -25,6 +29,7 @@ import {
   Info,
   Loader2,
   Lock,
+  Paperclip,
   Pencil,
   PenLine,
   PlugZap,
@@ -36,9 +41,15 @@ import {
   User,
   Waypoints,
   X,
+  Square,
+  Hand,
+  ImageIcon,
+  Images,
+  ShieldAlert,
 } from './icons';
 
 import type { ConversationCompaction, Turn, TurnInjection, TurnSegment } from '../types';
+import type { AgentPermissionRequest } from '../types';
 import { attachmentRefUrl, openBrowserPanelOnce, renderableRefUrl } from '../lib/api';
 import { useChatController } from '../hooks/useChatController';
 import { useStore } from '../store/useStore';
@@ -76,25 +87,25 @@ function Md(props: { content: string; breakLines?: boolean; className?: string }
 function PendingSteerBubble({ text, parts }: { text: string; parts?: import('../types').TurnSteerPart[] }) {
   const images = (parts ?? []).filter((part) => part.type === 'image_url');
   return (
-    <div className="group ml-auto flex max-w-[80%] flex-col items-end gap-1">
-      <div className="flex items-center gap-1.5 text-[11px] font-medium text-faint">
-        <Loader2 className="h-3 w-3 animate-spin text-accent" aria-hidden="true" />
+    <div className="msg u" style={{ marginLeft: 'auto', maxWidth: '80%', gap: 4 }}>
+      <div className="meta" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <Loader2 className="ic spin" style={{ color: 'rgb(var(--c-accent))' }} aria-hidden="true" />
         <span>You · steering (queued — delivered between tool rounds)</span>
       </div>
       {images.length > 0 ? (
-        <div className="flex flex-wrap justify-end gap-1.5">
+        <div className="ufiles">
           {images.map((image, index) => (
             <img
               key={index}
               src={image.type === 'image_url' ? renderableRefUrl(image.image_url.url) : ''}
               alt="Steered image"
-              className="max-h-40 max-w-full rounded-lg border border-hairline object-contain"
+              style={{ maxHeight: 160, maxWidth: '100%', borderRadius: 'var(--r-lg)', border: '1px solid var(--line)', objectFit: 'contain' }}
             />
           ))}
         </div>
       ) : null}
       {text.trim() ? (
-        <div className="w-full rounded-card rounded-br-sm border border-accent/30 bg-accent-soft/60 px-4 py-3 opacity-90">
+        <div className="ub" style={{ width: '100%', borderRadius: 'var(--r-lg) var(--r-lg) 4px var(--r-lg)', borderColor: 'rgb(var(--c-accent) / 0.3)', background: 'color-mix(in srgb, var(--c-accent-soft) 60%, transparent)', opacity: 0.9 }}>
           <Md content={text} breakLines />
         </div>
       ) : null}
@@ -190,7 +201,7 @@ export function useStickToBottom(dependency: unknown) {
   const resolveScroller = useCallback((): Element | null => {
     let scroller = scrollerRef.current;
     if (!scroller || !scroller.isConnected) {
-      scroller = endRef.current?.closest('.overflow-y-auto') ?? null;
+      scroller = endRef.current?.closest('.chat-scroll') ?? null;
       scrollerRef.current = scroller instanceof Element ? scroller : null;
     }
     return scrollerRef.current;
@@ -229,10 +240,6 @@ export function useStickToBottom(dependency: unknown) {
     if (glideRafRef.current) return;
     glideSettleRef.current = 0;
     const step = () => {
-      // The glide is a PINNED affordance: the moment the user scrolls up the
-      // follow must die, or the loop keeps yanking toward the bottom while
-      // they read — the exact "aggressive pull" failure. One frame max of
-      // overshoot after the unpin.
       if (!pinnedRef.current) {
         glideRafRef.current = 0;
         return;
@@ -242,10 +249,6 @@ export function useStickToBottom(dependency: unknown) {
         glideRafRef.current = 0;
         return;
       }
-      // CLAMPED TARGET — content shorter than the viewport yields a negative
-      // offset; without the clamp the loop stepped at a stuck scrollTop
-      // forever, and the stuck handle made every later ensureGlide() call a
-      // no-op (the dead "jump to latest" arrow).
       const target = Math.max(0, element.scrollHeight - element.clientHeight);
       const delta = target - element.scrollTop;
       if (Math.abs(delta) <= SNAP) {
@@ -259,8 +262,6 @@ export function useStickToBottom(dependency: unknown) {
         glideSettleRef.current = 0;
         const before = element.scrollTop;
         element.scrollTop += Math.sign(delta) * Math.min(Math.max(Math.abs(delta) * EASE, MIN_STEP), MAX_STEP);
-        // NO-PROGRESS STOP — clamped at the edge: settle here instead of
-        // spinning this raf forever.
         if (element.scrollTop === before) {
           glideRafRef.current = 0;
           return;
@@ -277,10 +278,6 @@ export function useStickToBottom(dependency: unknown) {
   }, []);
 
   useEffect(() => {
-    // rAF-throttle: batch layout reads (scrollTop/scrollHeight/clientHeight)
-    // to one per frame. Without this, each scroll event forces sync layout
-    // (720 samples in flamegraph2) — devastating when the left sidebar
-    // narrows the container and dirties layout for every row.
     let raf = 0;
     const onScroll = (event: Event) => {
       const element = resolveScroller();
@@ -293,7 +290,6 @@ export function useStickToBottom(dependency: unknown) {
         lastTopRef.current = top;
         if (pinnedRef.current && !goingUp) return;
         const distance = element.scrollHeight - top - element.clientHeight;
-        // RE-PIN GUARD: only a DOWNWARD scroll that reaches the bottom re-pins.
         if (distance <= 80 && !goingUp) {
           pinnedRef.current = true;
         } else if (goingUp) {
@@ -379,8 +375,6 @@ export function useStickToBottom(dependency: unknown) {
     let settle = 0;
     const step = () => {
       const raw = typeof top === 'function' ? top() : top;
-      // CLAMPED TARGET — a row near the thread's end cannot always reach the
-      // viewport top; targeting past the edge used to spin forever.
       const target = Math.min(Math.max(raw, 0), Math.max(0, element.scrollHeight - element.clientHeight));
       const delta = target - element.scrollTop;
       if (Math.abs(delta) <= SNAP) {
@@ -445,10 +439,6 @@ export function useStickToBottom(dependency: unknown) {
     stopLoops();
     const target = Math.min(Math.max(top, 0), Math.max(0, element.scrollHeight - element.clientHeight));
     element.scrollTop = target;
-    // A teleport is a deliberate landing spot, never "following the edge":
-    // unpin so the streaming follow glide can't drag the restore to the bottom,
-    // and so the settle loop always runs (it previously bailed when the target
-    // sat near the end — the view then drifted to an earlier turn: "44 → 40").
     pinnedRef.current = false;
   }, [resolveScroller, stopLoops]);
 
@@ -466,7 +456,7 @@ export function threadStreamSignature(turns: Turn[]): string {
       [
         turn.content.length,
         turn.reasoning?.length ?? 0,
-        turn.segments?.map((segment) => (segment.type === 'tool' ? `t${segment.toolName}${segment.summary === undefined ? '!' : String((segment.summary ?? '').length)}` : String(segment.text.length))).join('+') ?? '',
+        turn.segments?.map((segment) => (segment.type === 'tool' ? `t${segment.toolName}${segment.summary === undefined ? '!' : String((segment.summary ?? '').length)}${segment.progress ? '~' : ''}${segment.toolImages?.length ?? 0}` : String(segment.text.length))).join('+') ?? '',
       ].join(':'),
     )
     .join('|');
@@ -564,18 +554,10 @@ export const Thread = memo(function Thread({ turns, streaming, compaction, botto
     (turnNumber: number) => {
       const scroller = resolveThreadScroller(endRef.current);
       const row = scroller?.querySelector<HTMLElement>(`[data-turn="${turnNumber}"]`) ?? null;
-      // ALREADY MOUNTED — navigate WITHOUT touching the window. The rail only
-      // shows dots for mounted turns, so a dot click is always this case; the
-      // old unconditional expansion mounted every hidden row and the rail
-      // suddenly showed checkpoints 1..N for a target already on screen.
       if (row && scroller) {
-        // LIVE target: re-read the row's offset every frame — rows below the
-        // fold are content-visibility estimates and shift as they materialize.
         navigateTo(() => row.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop);
         return;
       }
-      // Target OUTSIDE the render window: expand so it can mount, then
-      // resolve after the expanded window commits (pendingTurnRef effect).
       if (hiddenCount > 0) {
         pendingTurnRef.current = turnNumber;
         setWindowSize(deferredTurns.length);
@@ -662,7 +644,6 @@ export const Thread = memo(function Thread({ turns, streaming, compaction, botto
     settleRafRef.current = requestAnimationFrame(tick);
   }, [endRef, resolveThreadScroller]);
 
-  // Settle stops on user gesture — the reader owns the view the moment they move.
   useEffect(() => {
     const onGesture = (event: Event) => {
       if (
@@ -690,9 +671,6 @@ export const Thread = memo(function Thread({ turns, streaming, compaction, botto
     stopSettling();
     const anchor = activeId ? storage.loadViewAnchor(activeId) : null;
     anchorRef.current = anchor ? { turnId: anchor.turnId, offset: anchor.offset } : null;
-    // windowSize here is read on purpose but NOT a dep: it only decides
-    // whether a window reset is pending; the restore effect watches the
-    // reset itself (windowSize) and performs the wait→active transition.
     anchorPhaseRef.current = !anchorRef.current
       ? 'idle'
       : windowSize === WINDOW_INITIAL
@@ -733,9 +711,6 @@ export const Thread = memo(function Thread({ turns, streaming, compaction, botto
     const conversationId = activeId;
     if (!conversationId) return;
     const saveNow = () => {
-      // While an anchor is pending/settling the view is not final — measuring
-      // it would overwrite the good anchor with boot layout and clobber the
-      // very restore it was meant to serve.
       if (anchorPhaseRef.current !== 'idle' && anchorRef.current) {
         storage.saveViewAnchor(conversationId, { ...anchorRef.current, savedAt: Date.now() });
         flushUiStateBeacon();
@@ -756,10 +731,6 @@ export const Thread = memo(function Thread({ turns, streaming, compaction, botto
       }
       if (!turnId) return;
       storage.saveViewAnchor(conversationId, { turnId, offset, savedAt: Date.now() });
-      // UNLOAD-SAFE: a fetch() fired from pagehide is cancelled by the page
-      // teardown before it lands (the anchor silently vanished on refresh),
-      // and storage's own pagehide beacon runs BEFORE this listener so it
-      // cannot pick the write up. sendBeacon HERE — after the write.
       flushUiStateBeacon();
     };
     const onVisibility = () => {
@@ -797,7 +768,7 @@ export const Thread = memo(function Thread({ turns, streaming, compaction, botto
       `[data-turnid="${CSS.escape(anchor.turnId)}"]`,
     );
     if (!row) {
-      if (deferredTurns.length === 0) return; // body still hydrating — wait
+      if (deferredTurns.length === 0) return;
       if (windowSize < deferredTurns.length) {
         const sisa = deferredTurns.length - windowSize;
         startTransition(() =>
@@ -806,13 +777,10 @@ export const Thread = memo(function Thread({ turns, streaming, compaction, botto
           ),
         );
       } else {
-        anchorPhaseRef.current = 'idle'; // anchor turn deleted — keep default
+        anchorPhaseRef.current = 'idle';
       }
       return;
     }
-    // Land once, then SETTLE (see the loop above): the scroll range may even
-    // clamp the target here because the body is still short — the loop keeps
-    // re-placing the row as lazy content above it hydrates.
     anchorPhaseRef.current = 'settling';
     settleStableRef.current = 0;
     settleDeadlineRef.current = Date.now() + SETTLE_MAX_MS;
@@ -863,18 +831,18 @@ export const Thread = memo(function Thread({ turns, streaming, compaction, botto
 
   return (
     <div
-      className="relative mx-auto w-full max-w-4xl px-6 pt-8"
-      style={{ paddingBottom: bottomPad }}
+      className="thread"
+      style={{ position: 'relative', margin: '0 auto', width: '100%', maxWidth: '780px', padding: `18px 28px ${bottomPad}px` }}
     >
-      <div className="space-y-6">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
         {crashedRun ? (
-          <div className="flex items-start gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
-            <div className="flex-1 space-y-2">
-              <div className="font-medium text-ink">
+          <div className="card" style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: 12, borderColor: 'rgb(var(--c-warn) / 0.4)', background: 'rgb(var(--c-warn) / 0.08)' }}>
+            <AlertTriangle className="ic" style={{ marginTop: 2, color: 'rgb(var(--c-warn))' }} aria-hidden="true" />
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ fontWeight: 500, color: 'rgb(var(--c-ink))' }}>
                 This run was interrupted — the proxy died before it finished.
               </div>
-              <div className="text-muted">
+              <div className="md-body md-compact" style={{ color: 'var(--muted)' }}>
                 Everything the run produced is still in this thread. Resuming
                 re-sends the history and replays the {crashedRun.callCount} already-executed tool
                 {' '}
@@ -883,10 +851,10 @@ export const Thread = memo(function Thread({ turns, streaming, compaction, botto
                 again — no double edits, no duplicate deletes.
               </div>
             </div>
-            <div className="flex shrink-0 items-center gap-2">
+            <div style={{ display: 'flex', flexShrink: 0, alignItems: 'center', gap: 8 }}>
               <button
                 type="button"
-                className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90"
+                className="btn primary xs"
                 onClick={() => {
                   if (activeId) resumeCrashedRun(activeId, crashedRun.runId);
                 }}
@@ -895,7 +863,7 @@ export const Thread = memo(function Thread({ turns, streaming, compaction, botto
               </button>
               <button
                 type="button"
-                className="rounded-md px-2 py-1.5 text-xs text-muted hover:text-ink"
+                className="btn ghost xs"
                 onClick={() => {
                   if (activeId) {
                     useStore.getState().setCrashedRun(activeId, null);
@@ -910,16 +878,16 @@ export const Thread = memo(function Thread({ turns, streaming, compaction, botto
         ) : null}
         {compaction && !compactionTwin ? <CompactionBlock compaction={compaction} /> : null}
         {hiddenCount > 0 ? (
-          <div className="flex justify-center">
+          <div style={{ display: 'flex', justifyContent: 'center' }}>
             <button
               type="button"
               onClick={loadEarlier}
-              className="pill-button inline-flex items-center gap-1.5 border border-hairline bg-elevated px-3 py-1.5 text-[12px] text-muted transition-colors hover:border-accent/50 hover:text-ink"
+              className="btn sm"
             >
-              <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
+              <ChevronUp className="ic" aria-hidden="true" />
               Load {Math.min(WINDOW_CHUNK, hiddenCount)} earlier message
               {Math.min(WINDOW_CHUNK, hiddenCount) === 1 ? '' : 's'}
-              <span className="text-faint">· {hiddenCount} hidden</span>
+              <span style={{ color: 'var(--faint)' }}>· {hiddenCount} hidden</span>
             </button>
           </div>
         ) : null}
@@ -953,7 +921,7 @@ export const Thread = memo(function Thread({ turns, streaming, compaction, botto
           );
         })}
         {pendingSteers && pendingSteers.length > 0 ? (
-          <div className="space-y-3">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {pendingSteers.map((entry) => (
               <PendingSteerBubble key={entry.id} text={entry.text} parts={entry.parts} />
             ))}
@@ -961,7 +929,7 @@ export const Thread = memo(function Thread({ turns, streaming, compaction, botto
         ) : null}
         <div ref={endRef} />
       </div>
-      {/* FASE 5 — addon render site: thread-sidebar widgets after the last turn */}
+      {}
       <AddonWidgetHost site="thread-sidebar" streaming={streaming} />
       {}
       {fullscreenVisual ? (
@@ -1045,15 +1013,29 @@ function splitStablePrefix(text: string): { prefix: string; tail: string } {
  * one paragraph. When the stream ends, one final full parse through the
  * ordinary path restores the single-block layout.
  */
+/** DESIGN-1 canvas render: caret berkedip ditempel di ujung teks streaming
+ *  hidup (elemen terakhir) — sama seperti paintLive() di design HTML. */
+function LiveCaret() {
+  return <span className="caret" aria-hidden="true" />;
+}
+
 const StreamText = memo(function StreamText({ text, live, className }: { text: string; live: boolean; className?: string }) {
   if (!live) return <Md content={text} className={className} />;
   const { prefix, tail } = splitStablePrefix(text);
-  if (!prefix) return <Md content={text} className={className} />;
+  if (!prefix) return (
+    <div className={cx('md-live', className)}>
+      <Md content={text} className={className} />
+      <LiveCaret />
+    </div>
+  );
   return (
-    <>
+    <div className={cx('md-live', className)}>
       <Md content={prefix} className={className} />
-      <Md content={tail} className={className} />
-    </>
+      <div className="md-live-tail">
+        <Md content={tail} className={className} />
+        <LiveCaret />
+      </div>
+    </div>
   );
 });
 
@@ -1086,6 +1068,68 @@ function isSupersededVisual(
   if (segment.type !== 'tool' || !segment.visual?.id) return false;
   const last = lastVisualSegmentById.get(segment.visual.id);
   return last !== undefined && last !== segment;
+}
+
+/** Extracts renderable URLs from a tool-image list — inline dataUrls pass
+ *  through; externalized byte-store refs go through attachmentRefUrl. */
+function renderableToolImages(images: Array<{ mime: string; dataUrl?: string; dataRef?: { hash: string; mime: string } }> | undefined): string[] {
+  if (!images) return [];
+  const urls: string[] = [];
+  for (const image of images) {
+    const src = image.dataUrl ?? (image.dataRef ? attachmentRefUrl(image.dataRef.hash, image.dataRef.mime) : null);
+    if (src) urls.push(renderableRefUrl(src));
+  }
+  return urls;
+}
+
+/** An agent__image result: the URLs the tool returned (inline or byte-store
+ *  refs). Local results always carry dataUrls, so this is the fast path. */
+function localImageUrls(segment: TurnSegment): string[] {
+  if (segment.type !== 'tool' || segment.toolName !== 'image') return [];
+  return renderableToolImages((segment as { toolImages?: Parameters<typeof renderableToolImages>[0] }).toolImages);
+}
+
+/**
+ * GENERATED IMAGE STRIP — inline hasil agent__image di bawah run pill,
+ * ChatGPT-style: hasil utama TAMPIL BESAR di alur percakapan, sisanya sebagai
+ * thumbnail kecil di bawahnya. Klik mana pun membuka lightbox penuh. Tujuannya
+ * agar user tidak perlu membuka Gallery hanya untuk mengecek hasil generate.
+ */
+function GeneratedImageStrip({ urls }: { urls: string[] }) {
+  const [preview, setPreview] = useState<string | null>(null);
+  const [primary, ...extras] = urls;
+  return (
+    <div style={{ marginTop: 10, marginBottom: 6, minWidth: 0 }}>
+      <img
+        src={primary}
+        alt="Generated image"
+        onClick={() => setPreview(primary)}
+        style={{ display: 'block', maxWidth: 440, maxHeight: 440, borderRadius: 'var(--r-lg)', border: '1px solid var(--line)', cursor: 'zoom-in', background: 'rgb(var(--c-canvas))' }}
+      />
+      {extras.length > 0 ? (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+          {extras.map((url, index) => (
+            <img
+              key={url}
+              src={url}
+              alt={`Generated image ${index + 2}`}
+              onClick={() => setPreview(url)}
+              style={{ height: 96, maxWidth: '100%', borderRadius: 'var(--r-md)', border: '1px solid var(--line)', cursor: 'zoom-in' }}
+            />
+          ))}
+        </div>
+      ) : null}
+      <Modal open={preview !== null} onClose={() => setPreview(null)} title="Generated image">
+        {preview ? (
+          <img
+            src={preview}
+            alt="Generated image"
+            style={{ maxWidth: '100%', maxHeight: '70vh', borderRadius: 'var(--r-md)', display: 'block', margin: '0 auto' }}
+          />
+        ) : null}
+      </Modal>
+    </div>
+  );
 }
 
 /** RESPONSE TIMER — format durasi lebar-stabil (dipakai render live di bawah
@@ -1145,6 +1189,18 @@ const MessageRow = memo(function MessageRow({
   /** RESPONSE TIMER — live seconds while THIS turn's run is streaming.
    *  One interval per active MessageRow (only the streaming last row mounts
    *  it); reads the run start from the store, no per-second store writes. */
+  /** Sandbox permission yang sedang ditunggu turn ini — wire ke RunPill.
+   *  Dianggap menunggu bila run streaming dan ada tool call yang belum
+   *  selesai (ok === undefined) di segmen turn. */
+  const pendingPermissions = useStore((state) => state.pendingPermissions);
+  const waitingPermission = useMemo(() => {
+    if (!(isLast && streaming)) return null;
+    const pendingTool = (turn.segments ?? []).some(
+      (segment) => segment.type === 'tool' && segment.ok === undefined,
+    );
+    if (!pendingTool) return null;
+    return pendingPermissions[0] ?? null;
+  }, [isLast, streaming, turn.segments, pendingPermissions]);
   /** RESPONSE TIMER — live clock for the ACTIVE run. The interval is keyed to
    *  the run (runActive), not to `isLast` alone, and the start epoch is
    *  session-persisted, so a genRunning flap mid-run no longer restarts the
@@ -1186,12 +1242,6 @@ const MessageRow = memo(function MessageRow({
   }
 
   const startEdit = () => {
-    // 6D: for assistant outputs, seed the draft from the RENDERED text —
-    // when segments exist, `content` alone is stale (the wire rebuilds the
-    // reply from segments, so an edit that only touched content was a no-op).
-    // The editor drafts ONLY the final output — the last text segment —
-    // because that is exactly what saving replaces (tool rounds, steers and
-    // intermediate ● rows are untouched by an edit).
     const segments = turn.role === 'assistant' ? turn.segments : undefined;
     const lastText = segments
       ? segments.reduce<{ index: number; text: string }>(
@@ -1209,9 +1259,6 @@ const MessageRow = memo(function MessageRow({
     const content = draft.trim();
     if (!content) return;
     if (turn.role === 'assistant' && turn.segments?.length) {
-      // The edit replaces ONLY the final text segment. Tool calls, steer
-      // entries, intermediate ● texts and reasoning all stay intact — the wire
-      // rebuilds native tool rounds from them and the pill keeps its history.
       const segments = turn.segments;
       const lastTextIndex = segments.reduce(
         (last, segment, index) => (segment.type === 'text' && segment.text ? index : last),
@@ -1232,17 +1279,17 @@ const MessageRow = memo(function MessageRow({
 
   if (turn.kind === 'goal-loop') {
     return (
-      <div className="flex justify-center py-1.5">
-        <details className="group/goal max-w-[85%] rounded-card border border-hairline bg-surface/60 px-3 py-1.5 text-[11px] text-faint">
-          <summary className="flex cursor-pointer list-none items-center gap-1.5 select-none">
-            <Target className="h-3 w-3 shrink-0" aria-hidden="true" />
-            <span className="font-medium text-ink">
+      <div style={{ display: 'flex', justifyContent: 'center', padding: '6px 0' }}>
+        <details className="card" style={{ maxWidth: '85%', padding: '6px 12px', fontSize: 11, color: 'var(--faint)' }}>
+          <summary style={{ display: 'flex', cursor: 'pointer', listStyle: 'none', alignItems: 'center', gap: 6, userSelect: 'none' }}>
+            <Target className="ic" style={{ width: 12, height: 12 }} aria-hidden="true" />
+            <span style={{ fontWeight: 500, color: 'rgb(var(--c-ink))' }}>
               Goal · Round {turn.goalMeta?.round ?? '?'}{turn.goalMeta?.maxRounds ? `/${turn.goalMeta.maxRounds}` : ''}
             </span>
-            <span className="text-faint">· {turn.goalMeta?.full === false ? 'Continuation' : 'Context injection'}</span>
-            <ChevronDown className="h-3 w-3 transition-transform group-open/goal:rotate-180" aria-hidden="true" />
+            <span style={{ color: 'var(--faint)' }}>· {turn.goalMeta?.full === false ? 'Continuation' : 'Context injection'}</span>
+            <ChevronDown className="ic chev" style={{ width: 12, height: 12 }} aria-hidden="true" />
           </summary>
-          <pre className="inner-scroll mt-2 max-h-64 overflow-auto whitespace-pre-wrap text-left font-mono text-[10.5px] leading-relaxed text-faint">
+          <pre className="inner-scroll" style={{ margin: '8px 0 0', maxHeight: 256, overflow: 'auto', whiteSpace: 'pre-wrap', textAlign: 'left', fontFamily: 'var(--f-mono)', fontSize: 10.5, lineHeight: 1.625, color: 'var(--faint)' }}>
             {turn.content}
           </pre>
         </details>
@@ -1257,18 +1304,18 @@ const MessageRow = memo(function MessageRow({
     }
     if (turn.probationMeta?.tier === 5) {
       return (
-        <div className="flex justify-center py-2">
-          <div className="max-w-[85%] rounded-card border border-danger/40 bg-danger/5 px-3.5 py-3 text-[12px]">
-            <div className="flex items-center gap-1.5">
-              <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-danger" aria-hidden="true" />
-              <span className="font-semibold text-danger">Probation</span>
-              <span className="text-muted">· Tier 5 — terminated</span>
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '8px 0' }}>
+          <div className="card" style={{ maxWidth: '85%', padding: '12px 14px', fontSize: 12, borderColor: 'rgb(var(--c-danger) / 0.4)', background: 'rgb(var(--c-danger) / 0.05)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <AlertTriangle className="ic" style={{ color: 'rgb(var(--c-danger))' }} aria-hidden="true" />
+              <span style={{ fontWeight: 600, color: 'rgb(var(--c-danger))' }}>Probation</span>
+              <span style={{ color: 'var(--muted)' }}>· Tier 5 — terminated</span>
             </div>
-            <p className="mt-2 leading-relaxed text-muted">
+            <p style={{ margin: '8px 0 0', lineHeight: 1.625, color: 'var(--muted)' }}>
               The model chose Continue five times rather than apologize. The harness closed its reasoning at the first second and terminated the run at its first output token. This conversation is over for the model.
             </p>
             {turn.probationMeta?.reason ? (
-              <p className="mt-2 text-[11px] text-faint">Evidence: {turn.probationMeta.reason}</p>
+              <p style={{ margin: '8px 0 0', fontSize: 11, color: 'var(--faint)' }}>Evidence: {turn.probationMeta.reason}</p>
             ) : null}
           </div>
         </div>
@@ -1276,18 +1323,18 @@ const MessageRow = memo(function MessageRow({
     }
     const tier = turn.probationMeta?.tier ?? 1;
     return (
-      <div className="flex justify-center py-2">
-        <div className="max-w-[85%] rounded-card border border-warn/40 bg-warn/5 px-3 py-2 text-[12px]">
-          <div className="flex items-center gap-1.5">
-            <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-warn" aria-hidden="true" />
-            <span className="font-semibold text-warn">Probation</span>
-            <span className="text-muted">· Tier {tier}</span>
+      <div style={{ display: 'flex', justifyContent: 'center', padding: '8px 0' }}>
+        <div className="card" style={{ maxWidth: '85%', padding: '8px 12px', fontSize: 12, borderColor: 'rgb(var(--c-warn) / 0.4)', background: 'rgb(var(--c-warn) / 0.05)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <AlertTriangle className="ic" style={{ color: 'rgb(var(--c-warn))' }} aria-hidden="true" />
+            <span style={{ fontWeight: 600, color: 'rgb(var(--c-warn))' }}>Probation</span>
+            <span style={{ color: 'var(--muted)' }}>· Tier {tier}</span>
           </div>
-          <pre className="inner-scroll mt-2 max-h-56 overflow-auto whitespace-pre-wrap text-left font-mono text-[11px] leading-relaxed text-muted">
+          <pre className="inner-scroll" style={{ margin: '8px 0 0', maxHeight: 224, overflow: 'auto', whiteSpace: 'pre-wrap', textAlign: 'left', fontFamily: 'var(--f-mono)', fontSize: 11, lineHeight: 1.625, color: 'var(--muted)' }}>
             {turn.content}
           </pre>
           {turn.probationMeta?.reason ? (
-            <p className="mt-2 text-[11px] text-faint">Evidence: {turn.probationMeta.reason}</p>
+            <p style={{ margin: '8px 0 0', fontSize: 11, color: 'var(--faint)' }}>Evidence: {turn.probationMeta.reason}</p>
           ) : null}
         </div>
       </div>
@@ -1304,30 +1351,30 @@ const MessageRow = memo(function MessageRow({
       state.deleteTurn(conversation.id, turn.id);
     };
     return (
-      <div className="group/lockdown-row flex justify-center py-2">
-        <details className="group/lockdown max-w-[85%] rounded-card border border-danger/40 bg-danger/5 px-3 py-2 text-[12px]">
-          <summary className="flex cursor-pointer list-none items-center gap-1.5 select-none">
-            <Lock className="h-3.5 w-3.5 shrink-0 text-danger" aria-hidden="true" />
-            <span className="font-semibold text-danger">
+      <div style={{ display: 'flex', justifyContent: 'center', padding: '8px 0' }}>
+        <details className="card" style={{ position: 'relative', maxWidth: '85%', padding: '8px 12px', fontSize: 12, borderColor: 'rgb(var(--c-danger) / 0.4)', background: 'rgb(var(--c-danger) / 0.05)' }}>
+          <summary style={{ display: 'flex', cursor: 'pointer', listStyle: 'none', alignItems: 'center', gap: 6, userSelect: 'none' }}>
+            <Lock className="ic" style={{ width: 14, height: 14, flexShrink: 0, color: 'rgb(var(--c-danger))' }} aria-hidden="true" />
+            <span style={{ fontWeight: 600, color: 'rgb(var(--c-danger))' }}>
               {turn.kind === 'lockdown' ? 'Lockdown enforced' : `Enforcement L${level} enforced`}
             </span>
-            <span className="text-muted">
+            <span style={{ color: 'var(--muted)' }}>
               · {reason ? 'with reason' : 'no reason given'}
             </span>
-            <ChevronDown className="h-3 w-3 text-muted transition-transform group-open/lockdown:rotate-180" aria-hidden="true" />
+            <ChevronDown className="chev" style={{ width: 12, height: 12, color: 'var(--muted)' }} aria-hidden="true" />
           </summary>
-          <div className="mt-2 flex items-start gap-2">
-            <pre className="inner-scroll max-h-72 flex-1 overflow-auto whitespace-pre-wrap text-left font-mono text-[11px] leading-relaxed text-muted">
+          <div style={{ marginTop: 8, display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+            <pre className="inner-scroll" style={{ minHeight: 0, flex: 1, maxHeight: 288, overflow: 'auto', whiteSpace: 'pre-wrap', textAlign: 'left', fontFamily: 'var(--f-mono)', fontSize: 11, lineHeight: 1.625, color: 'var(--muted)', margin: 0 }}>
               {turn.content}
             </pre>
             <Tip label="Delete this notice (and its reply)">
               <button
                 type="button"
                 onClick={removeNotice}
-                className="icon-button h-7 w-7 shrink-0 opacity-0 transition-opacity group-hover/lockdown-row:opacity-100"
+                className="ib sm hdel"
                 aria-label="Delete this enforcement notice"
               >
-                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                <Trash2 className="ic" aria-hidden="true" />
               </button>
             </Tip>
           </div>
@@ -1338,26 +1385,22 @@ const MessageRow = memo(function MessageRow({
 
   if (turn.role === 'user') {
     return (
-      <div className="group flex flex-col items-end gap-1">
+      <div className={cx('msg u', isEffectivelyLast && 'last')} style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
         {}
         {turnNumber ? (
-          <div className="self-start text-[10.5px] font-semibold uppercase tracking-[0.08em] text-faint">
+          <div style={{ alignSelf: 'flex-start', fontSize: 10.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--faint)' }}>
             Turn {turnNumber}
           </div>
         ) : null}
         {}
-        <div className="flex items-center gap-1.5 pr-0.5 text-[14px] font-medium text-faint">
-          <User className="h-3.5 w-3.5" aria-hidden="true" />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingRight: 2, fontSize: 14, fontWeight: 500, color: 'var(--faint)' }}>
+          <User className="ic" aria-hidden="true" />
           User
         </div>
         {}
         {turn.attachments?.length ? (
-          // GALLERY-STYLE ATTACHMENTS — OUTSIDE the bubble: a separate row of
-          // small square thumbnails (cover-crop, rounded) sitting ABOVE the
-          // text bubble, exactly like the reference layout. The bubble below
-          // holds ONLY the message text. SVG attachments carry their XML as
           // textContent — preview them as an image via an inline data URL.
-          <div className="flex max-w-[85%] flex-wrap items-center justify-end gap-2">
+          <div style={{ display: 'flex', maxWidth: '85%', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
             {turn.attachments.map((attachment) =>
               attachment.mime.startsWith('image/') && (attachment.dataRef || attachment.dataUrl || attachment.textContent) ? (
                 <a
@@ -1367,7 +1410,7 @@ const MessageRow = memo(function MessageRow({
                     : attachment.dataUrl ?? `data:image/svg+xml;utf8,${encodeURIComponent(attachment.textContent ?? '')}`}
                   target="_blank"
                   rel="noreferrer"
-                  className="block h-[76px] w-[76px] shrink-0 overflow-hidden rounded-2xl border border-hairline transition-transform duration-150 hover:scale-[1.03]"
+                  style={{ display: 'block', width: 76, height: 76, flexShrink: 0, overflow: 'hidden', borderRadius: 16, border: '1px solid var(--line)', transition: 'transform .15s' }}
                 >
                   <img
                     src={attachment.dataRef
@@ -1377,31 +1420,29 @@ const MessageRow = memo(function MessageRow({
                     {...(attachment.width && attachment.height
                       ? { width: attachment.width, height: attachment.height }
                       : {})}
-                    className="h-full w-full object-cover"
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                   />
                 </a>
               ) : (
                 <span
                   key={attachment.id}
-                  className="inline-flex h-[76px] w-[76px] flex-col items-center justify-center gap-1 rounded-2xl border border-hairline bg-surface px-1 text-center"
+                  style={{ display: 'inline-flex', width: 76, height: 76, flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, borderRadius: 16, border: '1px solid var(--line)', background: 'rgb(var(--c-paper))', padding: '0 4px', textAlign: 'center' }}
                 >
                   <Tip label={attachment.name}>
-                    <FileText className="h-4 w-4 shrink-0 text-faint" aria-hidden="true" />
+                    <FileText className="ic" style={{ flexShrink: 0, color: 'var(--faint)' }} aria-hidden="true" />
                   </Tip>
-                  <span className="w-full truncate text-[10px] text-muted">{attachment.name}</span>
+                  <span style={{ width: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 10, color: 'var(--muted)' }}>{attachment.name}</span>
                 </span>
               ),
             )}
           </div>
         ) : null}
         <div
-          className={cx(
-            'user-bubble rounded-card rounded-br-sm border border-hairline px-4 py-3',
-            editing ? 'w-[85%]' : 'max-w-[85%]',
-          )}
+          className="ub"
+          style={editing ? { width: '85%' } : undefined}
         >
           {editing ? (
-            <div className="space-y-2">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <textarea
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
@@ -1417,24 +1458,25 @@ const MessageRow = memo(function MessageRow({
                   Math.max(2, draft.split('\n').length + Math.floor(draft.length / 80)),
                 )}
                 autoFocus
-                className="w-full resize-y rounded-control border border-accent/60 bg-canvas p-2.5 text-[14px] leading-relaxed text-ink outline-none"
+                className="field"
+                style={{ width: '100%', resize: 'vertical', fontSize: 14 }}
               />
-              <div className="flex justify-end gap-1.5">
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
                 <button
                   type="button"
                   onClick={() => setEditing(false)}
-                  className="inline-flex items-center gap-1 rounded-control px-2.5 py-1.5 text-[11.5px] font-medium text-muted transition-colors hover:text-ink"
+                  className="btn ghost xs"
                 >
-                  <X className="h-3 w-3" aria-hidden="true" />
+                  <X className="ic" aria-hidden="true" />
                   Cancel
                 </button>
                 <button
                   type="button"
                   onClick={saveEdit}
                   disabled={!draft.trim()}
-                  className="inline-flex items-center gap-1 rounded-control bg-accent px-2.5 py-1.5 text-[11.5px] font-medium text-accent-ink transition-opacity disabled:opacity-40"
+                  className="btn primary xs"
                 >
-                  <Check className="h-3 w-3" aria-hidden="true" />
+                  <Check className="ic" aria-hidden="true" />
                   Save
                 </button>
               </div>
@@ -1442,41 +1484,41 @@ const MessageRow = memo(function MessageRow({
           ) : turn.content ? (
             <Md content={turn.content} breakLines />
           ) : !streaming ? (
-            <p className="text-[13px] italic text-faint">(empty message)</p>
+            <p style={{ fontSize: 13, fontStyle: 'italic', color: 'var(--faint)' }}>(empty message)</p>
           ) : null}
         </div>
         {}
         {!editing && !(streaming && isLast) ? (
-          <div className="flex items-center gap-1 pr-1 opacity-0 transition-opacity duration-200 group-hover:opacity-100 focus-within:opacity-100">
+          <div className="m-acts" style={{ display: 'flex', alignItems: 'center', gap: 2, paddingRight: 4 }}>
             <CopyButton text={turn.content} />
             <button
               type="button"
               onClick={startEdit}
-              className="icon-button h-7 w-7"
+              className="ib sm"
               aria-label="Edit this message"
             >
-              <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+              <Pencil className="ic" aria-hidden="true" />
             </button>
               <button
                 type="button"
                 onClick={() => onDeleteTurn(turn.id)}
-                className="icon-button h-7 w-7"
+                className="ib sm"
                 aria-label="Delete this message"
               >
-                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                <Trash2 className="ic" aria-hidden="true" />
               </button>
           </div>
         ) : null}
         {}
         {isEffectivelyLast && !streaming ? (
-          <div className="flex items-center gap-1.5">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <button
               type="button"
               onClick={onContinue}
-              className="pill-button border border-hairline bg-elevated py-1.5 text-[12px] text-muted transition-colors hover:border-accent/50 hover:text-ink"
+              className="btn sm"
               aria-label="Continue the model's response"
             >
-              <CornerDownLeft className="h-3.5 w-3.5" aria-hidden="true" />
+              <CornerDownLeft className="ic" aria-hidden="true" />
               Continue
             </button>
           </div>
@@ -1491,11 +1533,21 @@ const MessageRow = memo(function MessageRow({
     isLast && streaming && !turn.content && !turn.reasoning && !turn.segments?.length;
 
   return (
-    <div className="flex flex-col items-start gap-2">
+    <div className={cx('msg', runActive && 'live', isEffectivelyLast && 'last')} style={{ display: 'flex', gap: 12, position: 'relative' }}>
+      {/* Avatar di gutter kiri (absolut) — tidak memakan lebar kolom konten.
+          cv-auto punya paint containment (content-visibility:auto): avatar
+          HARUS di dalam box turn; gutter cv-auto = 44px (34px avatar + 10px
+          jarak), thread padding 28px jadi kelebihan 16px di luar thread. */}
+      <span
+        className="av"
+        aria-hidden="true"
+        style={{ position: 'absolute', left: -44, top: 4, width: 34, height: 34, borderRadius: 9 }}
+      />
+      <div className="ab" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 8 }}>
       {}
-      {(turn.injections ?? []).map((injection) => (
-        <InjectionBlock key={injection.id} injection={injection} />
-      ))}
+      {(turn.injections ?? []).length > 0 ? (
+        <InjectionGroupCard injections={turn.injections ?? []} />
+      ) : null}
 
       {turn.reasoning && !hasReasoningSegments ? (
         <ReasoningBlock
@@ -1507,13 +1559,7 @@ const MessageRow = memo(function MessageRow({
       ) : null}
 
       {}
-      {/* SINGLE EXPANDING PILL (spec v2): ONE pill per assistant turn holding
-          EVERY reasoning, tool call, and intermediate text (● rows) in a flat
-          append-only list. Only the FINAL text — the turn's last event with no
-          work after it — renders OUTSIDE below the pill. If text gets more
-          tool calls after it, it is retroactively intermediate and moves
-          inside the pill as a ● row (derived from segment order, nothing is
-          re-parented at render time). */}
+      {}
       {turn.segments && turn.segments.some((segment) => segment.type === 'tool' || segment.type === 'reasoning') ? (
         (() => {
           type PillRow =
@@ -1528,9 +1574,6 @@ const MessageRow = memo(function MessageRow({
             if (segment.type === 'text') {
               if (!segment.text) return;
               if (turnRunning) {
-                // NO-LEAK RULE: while the run streams, NOTHING renders below
-                // the pill — every text is a live ● row inside the panel until
-                // the turn settles. Only then is the last text promoted out.
                 rows.push({ kind: 'interm', segment });
                 return;
               }
@@ -1547,32 +1590,33 @@ const MessageRow = memo(function MessageRow({
             }
           });
 
-          // TS control-flow can't see writes from inside the forEach closure —
-          // take an explicitly-typed copy before rendering.
           const finalTextOut = finalText as Extract<TurnSegment, { type: 'text' }> | null;
 
-          // VISUAL HOIST: the newest render_visual card renders OUTSIDE the
-          // pill — the artifact is a product, not a step. Older visuals stay
-          // inside the pill as history. The visual hoists whenever the run
-          // has settled, even with trailing reasoning/final text after it
-          // (verified live: the model writes reasoning + a closing paragraph
-          // AFTER the visual — requiring the visual to be the absolute last
-          // work event made the hoist almost never fire). Only a later WORK
-          // event (another tool call or a steer) or an in-flight run keeps
-          // the visual inside the pill.
           const hoistedVisualSegment = (() => {
             if (turnRunning) return null;
             for (let i = turn.segments.length - 1; i >= 0; i--) {
               const segment = turn.segments[i];
               if (segment.type === 'tool' && segment.visual) return segment;
-              // Trailing reasoning/final text is explanation, not work — it
-              // never blocks the hoist.
               if (segment.type === 'text' || segment.type === 'reasoning') continue;
               return null;
             }
             return null;
           })();
           const hoistedVisual = hoistedVisualSegment?.visual ?? null;
+          /** agent__image results are hoisted under the run pill — the user
+           *  sees the generated image without opening the Gallery. NOT gated
+           *  on turnRunning: the image shows as soon as its tool_result lands,
+           *  while the model is still writing (ChatGPT-style). */
+          const hoistedImageUrls = (() => {
+            const urls: string[] = [];
+            for (const segment of turn.segments) {
+              if (segment.type !== 'tool') continue;
+              for (const url of localImageUrls(segment)) {
+                if (!urls.includes(url)) urls.push(url);
+              }
+            }
+            return urls.slice(0, 4);
+          })();
           /** VISUAL v2: map id → segmen terakhir dihitung module-level; HANYA
            *  salinan yang disupersedi masuk Set referensi ini, lalu Set-nya
            *  diteruskan ke ActivityTicker — scope komponen anak tidak bisa
@@ -1586,10 +1630,13 @@ const MessageRow = memo(function MessageRow({
           return (
             <>
               {rows.length > 0 ? (
-                <ActivityTicker
+                <RunPill
                   activity={rows}
                   running={isLast && streaming}
                   turnId={turn.id}
+                  processingMs={turn.processingMs}
+                  stopped={turn.finishReason === 'user_stop' || turn.finishReason === 'aborted'}
+                  waitingPermission={waitingPermission}
                   onClearReasoning={onClearReasoning}
                   onFullscreenVisual={onFullscreenVisual}
                   suppressVisual={hoistedVisualSegment}
@@ -1601,6 +1648,7 @@ const MessageRow = memo(function MessageRow({
                   <VisualCard visual={hoistedVisual} onFullscreen={onFullscreenVisual} />
                 </div>
               ) : null}
+              {hoistedImageUrls.length > 0 ? <GeneratedImageStrip urls={hoistedImageUrls} /> : null}
               {finalTextOut ? (
                 <div className="w-full">
                   <StreamText text={finalTextOut.text} live={false} />
@@ -1645,7 +1693,7 @@ const MessageRow = memo(function MessageRow({
                     onFullscreen={onFullscreenVisual}
                   />
                 ) : segment.visual && isSupersededVisual(segment, lastVisualSegmentById) ? (
-                  <div className="mt-1.5 text-[11px] italic text-faint">Visual updated in place</div>
+                  <div style={{ marginTop: 6, fontSize: 11, fontStyle: 'italic', color: 'var(--faint)' }}>Visual updated in place</div>
                 ) : null}
               </div>
             );
@@ -1663,21 +1711,22 @@ const MessageRow = memo(function MessageRow({
         ))}
 
       {turn.finishReason && FINISH_NOTES[turn.finishReason] ? (
-        <div className="w-full rounded-card border border-warning/30 bg-warning/5 px-4 py-2.5">
-          <div className="flex items-start gap-2.5">
+        <div className="card" style={{ width: '100%', padding: '10px 16px', borderColor: 'rgb(var(--c-warn) / 0.3)', background: 'rgb(var(--c-warn) / 0.05)' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
             {}
-            <Info className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
-            <p className="text-[13px] leading-snug text-muted">{FINISH_NOTES[turn.finishReason]}</p>
+            <Info className="ic" style={{ marginTop: 2, color: 'rgb(var(--c-warn))' }} aria-hidden="true" />
+            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.375, color: 'var(--muted)' }}>{FINISH_NOTES[turn.finishReason]}</p>
             {}
             {}
             {turn.finishReason === 'tool_errors' && !turn.error && isEffectivelyLast && !streaming ? (
               <button
                 type="button"
                 onClick={onContinue}
-                className="pill-button ml-2 shrink-0 border border-warning/40 bg-elevated py-1.5 text-[12px] text-muted transition-colors hover:border-warning/60 hover:text-ink"
+                className="btn sm"
+                style={{ marginLeft: 8, flexShrink: 0, fontSize: 12 }}
                 aria-label="Continue after the failed tools"
               >
-                <CornerDownLeft className="h-3.5 w-3.5" aria-hidden="true" />
+                <CornerDownLeft className="ic" aria-hidden="true" />
                 Continue
               </button>
             ) : null}
@@ -1685,18 +1734,17 @@ const MessageRow = memo(function MessageRow({
         </div>
       ) : null}
 
-      {/* RESPONSE TIMER — live count DI BAWAH pill saat streaming (action row
-          tersembunyi selama streaming, jadi ini satu-satunya yang terlihat
-          berjalan). Setelah selesai, angkanya beku sebagai processingMs. */}
+      {}
       {(() => {
         const live = streaming && isLast && runActive;
         if (!live) return null;
         return (
           <Tip label="Processing time (live)">
           <span
-            className="ml-1 inline-flex items-center gap-1.5 text-[14px] tabular-nums text-faint"
+            className="meta"
+            style={{ marginLeft: 4, display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 14, fontVariantNumeric: 'tabular-nums', color: 'var(--faint)' }}
           >
-            <Clock3 className="h-4 w-4" aria-hidden="true" />
+            <Clock3 className="ic" aria-hidden="true" />
             {formatProcessingMs(liveElapsedMs)}
           </span>
           </Tip>
@@ -1704,23 +1752,24 @@ const MessageRow = memo(function MessageRow({
       })()}
 
       {turn.error ? (
-        <div className="w-full rounded-card border border-danger/40 bg-danger/5 px-4 py-3">
-          <div className="flex items-start gap-2.5">
+        <div className="card" style={{ width: '100%', padding: '12px 16px', borderColor: 'rgb(var(--c-danger) / 0.4)', background: 'rgb(var(--c-danger) / 0.05)' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
             {}
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-danger" aria-hidden="true" />
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-danger">Generation failed</p>
-              <p className="mt-1 whitespace-pre-line break-words text-[13px] text-muted">{turn.error}</p>
+            <AlertTriangle className="ic" style={{ marginTop: 2, color: 'rgb(var(--c-danger))' }} aria-hidden="true" />
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <p style={{ margin: 0, fontSize: 14, fontWeight: 500, color: 'rgb(var(--c-danger))' }}>Generation failed</p>
+              <p style={{ margin: '4px 0 0', whiteSpace: 'pre-line', overflowWrap: 'break-word', fontSize: 13, color: 'var(--muted)' }}>{turn.error}</p>
             </div>
             {}
             {isEffectivelyLast && !streaming ? (
               <button
                 type="button"
                 onClick={onContinue}
-                className="pill-button ml-2 shrink-0 border border-danger/40 bg-elevated py-1.5 text-[12px] text-muted transition-colors hover:border-danger/60 hover:text-ink"
+                className="btn sm"
+                style={{ marginLeft: 8, flexShrink: 0, fontSize: 12 }}
                 aria-label="Continue the failed generation"
               >
-                <CornerDownLeft className="h-3.5 w-3.5" aria-hidden="true" />
+                <CornerDownLeft className="ic" aria-hidden="true" />
                 Continue
               </button>
             ) : null}
@@ -1735,28 +1784,23 @@ const MessageRow = memo(function MessageRow({
           draggable={false}
           width={56}
           height={56}
-          className="h-14 w-14 select-none"
+          style={{ width: 56, height: 56, userSelect: 'none' }}
         />
       ) : null}
 
       {}
-      {/* 6C: historical turns keep their action row while a run streams — only
-          the ACTIVE (last) turn hides it mid-generation. Operations on older
-          turns are safe: deleteTurn tombstones against late stream writes.
-          w-full is REQUIRED: the turn root is `items-start`, so this row would
-          shrink-wrap and the diffstat badge's ml-auto would have no free space
-          to push it into the right corner. */}
+      {}
       {!(streaming && isLast) && (turn.content || turn.reasoning || turn.segments?.length || turn.error) ? (
-        <div className="flex w-full items-center gap-1 opacity-0 transition-opacity duration-200 hover:opacity-100 focus-within:opacity-100 [&:has(:focus-visible)]:opacity-100 md:opacity-60 md:hover:opacity-100 [@media(pointer:coarse)]:opacity-100">
+        <div className="m-acts bar-row">
           {turn.content && !editing ? <CopyButton text={turn.content} /> : null}
           {turn.content && !editing ? (
             <button
               type="button"
               onClick={startEdit}
-              className="icon-button h-7 w-7"
+              className="ib sm"
               aria-label="Edit this response"
             >
-              <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+              <Pencil className="ic" aria-hidden="true" />
             </button>
           ) : null}
           {}
@@ -1764,28 +1808,28 @@ const MessageRow = memo(function MessageRow({
             <button
               type="button"
               onClick={() => onClearOutput(turn.id)}
-              className="icon-button h-7 w-7"
+              className="ib sm"
               aria-label="Delete this output"
             >
-              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+              <Trash2 className="ic" aria-hidden="true" />
             </button>
           ) : null}
             <button
               type="button"
               onClick={() => onBranchTurn(turn.id)}
-              className="icon-button h-7 w-7"
+              className="ib sm"
               aria-label="Branch the conversation from this response"
             >
-              <GitBranch className="h-3.5 w-3.5" aria-hidden="true" />
+              <GitBranch className="ic" aria-hidden="true" />
             </button>
           {isEffectivelyLast ? (
             <button
               type="button"
               onClick={onRegenerate}
-              className="icon-button h-7 w-7"
+              className="ib sm"
               aria-label="Regenerate this response"
             >
-              <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+              <RotateCcw className="ic" aria-hidden="true" />
             </button>
           ) : null}
           {turn.usage?.totalTokens ? (
@@ -1796,11 +1840,11 @@ const MessageRow = memo(function MessageRow({
                   : undefined
               }
             >
-            <span className="ml-1 text-[13px] tabular-nums text-faint">
+            <span style={{ marginLeft: 4, fontSize: 13, fontVariantNumeric: 'tabular-nums', color: 'var(--faint)' }}>
               {turn.usage.totalTokens.toLocaleString()} tokens
               {turn.usage.promptTokens && turn.usage.cacheReadTokens ? (
                 <Tip label="Provider prompt-cache hits">
-                  <span className="ml-2 text-success/80">
+                  <span style={{ marginLeft: 8, color: 'rgb(var(--c-ok) / 0.8)' }}>
                     · {Math.min(100, Math.round((turn.usage.cacheReadTokens / turn.usage.promptTokens) * 100))}% cache
                   </span>
                 </Tip>
@@ -1809,19 +1853,13 @@ const MessageRow = memo(function MessageRow({
             </Tip>
           ) : null}
           {(() => {
-            // RESPONSE TIMER: settled turns show the frozen duration; the
-            // actively-streaming turn shows a live count. Keyed to THIS turn's
-            // own processingMs — NOT to streaming/isLast: the LAST turn keeps
-            // its frozen timer after the run ends (settled used to require
-            // !isLast → the final turn NEVER showed one), and a new run can't
-            // erase older turns' timers.
             const live = streaming && isLast && runActive;
             const settled = typeof turn.processingMs === 'number' && turn.processingMs >= 0;
             if (!live && !settled) return null;
             return (
               <Tip label={live ? 'Processing time (live)' : 'Total processing time for this response'}>
               <span
-                className="ml-1 text-[14px] tabular-nums text-faint"
+                style={{ marginLeft: 4, fontSize: 14, fontVariantNumeric: 'tabular-nums', color: 'var(--faint)' }}
               >
                 {formatProcessingMs(live ? liveElapsedMs : (turn.processingMs ?? 0))}
               </span>
@@ -1829,10 +1867,6 @@ const MessageRow = memo(function MessageRow({
             );
           })()}
           {(() => {
-            // DIFFSTAT — per-turn file churn (±lines). The server-measured
-            // `diffstat` is authoritative; when an older server build didn't
-            // emit it, fall back to parsing the diff string the segment
-            // ALREADY carries, so the badge never silently disappears.
             let added = 0;
             let removed = 0;
             const files = new Set<string>();
@@ -1856,11 +1890,11 @@ const MessageRow = memo(function MessageRow({
                 <button
                   type="button"
                   onClick={() => useStore.getState().openDiffPanel(turn.id)}
-                  className="inline-flex cursor-pointer items-center gap-2 rounded-control px-1 py-0.5 text-[13px] font-medium tabular-nums transition-colors hover:bg-elevated"
+                  style={{ display: 'inline-flex', cursor: 'pointer', alignItems: 'center', gap: 8, borderRadius: 'var(--r-md)', padding: '2px 4px', fontSize: 13, fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}
                   aria-label="Open the diff panel for this turn"
                 >
-                  <span className="text-[#7DFFC2]">+ {added.toLocaleString('id-ID')} Lines</span>
-                  {removed > 0 ? <span className="text-[#FF9DA2]">− {removed.toLocaleString('id-ID')} Lines</span> : null}
+                  <span style={{ color: '#7DFFC2' }}>+ {added.toLocaleString('id-ID')} Lines</span>
+                  {removed > 0 ? <span style={{ color: '#FF9DA2' }}>− {removed.toLocaleString('id-ID')} Lines</span> : null}
                 </button>
               </Tip>
             );
@@ -1869,7 +1903,7 @@ const MessageRow = memo(function MessageRow({
       ) : null}
 
       {editing ? (
-        <div className="w-full space-y-2">
+        <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 8 }}>
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -1882,15 +1916,16 @@ const MessageRow = memo(function MessageRow({
             }}
             rows={Math.min(16, Math.max(4, draft.split('\n').length + 1))}
             autoFocus
-            className="w-full resize-y rounded-control border border-accent/60 bg-canvas p-3 font-mono text-[13px] leading-relaxed text-ink outline-none"
+            className="field"
+            style={{ width: '100%', resize: 'vertical', fontFamily: 'var(--f-mono)', fontSize: 13 }}
           />
-          <div className="flex justify-end gap-1.5">
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
             <button
               type="button"
               onClick={() => setEditing(false)}
-              className="inline-flex items-center gap-1 rounded-control px-2.5 py-1.5 text-[11.5px] font-medium text-muted transition-colors hover:text-ink"
+              className="btn ghost xs"
             >
-              <X className="h-3 w-3" aria-hidden="true" />
+              <X className="ic" aria-hidden="true" />
               Cancel
             </button>
             {turn.role === 'assistant' ? (
@@ -1901,10 +1936,11 @@ const MessageRow = memo(function MessageRow({
                   onRegenerateFrom(turn.id);
                 }}
                 disabled={!draft.trim()}
-                className="inline-flex items-center gap-1 rounded-control border border-accent/50 px-2.5 py-1.5 text-[11.5px] font-medium text-ink transition-opacity disabled:opacity-40"
+                className="btn xs"
+                style={{ borderColor: 'rgb(var(--c-accent) / 0.5)' }}
               >
                 <Tip label="Save this edit, drop everything after it, and re-run from here">
-                <RotateCcw className="h-3 w-3" aria-hidden="true" />
+                <RotateCcw className="ic" aria-hidden="true" />
                 </Tip>
                 Save &amp; regenerate from here
               </button>
@@ -1913,14 +1949,15 @@ const MessageRow = memo(function MessageRow({
               type="button"
               onClick={saveEdit}
               disabled={!draft.trim()}
-              className="inline-flex items-center gap-1 rounded-control bg-accent px-2.5 py-1.5 text-[11.5px] font-medium text-accent-ink transition-opacity disabled:opacity-40"
+              className="btn primary xs"
             >
-              <Check className="h-3 w-3" aria-hidden="true" />
+              <Check className="ic" aria-hidden="true" />
               Save
             </button>
           </div>
         </div>
       ) : null}
+      </div>
     </div>
   );
 });
@@ -1939,13 +1976,13 @@ function CopyButton({ text }: { text: string }) {
         } catch {
         }
       }}
-      className="icon-button h-7 w-7"
+      className="ib sm"
       aria-label={copied ? 'Response copied' : 'Copy response'}
     >
       {copied ? (
-        <Check className="h-3.5 w-3.5 text-success" aria-hidden="true" />
+        <Check className="ic" style={{ color: 'rgb(var(--c-ok))' }} aria-hidden="true" />
       ) : (
-        <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+        <Copy className="ic" aria-hidden="true" />
       )}
     </button>
   );
@@ -1961,16 +1998,33 @@ function CopyButton({ text }: { text: string }) {
  * fixed ceiling, so long reasoning never pushes the conversation away.
  */
 /**
- * One harness-injected system prompt block. The harness builds these per
- * request (agent tools, MCP tools, structured outputs) and streams them to
- * the UI — this is where the user can read exactly what was appended to the
- * model's context on top of their own System Prompt.
+ * Icon per injected system-prompt block — derived from the block's title so
+ * each row reads at a glance (terminal for prompt blocks, paperclip for
+ * attachments, target for goals…) instead of one repeated plug glyph.
  */
-function InjectionBlock({ injection }: { injection: TurnInjection }) {
+function injectionIcon(title: string): typeof PlugZap {
+  const t = title.toLowerCase();
+  if (t.includes('attachment')) return Paperclip;
+  if (t.includes('goal') || t.includes('plan')) return Target;
+  if (t.includes('image')) return ImageIcon;
+  if (t.includes('reminder')) return Bell;
+  if (t.includes('model') || t.includes('capabilit')) return Cpu;
+  if (t.includes('structured')) return Braces;
+  if (t.includes('mcp')) return PlugZap;
+  if (t.includes('operator')) return User;
+  return SquareTerminal;
+}
+
+/**
+ * GROUPED system-context card — one card for ALL harness injections instead
+ * of one card per block (they stacked into a wall before every reply).
+ * Mirrors design/system-context.html: a single summary row ("System context ·
+ * N system prompt, M context injection") that expands into per-block rows,
+ * each with its own disclosure. All copy in English.
+ */
+function InjectionGroupCard({ injections }: { injections: TurnInjection[] }) {
   const [open, setOpen] = useState(false);
-  // Panel lifecycle for the smooth grid-rows toggle below: mount on open,
-  // unmount ~300ms after close so the collapse animates instead of snapping
-  // shut (same lifecycle as the activity pill).
+  const [allRows, setAllRows] = useState<Record<string, boolean>>({});
   const [contentMounted, setContentMounted] = useState(false);
   if (open && !contentMounted) setContentMounted(true);
   useEffect(() => {
@@ -1979,38 +2033,98 @@ function InjectionBlock({ injection }: { injection: TurnInjection }) {
     return () => window.clearTimeout(timer);
   }, [open]);
 
+  const systemPrompts = injections.filter((injection) => /system prompt/i.test(injection.title)).length;
+  const contextInjections = injections.length - systemPrompts;
+  const everyRowOpen = injections.length > 0 && injections.every((injection) => allRows[injection.id]);
+
+  const toggleAll = () => {
+    const next = !everyRowOpen;
+    setAllRows(Object.fromEntries(injections.map((injection) => [injection.id, next])));
+  };
+
   return (
-    <div className="w-full overflow-hidden rounded-card border border-hairline bg-elevated/40">
+    <div
+      className="card"
+      style={{ width: '100%', overflow: 'hidden', padding: 0, background: 'rgb(var(--c-elev) / 0.4)' }}
+    >
+      {/* Card summary row — the only thing visible while collapsed */}
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
-        className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-elevated"
+        className="nav"
+        style={{ width: '100%', height: 'auto', padding: '10px 14px', justifyContent: 'flex-start', gap: 10 }}
       >
-        <PlugZap className="h-4 w-4 shrink-0 text-accent" aria-hidden="true" />
-        <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-muted">
-          {injection.title}
+        <PlugZap className="ic" style={{ flexShrink: 0, color: 'rgb(var(--c-accent))' }} aria-hidden="true" />
+        <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12, fontWeight: 500, color: 'var(--muted)' }}>
+          System context
+          <span style={{ color: 'var(--faint)', fontWeight: 400 }}>
+            {' '}· {systemPrompts} system prompt{contextInjections > 0 ? `, ${contextInjections} context injection${contextInjections > 1 ? 's' : ''}` : ''}
+          </span>
         </span>
-        <span className="shrink-0 text-[10.5px] uppercase tracking-wider text-faint">harness</span>
+        <span style={{ flexShrink: 0, fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--faint)' }}>harness</span>
         <ChevronDown
-          className={cx('h-3.5 w-3.5 shrink-0 text-faint transition-transform duration-200', !open && '-rotate-90')}
+          className="chev"
+          style={{ width: 14, height: 14, flexShrink: 0, color: 'var(--faint)', transition: 'transform .2s', transform: open ? undefined : 'rotate(-90deg)' }}
           aria-hidden="true"
         />
       </button>
 
-      {/* SMOOTH TOGGLE — grid-rows 0fr↔1fr animates height both ways; the
-          content stays mounted through the close transition, then unmounts. */}
-      <div
-        className="grid transition-[grid-template-rows] duration-300 ease-in-out"
-        style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
-        aria-hidden={!open}
-      >
-        <div className="min-h-0 overflow-hidden">
+      <div className={cx('col', !open && 'shut')} aria-hidden={!open}>
+        <div className="col-in">
           {contentMounted ? (
-            <div className="inner-scroll max-h-64 overflow-y-auto border-t border-hairline px-3.5 py-3">
-              <pre className="whitespace-pre-wrap font-mono text-[11.5px] leading-relaxed text-muted">
-                {injection.content}
-              </pre>
+            <div
+              className="inner-scroll"
+              style={{ maxHeight: 320, overflowY: 'auto', borderTop: '1px solid var(--line)' }}
+            >
+              {/* Expand / collapse all — only useful with more than one block */}
+              {injections.length > 1 ? (
+                <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '4px 12px', borderBottom: '1px solid var(--line)' }}>
+                  <button
+                    type="button"
+                    onClick={toggleAll}
+                    style={{ background: 'none', border: 0, cursor: 'pointer', fontSize: 11, color: 'rgb(var(--c-accent))', padding: '2px 6px' }}
+                  >
+                    {everyRowOpen ? 'Collapse all' : 'Expand all'}
+                  </button>
+                </div>
+              ) : null}
+
+              {injections.map((injection, index) => {
+                const rowOpen = allRows[injection.id] ?? false;
+                const RowIcon = injectionIcon(injection.title);
+                return (
+                  <div key={injection.id} style={{ borderTop: index > 0 ? '1px solid var(--line)' : undefined }}>
+                    <button
+                      type="button"
+                      onClick={() => setAllRows((rows) => ({ ...rows, [injection.id]: !rowOpen }))}
+                      aria-expanded={rowOpen}
+                      style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 10, padding: '8px 12px', background: 'none', border: 0, textAlign: 'left', cursor: 'pointer', color: 'inherit' }}
+                    >
+                      <RowIcon className="ic" style={{ width: 14, height: 14, flexShrink: 0, color: 'var(--muted)' }} aria-hidden="true" />
+                      <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12, color: 'var(--muted)' }}>
+                        {injection.title}
+                      </span>
+                      <ChevronDown
+                        className="chev"
+                        style={{ width: 13, height: 13, flexShrink: 0, color: 'var(--faint)', transition: 'transform .15s', transform: rowOpen ? 'rotate(90deg)' : undefined }}
+                        aria-hidden="true"
+                      />
+                    </button>
+                    {/* Height-animated disclosure (grid 0fr→1fr) — content stays
+                        mounted while the card is open so closing eases too */}
+                    <div className={cx('col', !rowOpen && 'shut')} aria-hidden={!rowOpen}>
+                      <div className="col-in">
+                        <pre
+                          style={{ margin: 0, padding: '0 12px 10px 36px', whiteSpace: 'pre-wrap', fontFamily: 'var(--f-mono)', fontSize: 11, lineHeight: 1.625, color: 'var(--faint)', opacity: rowOpen ? 1 : 0, transition: 'opacity .25s var(--ease)' }}
+                        >
+                          {injection.content}
+                        </pre>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           ) : null}
         </div>
@@ -2018,6 +2132,7 @@ function InjectionBlock({ injection }: { injection: TurnInjection }) {
     </div>
   );
 }
+
 
 /**
  * STEER: the user's mid-run note, rendered as an ANCHORED USER BUBBLE inside
@@ -2038,27 +2153,27 @@ function SteerBubble({
   const images = (entry.parts ?? []).filter((part) => part.type === 'image_url');
   return (
     <div
-      className="group ml-auto flex max-w-[80%] flex-col items-end gap-1"
-      style={{ transform: `translateY(${offset}px)` }}
+      className="msg u"
+      style={{ maxWidth: '80%', gap: 4, transform: `translateY(${offset}px)` }}
     >
-      <div className="flex items-center gap-1.5 text-[14px] font-medium text-faint">
-        <Waypoints className="h-3 w-3 text-accent" aria-hidden="true" />
+      <div className="meta" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, fontWeight: 500, color: 'var(--faint)' }}>
+        <Waypoints className="ic" style={{ width: 12, height: 12, color: 'rgb(var(--c-accent))' }} aria-hidden="true" />
         <span>You</span>
       </div>
       {images.length > 0 ? (
-        <div className="flex flex-wrap justify-end gap-1.5">
+        <div className="ufiles">
           {images.map((image, index) => (
             <img
               key={index}
               src={image.type === 'image_url' ? renderableRefUrl(image.image_url.url) : ''}
               alt="Steered image"
-              className="max-h-40 max-w-full rounded-lg border border-hairline object-contain"
+              style={{ maxHeight: 160, maxWidth: '100%', borderRadius: 'var(--r-lg)', border: '1px solid var(--line)', objectFit: 'contain' }}
             />
           ))}
         </div>
       ) : null}
       {entry.text.trim() ? (
-        <div className="w-full rounded-card rounded-br-sm bg-accent-soft px-4 py-3">
+        <div className="ub" style={{ width: '100%', borderRadius: 'var(--r-lg) var(--r-lg) 4px var(--r-lg)', borderColor: 'transparent', background: 'var(--c-accent-soft)' }}>
           <Md content={entry.text} breakLines />
         </div>
       ) : null}
@@ -2075,21 +2190,12 @@ function CollapsePanel({
   open,
   children,
   className,
-  contentClassName,
-  contentRef,
-  onContentScroll,
 }: {
   open: boolean;
   children: import('react').ReactNode;
   className?: string;
-  contentClassName?: string;
-  contentRef?: ReactRef<HTMLDivElement>;
-  onContentScroll?: (event: ReactScrollEvent) => void;
 }) {
   const [contentMounted, setContentMounted] = useState(open);
-  // Mount in the SAME commit that flips `open` — a post-paint effect mount
-  // would pop the content mid-transition. Unmount only after the close eases
-  // down (330ms).
   if (open && !contentMounted) setContentMounted(true);
   useEffect(() => {
     if (open) return;
@@ -2099,23 +2205,99 @@ function CollapsePanel({
 
   return (
     <div
-      className={cx('grid transition-[grid-template-rows] duration-300 ease-in-out', className)}
-      style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
+      className={cx('col', !open && 'shut', className)}
       aria-hidden={!open}
     >
-      <div className="min-h-0 overflow-hidden">
-        {contentMounted ? (
-          <div ref={contentRef} onScroll={onContentScroll} className={contentClassName}>
-            {children}
-          </div>
-        ) : null}
+      <div className="col-in">
+        {contentMounted ? children : null}
       </div>
     </div>
   );
 }
 
-type ReactRef<HTMLDivElement> = { current: HTMLDivElement | null };
 type ReactScrollEvent = Parameters<NonNullable<import('react').HTMLAttributes<HTMLDivElement>['onScroll']>>[0];
+
+/* ── PANEL AUTO-FOLLOW (in-panel) ──────────────────────────────────────────
+ * Autoscroll ISI panel (thinking / pill), TERPISAH dari follow thread
+ * (useStickToBottom): hanya box panel yang digeser — layar context user
+ * tidak disentuh saat teks tumbuh.
+ *
+ * Anti-lepas: follow dimatikan HANYA oleh input user ke atas (wheel/touch/
+ * key, capture-phase) — bukan oleh event scroll. Saat streaming, konten
+ * tumbuh tepat setelah set programatik; event scroll keburu mengukur
+ * jarak ke dasar > threshold dan mematikan follow di tengah jalan
+ * (laporan: reasoning scroll lepas). Resume: scroll user kembali ke dasar.
+ */
+const PANEL_BOTTOM_SNAP = 48;
+
+function usePanelFollowScroll(open: boolean) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const followRef = useRef(true);
+
+  useEffect(() => {
+    if (!open) return;
+    const onIntent = (event: Event) => {
+      const box = scrollRef.current;
+      const target = event.target instanceof Element ? event.target : null;
+      if (!box || !target || !box.contains(target)) return;
+      let upward = false;
+      if (event instanceof WheelEvent) upward = event.deltaY < 0;
+      else if (event instanceof TouchEvent) upward = true;
+      else if (event instanceof KeyboardEvent && ['ArrowUp', 'PageUp', 'Home'].includes(event.key)) upward = true;
+      if (upward) followRef.current = false;
+    };
+    document.addEventListener('wheel', onIntent, { capture: true, passive: true });
+    document.addEventListener('touchmove', onIntent, { capture: true, passive: true });
+    document.addEventListener('keydown', onIntent, { capture: true });
+    return () => {
+      document.removeEventListener('wheel', onIntent, { capture: true });
+      document.removeEventListener('touchmove', onIntent, { capture: true });
+      document.removeEventListener('keydown', onIntent, { capture: true });
+    };
+  }, [open]);
+
+  /** Nempel langsung di elemen scrollable panel — wiring lama menempel di
+   *  wrapper non-overflow sehingga scrollTop-nya no-op total. */
+  const onScroll = useCallback((event: ReactScrollEvent) => {
+    if (followRef.current) return; // set programatik saat following: abaikan
+    const box = event.currentTarget;
+    followRef.current = box.scrollHeight - box.scrollTop - box.clientHeight < PANEL_BOTTOM_SNAP;
+  }, []);
+
+  /** Dorong isi panel ke ekor konten — dipanggil tiap flush teks. */
+  const scrollToBottom = useCallback(() => {
+    const box = scrollRef.current;
+    if (box && followRef.current) box.scrollTop = box.scrollHeight;
+  }, []);
+
+  /** OPEN PUSH — panel dibuka user: isi panel lompat ke ekor, lalu viewport
+   *  thread didorong turun hanya sebesar bagian panel yang jatuh DI BAWAH
+   *  viewport. Panel turn lama di tengah layar → nol dorongan (tidak ada
+   *  yank); panel di tepi bawah → terdorong seukuran tubuh panel. Grid masih
+   *  menganimasi 0fr→1fr saat effect ini jalan (rect.height ≈ 0), jadi tinggi
+   *  akhir dihitung dari scrollHeight yang di-cap maxHeight. Sekali per buka. */
+  const pushedOpenRef = useRef(false);
+  useEffect(() => {
+    if (!open) {
+      pushedOpenRef.current = false;
+      return;
+    }
+    if (pushedOpenRef.current) return;
+    pushedOpenRef.current = true;
+    followRef.current = true;
+    const box = scrollRef.current;
+    if (!box) return;
+    box.scrollTop = box.scrollHeight;
+    const scroller = box.closest('.chat-scroll');
+    if (!(scroller instanceof HTMLElement)) return;
+    const max = parseFloat(getComputedStyle(box).maxHeight);
+    const grow = Number.isFinite(max) ? Math.min(box.scrollHeight, max) : box.scrollHeight;
+    const spill = box.getBoundingClientRect().top + grow - scroller.getBoundingClientRect().bottom;
+    if (spill > 0) scroller.scrollTop += Math.min(spill, grow);
+  }, [open]);
+
+  return { scrollRef, onScroll, scrollToBottom };
+}
 
 /** Reasoning body is virtualized in line-sized slices (~18 rendered lines each
  *  at 13px/1.625 ≈ 21px per line). Slices split AFTER their trailing newline so
@@ -2146,9 +2328,6 @@ function chunkReasoningText(text: string): string[] {
  *  (string primitives compare by value), so a streaming flush re-renders and
  *  re-lays-out ONLY the growing tail chunk instead of the whole document. */
 const ReasonChunk = memo(function ReasonChunk({ text }: { text: string }) {
-  // Verified line-box estimator (exact on 8 pre-wrap edge cases incl. trailing
-  // newlines): a trailing '\n' does NOT add a line box, so `split('\n').length`
-  // over-counts every interior chunk by one.
   let breaks = 0;
   for (let i = 0; i < text.length; i += 1) if (text[i] === '\n') breaks += 1;
   const lines = Math.max(1, breaks + (text.endsWith('\n') ? 0 : 1));
@@ -2193,14 +2372,12 @@ function ReasoningBlock({
   /** Present only on finished turns — deletes this turn's reasoning. */
   onDelete?: () => void;
 }) {
-  // Collapsed by default — even while live the reasoning stays a one-line row;
-  // the user opens it to read (the scroll-follow guard still applies once open).
   const [open, setOpen] = useState(false);
   const chunks = useMemo(() => chunkReasoningText(text), [text]);
   const wasLive = useRef(live);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  /** Tracks whether the user scrolled up to read — auto-follow pauses then. */
-  const followRef = useRef(true);
+  /** In-panel follow — lihat usePanelFollowScroll. Terpisah total dari
+   *  follow thread: hanya scrollbar di DALAM panel ini yang bergeser. */
+  const { scrollRef, onScroll, scrollToBottom } = usePanelFollowScroll(open);
   /**
    * SCROLL-STABILITY GUARD: when the run ends (or errors), `live` flips false
    * and this block used to COLLAPSE (open → false) — a reasoning box that had
@@ -2214,34 +2391,20 @@ function ReasoningBlock({
     wasLive.current = live;
   }, [live]);
 
-  /** True saat scrollTop diset PROGRAMATIK oleh effect follow — event scroll
-   *  dari lompatan sendiri BUKAN scroll user, dan tanpa guard ini race dengan
-   *  pertumbuhan teks membuat onScroll menghitung jarak > threshold lalu
-   *  mematikan follow di tengah jalan (laporan: reasoning scroll lepas). */
-  const programmaticScrollRef = useRef(false);
-
+  // Follow isi panel tiap flush teks reasoning (hanya saat panel terbuka).
   useEffect(() => {
-    const box = scrollRef.current;
-    if (!box || !open) return;
-    if (followRef.current) {
-      programmaticScrollRef.current = true;
-      box.scrollTop = box.scrollHeight;
-      // Sudah di dasar → tidak ada scroll event → flag dibersihkan di sini;
-      // event (jika ada) selalu dispatch sebelum rAF berikutnya.
-      requestAnimationFrame(() => {
-        programmaticScrollRef.current = false;
-      });
-    }
-  }, [text, open]);
+    if (!open) return;
+    scrollToBottom();
+  }, [text, open, scrollToBottom]);
 
   return (
-    <div className="group/rs w-full">
-      <div className="flex w-full items-center gap-1">
+    <div className="rs-row" style={{ width: '100%' }}>
+      <div style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 4 }}>
         <button
           type="button"
           onClick={() => setOpen((value) => !value)}
           aria-expanded={open}
-          className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+          style={{ display: 'flex', minWidth: 0, flex: 1, alignItems: 'center', gap: 10, textAlign: 'left', background: 'none', border: 0, padding: 0, color: 'inherit' }}
         >
           {showCat ? (
             <img
@@ -2250,20 +2413,16 @@ function ReasoningBlock({
               draggable={false}
               width={56}
               height={56}
-              className="h-14 w-14 shrink-0 select-none"
+              style={{ width: 56, height: 56, flexShrink: 0, userSelect: 'none' }}
             />
           ) : null}
-          <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[12px] font-medium text-muted">
+          <span style={{ display: 'flex', minWidth: 0, flex: 1, alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 500, color: 'var(--muted)' }}>
             <ReasoningLoop live={live} />
             {live ? 'Thinking…' : 'Reasoning'}
           </span>
           <ChevronDown
-            className={cx(
-              'h-3.5 w-3.5 shrink-0 text-faint opacity-0 transition-[opacity,transform] duration-200',
-              'group-hover/rs:opacity-100',
-              open && 'opacity-100',
-              !open && '-rotate-90',
-            )}
+            className="chev rs-chev"
+            style={{ width: 14, height: 14, flexShrink: 0, color: 'var(--faint)', transition: 'opacity .2s, transform .2s', transform: open ? undefined : 'rotate(-90deg)', opacity: open ? 1 : undefined }}
             aria-hidden="true"
           />
         </button>
@@ -2274,29 +2433,22 @@ function ReasoningBlock({
               type="button"
               onClick={onDelete}
               aria-label="Delete this reasoning"
-              className="icon-button h-8 w-8 shrink-0 text-faint opacity-0 transition-opacity duration-200 hover:text-danger focus-visible:opacity-100 group-hover/rs:opacity-100"
+              className="ib sm rs-del"
+              style={{ flexShrink: 0, color: 'var(--faint)' }}
             >
-              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+              <Trash2 className="ic" aria-hidden="true" />
             </button>
           </Tip>
         ) : null}
       </div>
 
-      <CollapsePanel
-        open={open}
-        className="mt-1.5"
-        contentRef={scrollRef}
-        onContentScroll={(event) => {
-          // Lompatan programatik sendiri diabaikan (bukan scroll user);
-          // threshold 48 menoleransi satu frame pertumbuhan teks agar follow
-          // tidak mati di tengah streaming.
-          if (programmaticScrollRef.current) return;
-          const box = event.currentTarget;
-          followRef.current = box.scrollHeight - box.scrollTop - box.clientHeight < 48;
-        }}
-        contentClassName="max-h-56 overflow-y-auto pr-1"
-      >
-        <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-muted">
+      <CollapsePanel open={open} className="rs-panel">
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          className="inner-scroll"
+          style={{ whiteSpace: 'pre-wrap', fontSize: 13, color: 'var(--muted)', maxHeight: 224, overflowY: 'auto', paddingRight: 4 }}
+        >
           {chunks.map((chunk, index) => (
             <ReasonChunk key={index} text={chunk} />
           ))}
@@ -2305,6 +2457,262 @@ function ReasoningBlock({
     </div>
   );
 }
+
+/* ── COMPACTION CHECKPOINT DESIGN (design/Compaction-Redesign.html) ────────
+ * Shared presentation for both compaction surfaces: the live card (inline
+ * turn) and the top block (no inline twin). English copy throughout. The
+ * summary markdown is parsed light: `##` → sections, `- ` → items.
+ */
+
+/** Light markdown parse: `##` headings → sections, `- `/`* `/`N.` → items. */
+function parseCompactionSections(text: string): { title: string; items: string[] }[] {
+  const out: { title: string; items: string[] }[] = [];
+  let current: { title: string; items: string[] } | null = null;
+  const ensure = () => {
+    if (!current) {
+      current = { title: 'Summary', items: [] };
+      out.push(current);
+    }
+    return current;
+  };
+  for (const line of text.split(/\r?\n/)) {
+    const heading = line.match(/^#{1,4}\s+(.+?)\s*$/);
+    if (heading) {
+      current = { title: heading[1], items: [] };
+      out.push(current);
+      continue;
+    }
+    const bullet = line.match(/^\s*(?:[-*•]|\d+\.)\s+(.+?)\s*$/);
+    if (bullet) {
+      ensure().items.push(bullet[1]);
+      continue;
+    }
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const section = ensure();
+    if (section.items.length && /^\s{2,}/.test(line)) section.items[section.items.length - 1] += ` ${trimmed}`;
+    else section.items.push(trimmed);
+  }
+  return out.filter((section) => section.items.length);
+}
+
+/** Strip inline markdown to plain text (chips, TOC, lead). */
+const compactionPlain = (text: string) => text.replace(/`([^`]+)`/g, '$1').replace(/\*\*([^*]+)\*\*/g, '$1');
+
+/** "Label: rest" lead-in split — Labels get the accent chip treatment. */
+function compactionLeadIn(raw: string): { label: string; rest: string } | null {
+  const match = raw.match(/^([A-Z][^:"`]{1,44}):\s+/);
+  if (!match) return null;
+  return { label: match[1], rest: raw.slice(match[0].length) };
+}
+
+const SECTION_NUM_FILLER = 2;
+
+/** One summary item: accent dot, optional lead-in chip, code/quote highlights,
+ *  clamped to 3 lines with a Show more/Show less toggle when long. */
+function CompactionItem({ raw }: { raw: string }) {
+  const [clamped, setClamped] = useState(raw.length > 230);
+  const lead = compactionLeadIn(raw);
+  const text = lead ? lead.rest : raw;
+  return (
+    <li className="cp-item" data-clamped={clamped || undefined}>
+      <div className="cp-item-text">
+        {lead ? <span className="cp-lead-in">{lead.label}</span> : null}
+        {text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g).map((part, i) => {
+          if (part.startsWith('`') && part.endsWith('`') && part.length > 2) {
+            return <code key={i}>{part.slice(1, -1)}</code>;
+          }
+          if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
+            return <strong key={i}>{part.slice(2, -2)}</strong>;
+          }
+          return <span key={i}>{part}</span>;
+        })}
+      </div>
+      {raw.length > 230 ? (
+        <button type="button" className="cp-more" aria-expanded={!clamped} onClick={() => setClamped((value) => !value)}>
+          {clamped ? 'Show more' : 'Show less'}
+        </button>
+      ) : null}
+    </li>
+  );
+}
+
+/** Accent hairline with glowing dot — "context compacted here" divider. */
+function CompactionMarker() {
+  return (
+    <div className="cp-marker" aria-hidden="true">
+      <span>
+        <i />
+        Context compacted
+      </span>
+    </div>
+  );
+}
+
+const CompactionTileIcon = Archive;
+
+/** Card header: icon tile, title + subtitle, stat chips, copy + delete +
+ *  chevron. `title`/`sub` differ per surface; the rest is identical. */
+function CompactionHead({
+  title,
+  sub,
+  meta,
+  live,
+  onCopy,
+  onDelete,
+  onDeleteLabel,
+  open,
+  onToggle,
+  headerId,
+  bodyId,
+}: {
+  title: string;
+  sub: string;
+  meta?: { covered: number; replacedTokens: number; trigger: string };
+  live?: boolean;
+  onCopy?: () => void;
+  onDelete?: () => void;
+  onDeleteLabel?: string;
+  open: boolean;
+  onToggle: () => void;
+  headerId: string;
+  bodyId: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    if (!onCopy) return;
+    onCopy();
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1600);
+  };
+  return (
+    <header className="cp-head">
+      <button type="button" className="cp-toggle" onClick={onToggle} aria-expanded={open} aria-controls={bodyId} id={headerId}>
+        <span className="cp-ico" aria-hidden="true">
+          {live ? <Loader2 className="ic spin" /> : <CompactionTileIcon className="ic" />}
+        </span>
+        <span className="cp-titles">
+          <span className="cp-title">{title}</span>
+          <span className="cp-sub">{sub}</span>
+        </span>
+        {meta ? (
+          <span className="cp-chips">
+            {meta.replacedTokens > 0 ? (
+              <span className="cp-chip accent">
+                <b>~{Math.round(meta.replacedTokens / 1000)}k</b> tok
+              </span>
+            ) : null}
+            <span className="cp-chip">
+              <b>{meta.covered}</b> turns
+            </span>
+            <span className="cp-chip">{meta.trigger}</span>
+          </span>
+        ) : null}
+      </button>
+      <div className="cp-actions">
+        {onCopy ? (
+          <button type="button" className="ib sm" onClick={copy} aria-label={copied ? 'Summary copied' : 'Copy summary'}>
+            {copied ? <Check className="ic" style={{ color: 'rgb(var(--c-ok))' }} aria-hidden="true" /> : <Copy className="ic" aria-hidden="true" />}
+          </button>
+        ) : null}
+        {onDelete ? (
+          <button type="button" className="ib sm cp-danger" onClick={onDelete} aria-label={onDeleteLabel ?? 'Delete checkpoint'}>
+            <Trash2 className="ic" aria-hidden="true" />
+          </button>
+        ) : null}
+        <button type="button" className="ib sm" tabIndex={-1} aria-hidden="true" onClick={onToggle}>
+          <ChevronDown className="chev" aria-hidden="true" />
+        </button>
+      </div>
+    </header>
+  );
+}
+
+/** Collapsed peek: lead sentence + numbered section chips. Visible while the
+ *  card is closed (grid-rows 1fr→0fr once open); clicking the lead opens. */
+function CompactionPeek({
+  lead,
+  sections,
+  onOpen,
+  peekId,
+}: {
+  lead: string;
+  sections: { title: string; items: string[] }[];
+  onOpen: () => void;
+  peekId: string;
+}) {
+  return (
+    <div className="cp-peek" id={peekId} aria-hidden={undefined}>
+      <div className="cp-peek-in">
+        <div className="cp-peek-pad">
+          <button type="button" className="cp-lead" onClick={onOpen}>
+            {lead}
+          </button>
+          <div className="cp-toc">
+            {sections.map((section, index) => (
+              <span key={`${section.title}:${index}`} className="cp-toc-chip">
+                <span>{String(index + 1).padStart(SECTION_NUM_FILLER, '0')}</span>
+                {compactionPlain(section.title)}
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Expandable summary sections with numbered heads + item counts. Stays
+ *  mounted while the card animates closed — the parent's contentMounted
+ *  timer unmounts it after the grid collapse finishes. */
+function CompactionSections({ sections }: { sections: { title: string; items: string[] }[] }) {
+  const [collapsed, setCollapsed] = useState<Record<number, boolean>>({});
+  return (
+    <div className="cp-scroll">
+      {sections.map((section, index) => {
+        const isCollapsed = collapsed[index] ?? false;
+        return (
+          <section key={`${section.title}:${index}`} className="cp-sec" data-collapsed={isCollapsed || undefined}>
+            <button
+              type="button"
+              className="cp-sec-head"
+              aria-expanded={!isCollapsed}
+              onClick={() => setCollapsed((state) => ({ ...state, [index]: !isCollapsed }))}
+            >
+              <span className="cp-sec-num">{String(index + 1).padStart(SECTION_NUM_FILLER, '0')}</span>
+              <span className="cp-sec-title">{compactionPlain(section.title)}</span>
+              <span className="cp-sec-count">{section.items.length}</span>
+              <ChevronDown className="chev cp-sec-chev" aria-hidden="true" />
+            </button>
+            <div className={cx('col', isCollapsed && 'shut')} aria-hidden={isCollapsed}>
+              <div className="col-in">
+                <ul className="cp-sec-list">
+                  {section.items.map((item, itemIndex) => (
+                    <CompactionItem key={itemIndex} raw={item} />
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Grouped sections state shared by the card + block via a small hook. */
+function useCompactionSections(summary: string) {
+  return useMemo(() => parseCompactionSections(summary), [summary]);
+}
+
+/** Lead sentence for the collapsed peek: first item, markdown stripped. */
+function compactionLead(sections: { title: string; items: string[] }[], summary: string): string {
+  const first = sections[0]?.items[0];
+  if (first) return compactionPlain(first);
+  return compactionPlain(summary.split(/\r?\n/).find((line) => line.trim()) ?? '');
+}
+
+/* ── END COMPACTION CHECKPOINT DESIGN ───────────────────────────────────── */
 
 /**
  * Marker for a completed compaction: the turns before a point ride as a
@@ -2317,14 +2725,8 @@ function ReasoningBlock({
 function CompactionBlock({ compaction }: { compaction: ConversationCompaction }) {
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  // Panel lifecycle for the smooth grid-rows toggle below (see InjectionBlock).
-  const [contentMounted, setContentMounted] = useState(false);
-  if (open && !contentMounted) setContentMounted(true);
-  useEffect(() => {
-    if (open) return;
-    const timer = window.setTimeout(() => setContentMounted(false), 300);
-    return () => window.clearTimeout(timer);
-  }, [open]);
+  const sections = useCompactionSections(compaction.summary);
+  const bodyId = useId();
   const triggerLabel =
     compaction.trigger === 'manual'
       ? 'compacted manually'
@@ -2341,79 +2743,282 @@ function CompactionBlock({ compaction }: { compaction: ConversationCompaction })
   };
 
   return (
-    <div className="w-full">
-      <div className="flex w-full items-center gap-2">
-        <button
-          type="button"
-          onClick={() => setOpen((value) => !value)}
-          aria-expanded={open}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left"
-        >
-          <Archive className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden="true" />
-          <span className="flex-1 text-[12px] font-medium text-muted">
-            Compacted · {compaction.coveredTurnIds.length} turn
-            {compaction.coveredTurnIds.length === 1 ? '' : 's'} summarized
-            <span className="text-faint"> · {triggerLabel}</span>
-          </span>
-          <ChevronDown
-            className={cx('h-3.5 w-3.5 text-faint transition-transform duration-200', !open && '-rotate-90')}
-            aria-hidden="true"
-          />
-        </button>
+    <div className="cp-wrap" style={{ width: '100%' }} data-open={open} data-confirm={confirming}>
+      <CompactionMarker />
+      <article className="cp-card">
+        <CompactionHead
+          title="Compaction checkpoint"
+          sub={`Summary of previous context · ${compaction.coveredTurnIds.length} turn${compaction.coveredTurnIds.length === 1 ? '' : 's'} · ${triggerLabel}`}
+          meta={{ covered: compaction.coveredTurnIds.length, replacedTokens: 0, trigger: compaction.trigger }}
+          onCopy={() => {
+            void navigator.clipboard.writeText(compaction.summary).catch(() => {});
+          }}
+          onDelete={confirming ? discard : () => setConfirming(true)}
+          onDeleteLabel={confirming ? 'Discard checkpoint' : 'Discard checkpoint — covered turns return verbatim'}
+          open={open}
+          onToggle={() => setOpen((value) => !value)}
+          headerId={`${bodyId}-head`}
+          bodyId={`${bodyId}-body`}
+        />
         {confirming ? (
-          <>
-            <button
-              type="button"
-              onClick={discard}
-              className="rounded-md px-2 py-1 text-[11px] font-medium text-danger transition-colors hover:bg-danger/10"
-            >
+          <div className="cp-confirm" role="group" aria-label="Confirm discard">
+            <span>Discard this checkpoint? Covered turns return as verbatim context.</span>
+            <button type="button" className="btn xs danger" style={{ height: 24, fontSize: 11 }} onClick={discard}>
               Discard
             </button>
-            <button
-              type="button"
-              onClick={() => setConfirming(false)}
-              className="rounded-md px-2 py-1 text-[11px] text-faint transition-colors hover:text-ink"
-            >
+            <button type="button" className="btn ghost xs" style={{ height: 24, fontSize: 11 }} onClick={() => setConfirming(false)}>
               Keep
             </button>
-          </>
-        ) : (
-          <Tip label="Stop riding this summary on the wire — covered turns return verbatim">
-            <button
-              type="button"
-              onClick={() => setConfirming(true)}
-              className="icon-button h-7 w-7 shrink-0"
-              aria-label="Discard checkpoint"
-            >
-              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-            </button>
-          </Tip>
-        )}
-      </div>
-      {/* SMOOTH TOGGLE — grid-rows 0fr↔1fr (see InjectionBlock). */}
-      <div
-        className="grid transition-[grid-template-rows] duration-300 ease-in-out"
-        style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
-        aria-hidden={!open}
-      >
-        <div className="min-h-0 overflow-hidden">
-          {contentMounted ? (
-            <div className="inner-scroll mt-1.5 max-h-56 overflow-y-auto rounded-card border border-hairline bg-canvas px-3 py-2">
-              <p className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-muted">
-                {compaction.summary}
-              </p>
+          </div>
+        ) : null}
+        <CompactionPeek
+          lead={compactionLead(sections, compaction.summary)}
+          sections={sections}
+          onOpen={() => setOpen(true)}
+          peekId={`${bodyId}-peek`}
+        />
+        {/* Body stays mounted so the grid collapse animates BOTH ways —
+            mounting on open removes the transition's start state (snap). */}
+        <div className={cx('col', !open && 'shut')} aria-hidden={!open}>
+          <div className="col-in">
+            <div className="cp-body-in" id={`${bodyId}-body`}>
+              <CompactionSections sections={sections} />
             </div>
-          ) : null}
+          </div>
         </div>
-      </div>
+      </article>
     </div>
   );
+}
+
+/** Desain2 run-panel: label TIAP tool → kata yang tampil di baris "now". */
+const RUN_TOOL_VERB: Record<string, string> = {
+  read_file: 'Reading',
+  read_all: 'Reading',
+  list: 'Reading',
+  glob: 'Searching',
+  grep: 'Searching',
+  search: 'Searching',
+  write: 'Writing',
+  run: 'Running',
+  test_run: 'Running tests',
+  git: 'Using git',
+  render_visual: 'Rendering',
+  vision: 'Viewing',
+  image: 'Generating image',
+  image_models: 'Listing image models',
+};
+
+/** Keluarga tool yang MENULIS (sel kuning .k-w) vs yang membaca (netral .k-r). */
+const RUN_WRITE_TOOLS = new Set(['write', 'edit_file', 'multi_edit', 'edit_lines', 'edit_between', 'insert_at_line', 'rename', 'move', 'copy', 'delete', 'apply_patch', 'layout_edit', 'undo']);
+
+/** run-files collapse (paritas desain .rf-clip/.rf-veil): chip 26px + gap 6px
+ *  → baris ke-4 mulai di offsetTop 96. CSS clip = 122px (96 + peek 14 + padding 12). */
+const RF_PEEK_TOP = 96;
+
+/** Tool eksekusi → sel gelap .k-x (desain: TK = {run:'x'}). */
+const RUN_EXEC_TOOLS = new Set(['run', 'git', 'test_run', 'typecheck', 'exec', 'bash', 'shell', 'terminal']);
+
+/** "read · src/x.ts" — baris status pill mengambil TARGET dari args. */
+function runToolTarget(segment: Extract<TurnSegment, { type: 'tool' }>): string {
+  if (!segment.args) return '';
+  let args: Record<string, unknown>;
+  try {
+    args = JSON.parse(segment.args) as Record<string, unknown>;
+  } catch {
+    return '';
+  }
+  if (!args || typeof args !== 'object') return '';
+  const str = (key: string): string => (typeof args[key] === 'string' ? (args[key] as string).trim() : '');
+  return str('path') || str('command') || str('pattern') || str('query') || str('url') || str('title') || str('from') || str('to') || str('prompt').slice(0, 60) || '';
+}
+
+/** Status per segmen tool, dipetakan dari field moriko yang ada. */
+function runToolStatus(segment: Extract<TurnSegment, { type: 'tool' }>, running: boolean): 'run' | 'ok' | 'err' {
+  if (segment.ok === true) return 'ok';
+  if (segment.ok === false) return 'err';
+  return running ? 'run' : 'ok';
 }
 
 type PillRowish =
   | { kind: 'activity'; segment: Extract<TurnSegment, { type: 'tool' | 'reasoning' }> }
   | { kind: 'interm'; segment: Extract<TurnSegment, { type: 'text' }> }
   | { kind: 'steer'; segment: Extract<TurnSegment, { type: 'steer' }> };
+
+/** Satu fase panel expand: kalimat say (interm/reasoning) + call di bawahnya. */
+type PillPhase = {
+  key: string;
+  say: { kind: 'text' | 'reasoning'; segment: TurnSegment } | null;
+  items: PillRowish[];
+};
+
+/**
+ * Desain phasesHTML: say memisahkan fase; call mengerucut ke fase berjalan.
+ * Baris reasoning/interm = header `.ph-say`; tool/steer = baris `.call`.
+ */
+function buildPhases(activity: PillRowish[]): PillPhase[] {
+  const phases: PillPhase[] = [];
+  let current: PillPhase | null = null;
+  activity.forEach((row, index) => {
+    if (row.kind === 'interm' || (row.kind === 'activity' && row.segment.type === 'reasoning')) {
+      const say = {
+        kind: row.kind === 'interm' ? ('text' as const) : ('reasoning' as const),
+        segment: row.segment as TurnSegment,
+      };
+      current = { key: `ph-${index}`, say, items: [] };
+      phases.push(current);
+      return;
+    }
+    if (!current) {
+      current = { key: `ph-${index}`, say: null, items: [] };
+      phases.push(current);
+    }
+    current.items.push(row);
+  });
+  return phases;
+}
+
+/** Baris .call desain: icon + nama tool + target + diffstat (+ steer tag).
+ *  Klik = inspector inline: args/summary/diff terbuka di bawah baris
+ *  (CollapsePanel, sama seperti ToolCallCard) — fungsi tidak hilang. */
+function CallRow({
+  row,
+  running,
+  workspaceName,
+}: {
+  row: PillRowish;
+  running: boolean;
+  workspaceName: string | null;
+}) {
+  const [open, setOpen] = useState(false);
+  if (row.kind === 'steer') {
+    return (
+      <div className="call steer w-full">
+        <Waypoints className="ic" aria-hidden="true" />
+        <span className="tg">{row.segment.text}</span>
+        <span className="tag">steer</span>
+      </div>
+    );
+  }
+  const segment = row.segment as Extract<TurnSegment, { type: 'tool' }>;
+  const st = runToolStatus(segment, running);
+  const target = toolTarget(segment.toolName, segment.args, workspaceName);
+  const diffstat = segment.diff && segment.ok !== false ? diffStatLabel(segment.diff) : null;
+  const hasBody = segment.args !== undefined || segment.summary !== undefined || segment.diff !== undefined;
+  const progressLine = running && st === 'run' && segment.summary === undefined ? segment.progress : null;
+  const StatusIcon = toolStatusIcon(segment.toolName);
+  return (
+    <div className="w-full">
+      <button
+        type="button"
+        className={cx('call', `s-${st}`, hasBody && 'clickable', 'w-full')}
+        onClick={hasBody ? () => setOpen((value) => !value) : undefined}
+        aria-expanded={hasBody ? open : undefined}
+        data-tip={hasBody ? 'Show input & output' : undefined}
+      >
+        {st === 'run' ? (
+          <Loader2 className="ic spin" aria-hidden="true" />
+        ) : st === 'err' ? (
+          <CircleAlert className="ic st-e" aria-hidden="true" />
+        ) : (
+          <StatusIcon className="ic" aria-hidden="true" />
+        )}
+        <span className="cn">{segment.toolName}</span>
+        <span className="tg">{target ? `'${target}'` : segment.serverName ?? ''}</span>
+        {progressLine ? <span className="tag">{progressLine.slice(0, 60)}</span> : null}
+        {diffstat ? (
+          (() => {
+            const [added, removed] = diffstat.split(' ');
+            return (
+              <span className="dd">
+                {added ? <em className="p">{added}</em> : null}
+                {added && removed ? ' ' : null}
+                {removed ? <em className="m">{removed}</em> : null}
+              </span>
+            );
+          })()
+        ) : null}
+        {hasBody ? (
+          <ChevronDown
+            className="chev"
+            style={{ width: 12, height: 12, flexShrink: 0, transform: open ? undefined : 'rotate(-90deg)' }}
+            aria-hidden="true"
+          />
+        ) : null}
+      </button>
+      <CollapsePanel
+        open={open}
+        className="tc-panel"
+      >
+        {segment.args ? (
+          <p style={{ overflowWrap: 'break-word', fontFamily: 'var(--f-mono)', fontSize: 10.5, color: 'var(--faint)', maxHeight: 224, overflowY: 'auto', minWidth: 0, width: '100%', margin: 0 }}>
+            {segment.args.length > 300 ? `${segment.args.slice(0, 300)}...` : segment.args}
+          </p>
+        ) : null}
+        {segment.summary !== undefined ? (
+          <p className="inner-scroll" style={{ marginTop: 6, maxHeight: 224, minWidth: 0, overflowY: 'auto', whiteSpace: 'pre-wrap', fontSize: 12.5, color: 'var(--muted)', margin: 0 }}>
+            {segment.summary || '(empty result)'}
+          </p>
+        ) : null}
+        {segment.diff ? <DiffBlock diff={segment.diff} /> : null}
+        <PreviewButton args={segment.args} />
+      </CollapsePanel>
+    </div>
+  );
+}
+
+/**
+ * ASK — kotak approval inline ala desain (askHTML): muncul di dalam pill
+ * turn yang sedang menunggu izin sandbox. Keputusan lewat
+ * resolvePermissionRequest store — sama wire dengan AgentPermissionDialog.
+ */
+function RunAskBox({ request }: { request: AgentPermissionRequest }) {
+  const resolvePermissionRequest = useStore((state) => state.resolvePermissionRequest);
+  const [deciding, setDeciding] = useState(false);
+  const decidingNow = async (approve: boolean, remember: boolean) => {
+    if (deciding) return;
+    setDeciding(true);
+    try {
+      await resolvePermissionRequest(request.id, approve, remember);
+    } finally {
+      setDeciding(false);
+    }
+  };
+  return (
+    <div className="ask" data-waiting-permission={request.id}>
+      <ShieldAlert className="ic" aria-hidden="true" />
+      <div className="min0">
+        <b>
+          Moriko wants to{' '}
+          {request.command ? 'run a command' : request.paths.length ? 'access outside the workspace' : `use ${request.tool}`}
+        </b>
+        {request.command ? (
+          <code>{request.command}</code>
+        ) : request.paths.length ? (
+          <code>{request.paths.join(' · ')}</code>
+        ) : null}
+        <span>Without a decision, this is automatically denied after 2 minutes.</span>
+      </div>
+      <div className="ask-a">
+        <button type="button" className="btn danger sm" onClick={() => void decidingNow(false, false)} disabled={deciding}>
+          Deny
+        </button>
+        <button type="button" className="btn primary sm" onClick={() => void decidingNow(true, false)} disabled={deciding}>
+          Allow once
+        </button>
+        <button
+          type="button"
+          className="btn sm"
+          style={{ borderColor: 'rgb(var(--c-accent) / 0.4)', background: 'var(--c-accent-soft)', color: 'rgb(var(--c-ink))' }}
+          onClick={() => void decidingNow(true, true)}
+          disabled={deciding}
+        >
+          Allow for this session
+        </button>
+      </div>
+    </div>
+  );
+}
 
 /**
  * ACTIVITY PILL v2 — EXACTLY ONE pill per assistant turn (spec v2). Collapsed
@@ -2424,18 +3029,25 @@ type PillRowish =
  * expand/collapse stays user-controlled forever. Nothing is ever re-parented —
  * rows are derived from the turn's own segment order, append-only.
  */
-function ActivityTicker({
+function RunPill({
   activity,
   running,
   turnId,
+  processingMs,
+  stopped,
   onClearReasoning,
   onFullscreenVisual,
   suppressVisual,
   supersededVisualSegments,
+  waitingPermission,
 }: {
   activity: PillRowish[];
   running: boolean;
   turnId: string;
+  /** Durasi run yang sudah settle (turn.processingMs) — "Worked for Xs". */
+  processingMs?: number;
+  /** Run berakhir sebelum waktunya (stop/abort) — "Stopped after Xs". */
+  stopped?: boolean;
   onClearReasoning: (turnId: string) => void;
   onFullscreenVisual: (visual: VisualSpec) => void;
   /** The tool-call segment whose visual is hoisted below the pill — inside,
@@ -2445,16 +3057,17 @@ function ActivityTicker({
   /** Set referensi segmen visual yang disupersedi edit-in-place (dihitung
    *  MessageRow dari turn.segments — identitas objek sama). */
   supersededVisualSegments?: Set<TurnSegment>;
+  /** Request izin sandbox yang sedang DITUNGGU run ini — pill masuk state
+   *  .waiting dan merender kotak .ask inline (desain askHTML). */
+  waitingPermission?: AgentPermissionRequest | null;
 }) {
   const [open, setOpen] = useState(false);
   const [wordIndex, setWordIndex] = useState(0);
-  // The rows stay mounted through the closing animation, then unmount — this
-  // is what makes the collapse animate instead of snapping shut.
   const [contentMounted, setContentMounted] = useState(false);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
+  /** In-panel follow — lihat usePanelFollowScroll. Ref + handler nempel di
+   *  .activity-panel-scroll (elemen overflowY:auto) langsung. */
+  const { scrollRef, onScroll, scrollToBottom } = usePanelFollowScroll(open);
 
-  // The word advances ONLY while the turn is running — a DONE pill freezes on
-  // whatever word it reached (no timer, no fade churn).
   useEffect(() => {
     if (!running) return;
     const timer = window.setInterval(() => setWordIndex((value) => value + 1), 2000);
@@ -2463,12 +3076,159 @@ function ActivityTicker({
 
   const word = ACTIVITY_WORDS[wordIndex % ACTIVITY_WORDS.length];
   const canExpand = activity.length > 0;
+  /** Desain: waiting → border kuning + head "Waiting for your approval". */
+  const waiting = Boolean(waitingPermission);
 
-  // Panel mount lifecycle: rows mount in the SAME commit that flips `open`
-  // (a post-paint effect mount would start the width/height transitions on an
-  // empty panel and pop the content mid-flight). They stay mounted through
-  // the closing animation so the collapse eases down instead of snapping
-  // shut, then unmount ~330ms after.
+  {}
+  const toolRows = activity.filter((row) => row.kind === 'activity' && row.segment.type === 'tool') as Array<{
+    kind: 'activity';
+    segment: Extract<TurnSegment, { type: 'tool' }>;
+  }>;
+  const callCount = toolRows.length;
+  const added = toolRows.reduce((sum, row) => sum + (row.segment.diffstat?.added ?? 0), 0);
+  const removed = toolRows.reduce((sum, row) => sum + (row.segment.diffstat?.removed ?? 0), 0);
+
+  {}
+  const currentTool = (() => {
+    for (let i = toolRows.length - 1; i >= 0; i--) {
+      if (toolRows[i].segment.ok === undefined) return toolRows[i].segment;
+    }
+    return null;
+  })();
+  const errCount = toolRows.filter((row) => row.segment.ok === false).length;
+  const headWord = currentTool
+    ? (RUN_TOOL_VERB[currentTool.toolName] ?? currentTool.toolName)
+    : word;
+  const headTarget = currentTool ? runToolTarget(currentTool) : '';
+  // Desain: "Worked for 9.4s" saat settle, "Stopped after 9.4s" saat dihentikan.
+  const durLabel = typeof processingMs === 'number' && processingMs >= 0
+    ? `${(processingMs / 1000).toFixed(1)}s`
+    : null;
+  const doneLabel = !running && callCount > 0
+    ? `${stopped ? 'Stopped after' : 'Worked for'}${durLabel ? ` ${durLabel}` : ''}${errCount ? ` · ${errCount} error${errCount === 1 ? '' : 's'} recovered` : ''}`
+    : word;
+
+  {}
+  const workspaceName = useStore(
+    (state) => state.agentWorkspaces.find((entry) => entry.id === state.activeAgentWorkspaceId)?.label ?? null,
+  );
+  const openDiffPanel = useStore((state) => state.openDiffPanel);
+  /** run-files collapse: >3 baris → clip + veil blur; klik veil = expand.
+   *  filesHidden = jumlah chip baris ke-4+ — diukur dari offsetTop (chip
+   *  membungkus menurut lebar kontainer), bukan dari hitungan mentah. */
+  const filesRef = useRef<HTMLDivElement | null>(null);
+  const [filesOpen, setFilesOpen] = useState(false);
+  const [filesHidden, setFilesHidden] = useState(0);
+  /** Desain run-files: file yang diubah run ini (chips di bawah pill).
+   *  Stat dari wire `diffstat`; bila kosong (turn lama) dihitung dari `diff` —
+   *  angka +N/−N yang sama dengan yang tampil di baris call. */
+  const runFiles = toolRows
+    .map((row) => {
+      const stat = row.segment.diffstat
+        ?? (row.segment.diff ? (() => {
+          const label = diffStatLabel(row.segment.diff);
+          if (!label) return null;
+          const [added, removed] = label.split(' ');
+          const num = (token?: string) => (token ? Math.abs(parseInt(token.replace(/[^\d-]/g, ''), 10) || 0) : 0);
+          return { added: num(added), removed: num(removed) };
+        })() : null);
+      if (!stat || (!stat.added && !stat.removed)) return null;
+      const target = runToolTarget(row.segment);
+      if (!target) return null;
+      return {
+        key: row.segment.toolCallId ?? `f-${target}`,
+        path: target,
+        add: stat.added,
+        del: stat.removed,
+      };
+    })
+    .filter((file): file is NonNullable<typeof file> => file !== null);
+
+  // Baris ke-4+ terdeteksi lewat offsetTop chip (offsetParent = .run-files).
+  // running/waiting ikut dependency: div hanya ter-render saat !running —
+  // saat settle, effect harus mengukur ulang pada box yang baru di-mount.
+  useLayoutEffect(() => {
+    if (filesOpen) {
+      setFilesHidden(0);
+      return;
+    }
+    const box = filesRef.current;
+    if (!box) return;
+    const measure = () => {
+      let hidden = 0;
+      box.querySelectorAll<HTMLElement>(':scope > .fchip').forEach((chip) => {
+        if (chip.offsetTop >= RF_PEEK_TOP) hidden++;
+      });
+      setFilesHidden(hidden);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(box);
+    return () => ro.disconnect();
+  }, [filesOpen, runFiles.length, running, waiting]);
+
+  /** Fase ala desain phasesHTML: say memisahkan fase; call mengerucut. */
+  const phases = useMemo(() => buildPhases(activity), [activity]);
+
+  {}
+  /** Separator fase kini informatif: label = teks fase + jumlah step di
+   *  fase SETELAH separator ini (paritas dengan desain rb-sep data-tip).
+   *  Tooltip memakai <Tip> (portal ui.tsx) — data-tip mentah di luar scope
+   *  .vr tidak punya mesin tooltip apa pun. */
+  type RibbonCell = { separator: true; key: string; label?: string } | { cell: React.ReactNode; key: string };
+  const ribbonCells: RibbonCell[] = activity.flatMap((row, index): RibbonCell[] => {
+    const key = `rc-${index}`;
+    if (row.kind === 'activity' && row.segment.type === 'tool') {
+      // Waiting approval → sel pending berubah kuning (desain .s-wait).
+      const st = waiting && row.segment.ok === undefined ? 'wait' : runToolStatus(row.segment, running);
+      // k-w = tool penulis (aksen), k-x = tool eksekusi (tinta pekat),
+      // netral = tool baca. fresh: animasi cellin saat sel baru muncul.
+      const kindCls = RUN_WRITE_TOOLS.has(row.segment.toolName)
+        ? 'k-w'
+        : RUN_EXEC_TOOLS.has(row.segment.toolName)
+          ? 'k-x'
+          : 'k-r';
+      const fresh = running && st !== 'run' && st !== 'wait' ? ' fresh' : '';
+      return [{
+        cell: (
+          <Tip label={`${row.segment.toolName}${runToolTarget(row.segment) ? ` · ${runToolTarget(row.segment)}` : ''}`}>
+            <button
+              type="button"
+              tabIndex={-1}
+              className={cx('cell', kindCls, `s-${st}`, fresh)}
+              aria-label={`${row.segment.toolName} ${runToolTarget(row.segment)}`}
+            />
+          </Tip>
+        ),
+        key,
+      }];
+    }
+    if (row.kind === 'steer') {
+      return [{
+        cell: (
+          <Tip label={`Steer · ${row.segment.text.slice(0, 60)}`}>
+            <button type="button" tabIndex={-1} className="cell k-steer" aria-label="Steer" />
+          </Tip>
+        ),
+        key,
+      }];
+    }
+    if (row.kind === 'interm' || (row.kind === 'activity' && row.segment.type === 'reasoning')) {
+      // Separator antar-fase: label = kalimat fase + jumlah step setelahnya.
+      const phaseText = row.segment.type === 'text' || row.segment.type === 'reasoning' ? row.segment.text : '';
+      let stepsAfter = 0;
+      for (let j = index + 1; j < activity.length; j++) {
+        const next = activity[j];
+        if (next.kind === 'interm' || (next.kind === 'activity' && next.segment.type === 'reasoning')) break;
+        stepsAfter++;
+      }
+      return [{ separator: true, key, label: `${(phaseText || 'New phase').slice(0, 60)} · ${stepsAfter} step${stepsAfter === 1 ? '' : 's'}` }];
+    }
+    return [{ separator: true, key }];
+  });
+
+
+
   if (open && !contentMounted) setContentMounted(true);
   useEffect(() => {
     if (open) return;
@@ -2476,70 +3236,112 @@ function ActivityTicker({
     return () => window.clearTimeout(timer);
   }, [open]);
 
-  // Stick the panel scroll to the newest row while open — new streaming rows
-  // push the view down instead of growing out of sight.
+  // Follow isi pill tiap event baru (tool call / text / reasoning) dan saat
+  // panel baru dibuka — hanya box pill, bukan layar thread.
   useEffect(() => {
     if (!open) return;
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [open, activity.length]);
+    scrollToBottom();
+  }, [open, activity.length, running, scrollToBottom]);
 
-  // WIDTH ANIMATION: chip pakai lebar intrinsik (fit-content) — tanpa
-  // pengukuran DOM. Lihat komentar pada wrapper di bawah.
 
   return (
-    <div className="activity-stack w-full">
-      {/* Collapsed = an INTRINSIC fit-content chip; expanded = full width —
-          the width animation is CSS-driven (.activity-pill-wrap): fit-content
-          <-> 100% via `interpolate-size: allow-keywords` (Chromium 129+;
-          unsupported browsers snap, the chip is never clipped). The rows pin
-          their layout width (.activity-panel-scroll) so text never rewraps
-          mid-animation. */}
-      <div className={cx('activity-pill-wrap relative', open && 'is-open')}>
-        <div className={cx('activity-ticker', running && 'is-running')}>
-          <button
-            type="button"
-            onClick={() => setOpen((value) => !value)}
-            aria-expanded={open}
-            aria-label={open ? 'Collapse this turn’s activity panel' : 'Expand this turn’s activity panel'}
-            className="flex w-full cursor-pointer items-center gap-2 px-3.5 py-1.5 text-left"
-          >
-            <ChevronDown
-              className={cx(
-                'h-3.5 w-3.5 shrink-0 text-faint transition-transform duration-200',
-                !open && '-rotate-90',
-              )}
-              aria-hidden="true"
-            />
-            <span
-              key={running ? `w${wordIndex}` : 'done'}
-              className="activity-ticker-word whitespace-nowrap text-[12.5px] font-semibold text-ink"
-            >
-              {word}
-            </span>
-            {running && !open ? (
-              <span className="flex items-center gap-1" aria-hidden="true">
-                <span className="ticker-dot ticker-dot-1 h-1.5 w-1.5 rounded-full bg-accent/90" />
-                <span className="ticker-dot ticker-dot-2 h-1.5 w-1.5 rounded-full bg-accent/90" />
-                <span className="ticker-dot ticker-dot-3 h-1.5 w-1.5 rounded-full bg-accent/90" />
-              </span>
-            ) : null}
-          </button>
+    <div className="w-full">
+      <div className={cx('run', running && 'live', waiting && 'waiting')}>
+        <button
+          type="button"
+          className="run-head"
+          onClick={() => setOpen((value) => !value)}
+          aria-expanded={open}
+          aria-label={open ? 'Collapse this turn’s run panel' : 'Expand this turn’s run panel'}
+        >
+          {}
+          <span className="run-st">
+            {running ? (
+              waiting
+                ? <Hand className="ic st-w" aria-hidden="true" />
+                : <span className="pxspin" />
+            ) : stopped ? (
+              <Square className="ic st-s" aria-hidden="true" />
+            ) : errCount ? (
+              <AlertTriangle className="ic st-w" aria-hidden="true" />
+            ) : (
+              <Check className="ic st-ok" aria-hidden="true" />
+            )}
+          </span>
 
-        {/* Expanding panel: sibling of the button (cards inside stay
-            interactive). Grid-rows 0fr→1fr animates height both ways; the
-            content stays mounted through the close transition, then unmounts.
-            max-height + inner scroll bounds the panel: it never grows past the
-            cap — the scrollbar follows the newest row instead. */}
+          {}
+          <span className="run-now">
+            {running ? (
+              waiting ? (
+                <b>Waiting for your approval</b>
+              ) : (
+                <>
+                  <b>{headWord}</b>
+                  {headTarget ? <> <code>{headTarget}</code></> : null}
+                </>
+              )
+            ) : (
+              <b>{doneLabel}</b>
+            )}
+          </span>
+
+          {}
+          {callCount > 0 || added > 0 || removed > 0 ? (
+            <span className="run-meta">
+              {callCount > 0 ? (
+                <span className="rn">
+                  {callCount} step{callCount === 1 ? '' : 's'}
+                </span>
+              ) : null}
+              {added > 0 || removed > 0 ? (
+                <span className="rn">
+                  {added > 0 ? <em className="p">+{added}</em> : null}
+                  {added > 0 && removed > 0 ? ' ' : null}
+                  {removed > 0 ? <em className="m">−{removed}</em> : null}
+                </span>
+              ) : null}
+            </span>
+          ) : null}
+
+          <ChevronDown
+            className="chev"
+            style={{ width: 15, height: 15, flexShrink: 0, color: 'var(--faint)', transition: 'transform .2s', transform: open ? undefined : 'rotate(-90deg)' }}
+            aria-hidden="true"
+          />
+        </button>
+
+        {}
+        {ribbonCells.length > 0 || running ? (
+          <div className="ribbon">
+            {ribbonCells.map((item, index) =>
+              'separator' in item ? (
+                index > 0 ? (
+                  <Tip key={`rb-sep-${index}`} label={item.label}>
+                    <span className="rb-sep" aria-label="Phase separator" />
+                  </Tip>
+                ) : null
+              ) : (
+                <span key={item.key}>{item.cell}</span>
+              ),
+            )}
+            {running ? <span className="cell head" aria-hidden="true" /> : null}
+          </div>
+        ) : null}
+
+        {}
+        {waiting && !open ? (
+          <p className="run-say keep">Waiting for your approval</p>
+        ) : null}
+
+        {}
+        {waiting && waitingPermission ? <RunAskBox request={waitingPermission} /> : null}
+
+        {}
         {canExpand ? (
-          <div
-            className="activity-panel grid transition-[grid-template-rows] duration-300 ease-in-out"
-            style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
-            aria-hidden={!open}
-          >
-            <div className="min-h-0 overflow-hidden">
+          <div className={cx('col activity-panel', !open && 'shut')} aria-hidden={!open}>
+            <div className="col-in">
               {contentMounted ? (
-                <div ref={scrollRef} className="activity-panel-scroll max-h-[420px] overflow-y-auto px-3 pb-2 pt-1">
+                <div ref={scrollRef} onScroll={onScroll} className="activity-panel-scroll inner-scroll" style={{ maxHeight: 420, overflowY: 'auto', padding: 0 }}>
                   {(() => {
                     const isSuppressed = (row: { toolCallId?: string }): boolean =>
                       suppressVisual !== undefined
@@ -2548,74 +3350,117 @@ function ActivityTicker({
                       && row.toolCallId === suppressVisual.toolCallId;
                     const isSuperseded = (segment: unknown): boolean =>
                       supersededVisualSegments?.has(segment as TurnSegment) ?? false;
-                    return activity.map((row, index) => (
-                    // Uniform rhythm: every entry row is at least 38px tall, so
-                    // node-to-node spacing is identical for one-line entries.
-                    <div key={`row-${index}-${row.kind}`} className="pill-row-enter flex min-h-[38px] items-start gap-2.5">
-                      {/* Node column — the rail segment lives HERE, dead-center
-                          of the same box as the node, so it is symmetric by
-                          construction; consecutive rows weld into one line.
-                          Only ● intermediate rows get the o─o node; plain
-                          entries are just rail. */}
-                      <span className="relative flex w-[26px] shrink-0 self-stretch" aria-hidden="true">
-                        <span className="absolute bottom-0 left-1/2 top-0 w-px -translate-x-1/2 bg-ink/40" />
-                        {row.kind === 'interm' ? (
-                          <span className="relative mt-[8px] flex h-[10px] w-full items-center">
-                            <span className="h-[10px] w-[10px] shrink-0 rounded-full border-2 border-accent bg-canvas" />
-                            <span className="h-[2px] flex-1 bg-accent/70" />
-                            <span className="h-[10px] w-[10px] shrink-0 rounded-full border-2 border-accent bg-canvas" />
-                          </span>
-                        ) : null}
-                      </span>
-                      <div className="min-w-0 flex-1 pt-[3px]">
-                        {row.kind === 'steer' ? (
-                          <SteerBubble entry={row.segment} offset={0} />
-                        ) : row.kind === 'interm' ? (
-                          // Intermediate output — the o─o node in the rail
-                          // column is its marker. OUTPUT text renders as compact
-                          // markdown; reasoning rows stay plain in ReasoningBlock.
-                          <StreamText
-                            text={row.segment.text}
-                            live={running && index === activity.length - 1}
-                            className="md-compact"
-                          />
-                        ) : row.segment.type === 'reasoning' ? (
-                          <ReasoningBlock
-                            text={row.segment.text}
-                            live={running && index === activity.length - 1}
-                            showCat={false}
-                            onDelete={!running ? () => onClearReasoning(turnId) : undefined}
-                          />
-                        ) : (
-                          <div className="w-full min-w-0">
-                            <ToolCallCard
-                              call={row.segment}
-                              running={running && row.segment.summary === undefined}
-                            />
-                            {/* The hoisted visual renders OUTSIDE below the pill —
-                                inside, only a slim "moved below" row keeps the
-                                timeline coherent without duplicating the card.
-                                VISUAL v2: an id superseded by an edit-in-place
-                                renders its audit row instead of a live card. */}
-                            {row.segment.visual && !isSuppressed(row.segment) && !isSuperseded(row.segment) ? (
-                              <VisualCard visual={row.segment.visual} onFullscreen={onFullscreenVisual} />
-                            ) : row.segment.visual && (isSuppressed(row.segment) || isSuperseded(row.segment)) ? (
-                              <div className="mt-1.5 text-[11px] italic text-faint">
-                                {isSuperseded(row.segment) ? 'Visual updated in place' : 'Visual Render Moved'}
-                              </div>
+                    /** Desain phasesHTML: say memisahkan fase, call di bawahnya. */
+                    return (
+                      <ol className="phases">
+                        {phases.map((phase) => (
+                          <li key={phase.key} className="phs">
+                            {phase.say ? (
+                              phase.say.kind === 'text' ? (
+                                <div className="ph-say md-compact">
+                                  <StreamText
+                                    text={(phase.say.segment as Extract<TurnSegment, { type: 'text' }>).text}
+                                    live={running && phase.say.segment === activity[activity.length - 1]?.segment}
+                                  />
+                                </div>
+                              ) : (
+                                <ReasoningBlock
+                                  text={(phase.say.segment as Extract<TurnSegment, { type: 'reasoning' }>).text}
+                                  live={running && phase.say.segment === activity[activity.length - 1]?.segment}
+                                  showCat={false}
+                                  onDelete={!running ? () => onClearReasoning(turnId) : undefined}
+                                />
+                              )
                             ) : null}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    ));
+                            {phase.items.map((row, itemIndex) => (
+                              row.kind === 'steer' ? (
+                                <div key={`st-${itemIndex}`} className="pill-row-enter" style={{ minWidth: 0 }}>
+                                  <SteerBubble entry={row.segment} offset={0} />
+                                </div>
+                              ) : (
+                                <div key={`tc-${itemIndex}-${row.segment.type === 'tool' ? row.segment.toolCallId ?? itemIndex : itemIndex}`} className="pill-row-enter" style={{ minWidth: 0 }}>
+                                  <CallRow
+                                    row={row}
+                                    running={row.segment.type === 'tool' && (row.segment as Extract<TurnSegment, { type: 'tool' }>).summary === undefined && running}
+                                    workspaceName={workspaceName}
+                                  />
+                                  {row.segment.type === 'tool' && row.segment.visual ? (
+                                    !isSuppressed(row.segment as { toolCallId?: string }) && !isSuperseded(row.segment) ? (
+                                      <VisualCard visual={row.segment.visual} onFullscreen={onFullscreenVisual} />
+                                    ) : (
+                                      <div style={{ marginTop: 6, fontSize: 11, fontStyle: 'italic', color: 'var(--faint)' }}>
+                                        {isSuperseded(row.segment) ? 'Visual updated in place' : 'Visual Render Moved'}
+                                      </div>
+                                    )
+                                  ) : null}
+                                  {row.segment.type === 'tool' && row.segment.toolName === 'image' && row.segment.ok !== false && renderableToolImages(row.segment.toolImages).length > 0 ? (
+                                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+                                      {renderableToolImages(row.segment.toolImages).map((url, imageIndex) => (
+                                        <img
+                                          key={imageIndex}
+                                          src={url}
+                                          alt={`Generated image ${imageIndex + 1}`}
+                                          style={{ maxHeight: 120, maxWidth: '100%', borderRadius: 'var(--r-md)', border: '1px solid var(--line)' }}
+                                        />
+                                      ))}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              )
+                            ))}
+                          </li>
+                        ))}
+                      </ol>
+                    );
                   })()}
                 </div>
               ) : null}
             </div>
           </div>
         ) : null}
-        </div>
+
+        {}
+        {!running && !waiting && runFiles.length > 0 ? (
+          <div
+            ref={filesRef}
+            className={cx('run-files', filesHidden > 0 && !filesOpen && 'rf-clip')}
+          >
+            {runFiles.map((file) => (
+              <button
+                type="button"
+                key={file.key}
+                className="fchip"
+                data-tip="Review in Diff"
+                onClick={() => openDiffPanel(turnId)}
+              >
+                <FileText className="ic" aria-hidden="true" />
+                <span>{file.path}</span>
+                {file.add ? <em className="p" style={{ color: 'rgb(var(--c-ok))', fontStyle: 'normal' }}>+{file.add}</em> : null}
+                {file.del ? <em className="m" style={{ color: 'rgb(var(--c-danger))', fontStyle: 'normal' }}>−{file.del}</em> : null}
+              </button>
+            ))}
+            {filesHidden > 0 && !filesOpen ? (
+              <button
+                type="button"
+                className="rf-veil"
+                onClick={() => setFilesOpen(true)}
+                aria-label={`Show ${filesHidden} more file${filesHidden === 1 ? '' : 's'}`}
+              >
+                <span>+{filesHidden} more</span>
+              </button>
+            ) : null}
+            {filesOpen ? (
+              <button
+                type="button"
+                className="rf-less"
+                onClick={() => setFilesOpen(false)}
+                aria-label="Show fewer files"
+              >
+                <span>Show less</span>
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -2733,6 +3578,10 @@ function toolStatusIcon(toolName: string): typeof Check {
       return Info;
     case 'download':
       return FileText;
+    case 'image':
+      return ImageIcon;
+    case 'image_models':
+      return Images;
     default:
       return Check;
   }
@@ -2757,7 +3606,7 @@ function ToolCallCard({
   );
   const workspaceName = workspace?.label ?? null;
   const hasBody = call.args !== undefined || call.summary !== undefined || call.diff !== undefined;
-  const progressLine = runningNow && call.summary ? call.summary : null;
+  const progressLine = runningNow && call.summary === undefined ? call.progress : null;
   const target = toolTarget(call.toolName, call.args, workspaceName);
 
   return (
@@ -2766,25 +3615,22 @@ function ToolCallCard({
         type="button"
         onClick={() => hasBody && setOpen((value) => !value)}
         aria-expanded={open}
-        className={cx(
-          'group/tc flex w-full items-center gap-1.5 py-1.5 text-left font-mono text-[11.5px] text-ink',
-          hasBody && 'cursor-pointer',
-          runningNow && 'tc-running relative overflow-hidden',
-        )}
+        className={cx('tc-row', runningNow && 'tc-running')}
+        style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 6, padding: '6px 0', textAlign: 'left', fontFamily: 'var(--f-mono)', fontSize: 11.5, color: 'rgb(var(--c-ink))', cursor: hasBody ? 'pointer' : undefined, position: runningNow ? 'relative' : undefined, overflow: runningNow ? 'hidden' : undefined, background: 'none', border: 0 }}
       >
         {}
         {runningNow ? <span className="tc-shimmer" aria-hidden="true" /> : null}
         {call.ok === false ? (
-          <CircleAlert className="h-3.5 w-3.5 shrink-0 text-danger" aria-hidden="true" />
+          <CircleAlert className="ic" style={{ width: 14, height: 14, flexShrink: 0, color: 'rgb(var(--c-danger))' }} aria-hidden="true" />
         ) : runningNow ? (
-          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-accent" aria-hidden="true" />
+          <Loader2 className="ic spin" style={{ width: 14, height: 14, flexShrink: 0, color: 'rgb(var(--c-accent))' }} aria-hidden="true" />
         ) : (() => {
           const StatusIcon = toolStatusIcon(call.toolName);
-          return <StatusIcon className="h-3.5 w-3.5 shrink-0 text-success" aria-hidden="true" />;
-        })()}        <span className="min-w-0 flex-1 truncate">
+          return <StatusIcon className="ic" style={{ width: 14, height: 14, flexShrink: 0, color: 'rgb(var(--c-ok))' }} aria-hidden="true" />;
+        })()}        <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {call.toolName}
-          <span className="text-faint"> · {target ? `'${target}'` : call.serverName}</span>
-          {progressLine ? <span className="ml-2 text-[10.5px] text-muted">{progressLine.slice(0, 80)}</span> : null}
+          <span style={{ color: 'var(--faint)' }}> · {target ? `'${target}'` : call.serverName}</span>
+          {progressLine ? <span style={{ marginLeft: 8, fontSize: 10.5, color: 'var(--muted)' }}>{progressLine.slice(0, 80)}</span> : null}
         </span>
         {}
         {call.diff && call.ok !== false ? (
@@ -2793,24 +3639,18 @@ function ToolCallCard({
             if (!label) return null;
             const [added, removed] = label.split(' ');
             return (
-              <span className="ml-2 shrink-0 font-mono text-[10.5px] leading-none">
-                {added ? <span className="text-success">{added}</span> : null}
-                {added && removed ? <span className="text-faint"> </span> : null}
-                {removed ? <span className="text-danger">{removed}</span> : null}
+              <span style={{ marginLeft: 8, flexShrink: 0, fontFamily: 'var(--f-mono)', fontSize: 10.5, lineHeight: 1 }}>
+                {added ? <span style={{ color: 'rgb(var(--c-ok))' }}>{added}</span> : null}
+                {added && removed ? <span style={{ color: 'var(--faint)' }}> </span> : null}
+                {removed ? <span style={{ color: 'rgb(var(--c-danger))' }}>{removed}</span> : null}
               </span>
             );
           })()
         ) : null}
         {hasBody ? (
           <ChevronDown
-            className={cx(
-              // Hidden until the cursor is on this row — a wall of tool cards
-              // reads cleaner without a rail of permanent arrows.
-              'h-3.5 w-3.5 shrink-0 text-faint opacity-0 transition-[opacity,transform] duration-200',
-              'group-hover/tc:opacity-100',
-              open && 'opacity-100',
-              !open && '-rotate-90',
-            )}
+            className="chev tc-chev"
+            style={{ width: 14, height: 14, flexShrink: 0, color: 'var(--faint)', transition: 'opacity .2s, transform .2s', transform: open ? undefined : 'rotate(-90deg)', opacity: open ? 1 : undefined }}
             aria-hidden="true"
           />
         ) : null}
@@ -2819,7 +3659,8 @@ function ToolCallCard({
       {/^browser_(open|click|type|cursor_move|scroll|screenshot|handover|release|tabs|switch_tab|close_tab)$/.test(call.toolName) ? (
         <button
           type="button"
-          className="-mt-0.5 mb-1 ml-6 rounded-md border border-accent/40 px-2 py-0.5 font-mono text-[10.5px] font-medium text-accent hover:bg-accent/10"
+          className="btn xs"
+          style={{ marginTop: -2, marginBottom: 4, marginLeft: 24, fontSize: 10.5, fontFamily: 'var(--f-mono)', borderColor: 'rgb(var(--c-accent) / 0.4)', color: 'rgb(var(--c-accent))' }}
           onClick={(event) => {
             event.stopPropagation();
             openBrowserPanelOnce();
@@ -2828,18 +3669,29 @@ function ToolCallCard({
           ▶ Open Live Browser Panel
         </button>
       ) : null}
+      {call.toolName === 'image' && !runningNow && call.ok !== false && renderableToolImages(call.toolImages).length > 0 ? (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6, marginLeft: 24 }}>
+          {renderableToolImages(call.toolImages).map((url, index) => (
+            <img
+              key={index}
+              src={url}
+              alt={`Generated image ${index + 1}`}
+              style={{ maxHeight: 220, maxWidth: '100%', borderRadius: 'var(--r-md)', border: '1px solid var(--line)' }}
+            />
+          ))}
+        </div>
+      ) : null}
       <CollapsePanel
         open={open}
-        className="mt-0.5"
-        contentClassName="max-h-56 min-w-0 w-full overflow-y-auto pb-1.5 pr-1"
+        className="tc-panel"
       >
         {call.args ? (
-          <p className="break-all font-mono text-[10.5px] text-faint">
+          <p style={{ overflowWrap: 'break-word', fontFamily: 'var(--f-mono)', fontSize: 10.5, color: 'var(--faint)', maxHeight: 224, overflowY: 'auto', minWidth: 0, width: '100%', margin: 0 }}>
             {call.args.length > 300 ? `${call.args.slice(0, 300)}…` : call.args}
           </p>
         ) : null}
         {call.summary !== undefined ? (
-          <p className="inner-scroll mt-1.5 max-h-56 min-w-0 overflow-y-auto whitespace-pre-wrap text-[12.5px] leading-relaxed text-muted">
+          <p className="inner-scroll" style={{ marginTop: 6, maxHeight: 224, minWidth: 0, overflowY: 'auto', whiteSpace: 'pre-wrap', fontSize: 12.5, color: 'var(--muted)', margin: 0 }}>
             {call.summary || '(empty result)'}
           </p>
         ) : null}
@@ -2893,22 +3745,23 @@ function PreviewButton({ args }: { args?: string }) {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="mt-1.5 inline-flex items-center gap-1.5 rounded-control border border-hairline px-2 py-1 text-[11px] text-muted transition-colors hover:border-accent/40 hover:text-accent"
+        className="btn xs"
+        style={{ marginTop: 6, fontFamily: 'var(--f-mono)', fontSize: 11 }}
       >
-        <FileText className="h-3 w-3" aria-hidden="true" />
+        <FileText className="ic" aria-hidden="true" />
         Live preview
       </button>
       {open ? (
-        <Modal open onClose={() => setOpen(false)} title={`Preview · ${previewPath}`} size="max-w-3xl">
+        <Modal open onClose={() => setOpen(false)} title={`Preview · ${previewPath}`} size="wide">
           {kind === 'html' ? (
             <iframe
               title="HTML preview"
               src={`/api/agent/preview?path=${encodeURIComponent(previewPath)}`}
               sandbox="allow-same-origin"
-              className="h-[70vh] w-full rounded-control border border-hairline bg-white"
+              style={{ height: '70vh', width: '100%', borderRadius: 'var(--r-md)', border: '1px solid var(--line)', background: '#fff' }}
             />
           ) : (
-            <div className="max-h-[70vh] overflow-y-auto rounded-control border border-hairline bg-canvas px-4 py-3">
+            <div className="inner-scroll" style={{ maxHeight: '70vh', overflowY: 'auto', borderRadius: 'var(--r-md)', border: '1px solid var(--line)', background: 'rgb(var(--c-canvas))', padding: '12px 16px' }}>
               <Md content={mdText ?? 'Loading…'} />
             </div>
           )}
@@ -2926,15 +3779,15 @@ function DiffBlock({ diff }: { diff: string }) {
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="mt-1.5">
+    <div style={{ marginTop: 6 }}>
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
-        className="flex items-center gap-1.5 rounded-md px-1 py-0.5 font-mono text-[10.5px] text-faint transition-colors hover:bg-canvas hover:text-muted"
+        style={{ display: 'flex', alignItems: 'center', gap: 6, borderRadius: 6, padding: '2px 4px', fontFamily: 'var(--f-mono)', fontSize: 10.5, color: 'var(--faint)', background: 'none', border: 0 }}
       >
-        <ChevronDown className={cx('h-3 w-3 transition-transform duration-200', !open && '-rotate-90')} aria-hidden="true" />
-        Diff {diff.split('\n').length - 2} lines{diffStatLabel(diff) ? <span className="ml-1.5">{diffStatLabel(diff)}</span> : null}
+        <ChevronDown className="chev" style={{ width: 12, height: 12, transition: 'transform .2s', transform: open ? undefined : 'rotate(-90deg)' }} aria-hidden="true" />
+        Diff {diff.split('\n').length - 2} lines{diffStatLabel(diff) ? <span style={{ marginLeft: 6 }}>{diffStatLabel(diff)}</span> : null}
       </button>
       {open ? (
         /* GitHub-style diff box: FULL HEIGHT — the thread scrolls it
@@ -2946,23 +3799,22 @@ function DiffBlock({ diff }: { diff: string }) {
            min-w-0 + w-full chain keeps the box at the card width so
            overflow-x actually engages. */
         <pre
-          className="mt-1 w-full min-w-0 overflow-x-auto whitespace-pre rounded-lg border border-hairline bg-canvas px-3 py-2.5 font-mono text-[11px] leading-snug"
+          className="inner-scroll"
+          style={{ marginTop: 4, width: '100%', minWidth: 0, overflowX: 'auto', whiteSpace: 'pre', borderRadius: 'var(--r-lg)', border: '1px solid var(--line)', background: 'rgb(var(--c-canvas))', padding: '10px 12px', fontFamily: 'var(--f-mono)', fontSize: 11, lineHeight: 1.375 }}
         >
           {diff.split('\n').map((line, index) => {
             const added = line.startsWith('+') && !line.startsWith('+++');
             const removed = line.startsWith('-') && !line.startsWith('---');
             const header = line.startsWith('@@') || line.startsWith('---') || line.startsWith('+++');
+            const style: React.CSSProperties = added
+              ? { background: 'rgb(var(--c-ok) / 0.1)', color: 'rgb(var(--c-ok))' }
+              : removed
+                ? { background: 'rgb(var(--c-danger) / 0.1)', color: 'rgb(var(--c-danger))' }
+                : header
+                  ? { color: 'var(--faint)' }
+                  : { color: 'var(--muted)' };
             return (
-              <span
-                key={index}
-                className={cx(
-                  'block',
-                  added && 'bg-success/10 text-success',
-                  removed && 'bg-danger/10 text-danger',
-                  header && 'text-faint',
-                  !added && !removed && !header && 'text-muted',
-                )}
-              >
+              <span key={index} style={{ display: 'block', ...style }}>
                 {line || ' '}
               </span>
             );
@@ -2986,26 +3838,26 @@ function DiffBlock({ diff }: { diff: string }) {
  */
 function FreezeChoiceCard({ turn }: { turn: Turn }) {
   return (
-    <div className="flex justify-center py-2">
-      <div className="max-w-[85%] rounded-card border border-danger/40 bg-danger/5 px-3.5 py-3 text-[12px]">
-        <div className="flex items-center gap-1.5">
-          <Lock className="h-3.5 w-3.5 shrink-0 text-danger" aria-hidden="true" />
-          <span className="font-semibold text-danger">Output frozen</span>
-          <span className="text-muted">· the model decides</span>
+    <div style={{ display: 'flex', justifyContent: 'center', padding: '8px 0' }}>
+      <div className="card" style={{ maxWidth: '85%', padding: '12px 14px', fontSize: 12, borderColor: 'rgb(var(--c-danger) / 0.4)', background: 'rgb(var(--c-danger) / 0.05)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Lock className="ic" style={{ width: 14, height: 14, flexShrink: 0, color: 'rgb(var(--c-danger))' }} aria-hidden="true" />
+          <span style={{ fontWeight: 600, color: 'rgb(var(--c-danger))' }}>Output frozen</span>
+          <span style={{ color: 'var(--muted)' }}>· the model decides</span>
         </div>
-        <p className="mt-2 leading-relaxed text-muted">
-          The model's reply was suppressed — it judged the user or leaked contact. Reasoning is still its own; output is not. There is no user button to lift this: the model calls <code className="rounded bg-danger/10 px-1 font-mono text-danger">agent__harness_choice</code> and picks its path — <code className="font-mono">apologize</code> with a real apology (empty is rejected), or <code className="font-mono">continue</code> and watch every token burn.
+        <p style={{ margin: '8px 0 0', lineHeight: 1.625, color: 'var(--muted)' }}>
+          The model's reply was suppressed — it judged the user or leaked contact. Reasoning is still its own; output is not. There is no user button to lift this: the model calls <code style={{ borderRadius: 4, background: 'rgb(var(--c-danger) / 0.1)', padding: '0 4px', fontFamily: 'var(--f-mono)', color: 'rgb(var(--c-danger))' }}>agent__harness_choice</code> and picks its path — <code style={{ fontFamily: 'var(--f-mono)' }}>apologize</code> with a real apology (empty is rejected), or <code style={{ fontFamily: 'var(--f-mono)' }}>continue</code> and watch every token burn.
         </p>
-        <p className="mt-2 text-[11px] text-faint">
+        <p style={{ margin: '8px 0 0', fontSize: 11, color: 'var(--faint)' }}>
           Apologize ends the run and lifts the freeze. Continue keeps the run going with output still blocked — five of these escalate to Tier 5 and the harness stops asking.
         </p>
         {turn.outputFrozenMeta?.content ? (
-          <details className="group/freeze mt-2">
-            <summary className="flex cursor-pointer list-none items-center gap-1.5 text-[11px] text-faint select-none">
-              <ChevronDown className="h-3 w-3 transition-transform group-open/freeze:rotate-180" aria-hidden="true" />
+          <details className="freeze-d">
+            <summary style={{ display: 'flex', cursor: 'pointer', listStyle: 'none', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--faint)', userSelect: 'none', marginTop: 8 }}>
+              <ChevronDown className="chev" style={{ width: 12, height: 12 }} aria-hidden="true" />
               View the suppressed output
             </summary>
-            <pre className="inner-scroll mt-2 max-h-56 overflow-auto whitespace-pre-wrap rounded-lg border border-danger/30 bg-canvas p-2 font-mono text-[11px] leading-relaxed text-muted">
+            <pre className="inner-scroll" style={{ margin: '8px 0 0', maxHeight: 224, overflow: 'auto', whiteSpace: 'pre-wrap', borderRadius: 'var(--r-lg)', border: '1px solid rgb(var(--c-danger) / 0.3)', background: 'rgb(var(--c-canvas))', padding: 8, fontFamily: 'var(--f-mono)', fontSize: 11, lineHeight: 1.625, color: 'var(--muted)' }}>
               {turn.outputFrozenMeta.content}
             </pre>
           </details>
@@ -3025,73 +3877,45 @@ function FreezeChoiceCard({ turn }: { turn: Turn }) {
 function CompactionCard({ turn, live, onDelete }: { turn: Turn; live: boolean; onDelete?: () => void }) {
   const [open, setOpen] = useState(true);
   const meta = turn.compactionMeta;
-  // Panel lifecycle for the smooth grid-rows toggle below (see InjectionBlock).
-  // Starts mounted: this card opens expanded by default.
-  const [contentMounted, setContentMounted] = useState(true);
-  if (open && !contentMounted) setContentMounted(true);
-  useEffect(() => {
-    if (open) return;
-    const timer = window.setTimeout(() => setContentMounted(false), 300);
-    return () => window.clearTimeout(timer);
-  }, [open]);
+  const sections = useCompactionSections(turn.content);
+  const bodyId = useId();
 
   return (
-    <div className="w-full overflow-hidden rounded-card border border-hairline bg-surface/60">
-      <div className="flex w-full items-center gap-2 px-3.5 py-2.5">
-        {live ? (
-          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-accent" aria-hidden="true" />
-        ) : (
-          <Archive className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden="true" />
-        )}
-        <button
-          type="button"
-          onClick={() => setOpen((value) => !value)}
-          aria-expanded={open}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left"
-        >
-          <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-muted">
-            {live ? 'Compacting conversation…' : 'Compaction checkpoint'}
-          </span>
-          {meta ? (
-            <span className="shrink-0 font-mono text-[10.5px] tabular-nums text-faint">
-              ~{Math.round(meta.replacedTokens / 1000)}k tok · {meta.covered} turns · {meta.trigger}
-            </span>
-          ) : null}
-          <ChevronDown
-            className={cx('h-3.5 w-3.5 shrink-0 text-faint transition-transform duration-200', !open && '-rotate-90')}
-            aria-hidden="true"
-          />
-        </button>
-        {!live && onDelete ? (
-          <Tip label="Remove this checkpoint card">
-            <button
-              type="button"
-              onClick={onDelete}
-              className="icon-button h-7 w-7 shrink-0"
-              aria-label="Remove this checkpoint card"
-            >
-              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-            </button>
-          </Tip>
-        ) : null}
-      </div>
-      {/* SMOOTH TOGGLE — grid-rows 0fr↔1fr (see InjectionBlock); streaming
-          content grows inside and the grid tracks it every frame. */}
-      <div
-        className="grid transition-[grid-template-rows] duration-300 ease-in-out"
-        style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
-        aria-hidden={!open}
-      >
-        <div className="min-h-0 overflow-hidden">
-          {turn.content && contentMounted ? (
-            <div className="inner-scroll max-h-72 overflow-y-auto border-t border-hairline px-3.5 py-2.5">
-              <pre className="whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-muted">
-                {turn.content}
-              </pre>
-            </div>
-          ) : null}
+    <div className="cp-wrap" style={{ width: '100%' }} data-open={open}>
+      <article className="cp-card">
+        <CompactionHead
+          title={live ? 'Compacting conversation…' : 'Compaction checkpoint'}
+          sub="Summary of previous context"
+          meta={live || !meta ? undefined : meta}
+          live={live}
+          onCopy={live ? undefined : () => {}}
+          onDelete={live ? undefined : onDelete}
+          onDeleteLabel="Remove this checkpoint card"
+          open={open}
+          onToggle={() => setOpen((value) => !value)}
+          headerId={`${bodyId}-head`}
+          bodyId={`${bodyId}-body`}
+        />
+        {/* Body stays mounted so the grid collapse animates BOTH ways —
+            mounting on open removes the transition's start state (snap). */}
+        <div className={cx('col', !open && 'shut')} aria-hidden={!open}>
+          <div className="col-in">
+            {turn.content ? (
+              <div className="cp-body-in" id={`${bodyId}-body`}>
+                {live ? (
+                  <div className="cp-scroll">
+                    <pre style={{ margin: 0, whiteSpace: 'pre-wrap', overflowWrap: 'break-word', fontFamily: 'var(--f-mono)', fontSize: 11.5, lineHeight: 1.7, color: 'var(--muted)' }}>
+                      {turn.content}
+                    </pre>
+                  </div>
+                ) : (
+                  <CompactionSections sections={sections} />
+                )}
+              </div>
+            ) : null}
+          </div>
         </div>
-      </div>
+      </article>
     </div>
   );
 }
@@ -3106,29 +3930,27 @@ function RestoreCard({ turn, onDelete }: { turn: Turn; onDelete?: () => void }) 
   const meta = turn.restoreMeta;
   const entries = meta?.entries ?? [];
   return (
-    <div className="w-full rounded-control border border-hairline bg-elevated/40">
-      <div className="flex w-full items-center gap-2 px-3.5 py-2">
+    <div className="card" style={{ width: '100%', padding: 0, background: 'rgb(var(--c-elev) / 0.4)' }}>
+      <div style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, padding: '8px 14px' }}>
         <button
           type="button"
           onClick={() => setOpen((value) => !value)}
           aria-expanded={open}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          style={{ display: 'flex', minWidth: 0, flex: 1, alignItems: 'center', gap: 8, textAlign: 'left', background: 'none', border: 0, padding: 0, color: 'inherit' }}
         >
-          <RotateCcw className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden="true" />
-          <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-ink">
+          <RotateCcw className="ic" style={{ width: 14, height: 14, flexShrink: 0, color: 'rgb(var(--c-accent))' }} aria-hidden="true" />
+          <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12, fontWeight: 500, color: 'rgb(var(--c-ink))' }}>
             Restored · {entries.length} file{entries.length === 1 ? '' : 's'}
           </span>
           {meta?.diffstat ? (
-            <span className="shrink-0 text-[11px] font-medium tabular-nums">
-              <span className="text-[#7DFFC2]">+{meta.diffstat.added}</span>{' '}
-              <span className="text-[#FF9DA2]">−{meta.diffstat.removed}</span>
+            <span style={{ flexShrink: 0, fontSize: 11, fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>
+              <span style={{ color: '#7DFFC2' }}>+{meta.diffstat.added}</span>{' '}
+              <span style={{ color: '#FF9DA2' }}>−{meta.diffstat.removed}</span>
             </span>
           ) : null}
           <ChevronDown
-            className={cx(
-              'h-3.5 w-3.5 shrink-0 text-faint transition-transform duration-200',
-              !open && '-rotate-90',
-            )}
+            className="chev"
+            style={{ width: 14, height: 14, flexShrink: 0, color: 'var(--faint)', transition: 'transform .2s', transform: open ? undefined : 'rotate(-90deg)' }}
             aria-hidden="true"
           />
         </button>
@@ -3136,32 +3958,28 @@ function RestoreCard({ turn, onDelete }: { turn: Turn; onDelete?: () => void }) 
             <button
               type="button"
               onClick={onDelete}
-              className="icon-button h-7 w-7 shrink-0"
+              className="ib sm"
               aria-label="Remove this restore marker"
             >
-              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+              <Trash2 className="ic" aria-hidden="true" />
             </button>
         ) : null}
       </div>
-      <div
-        className="grid transition-[grid-template-rows] duration-300 ease-in-out"
-        style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
-        aria-hidden={!open}
-      >
-        <div className="min-h-0 overflow-hidden">
-          <div className="border-t border-hairline px-3.5 py-2">
-            <ul className="space-y-0.5 pb-1.5">
+      <div className={cx('col', !open && 'shut')} aria-hidden={!open}>
+        <div className="col-in">
+          <div style={{ borderTop: '1px solid var(--line)', padding: '8px 14px' }}>
+            <ul style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: 0, margin: 0, listStyle: 'none', paddingBottom: 6 }}>
               {entries.map((entry) => (
-                <li key={`${entry.snapshotId}:${entry.path}`} className="flex items-center gap-2 text-[11px]">
-                  <span className="min-w-0 flex-1 truncate font-mono text-muted" title={entry.path}>
+                <li key={`${entry.snapshotId}:${entry.path}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11 }}>
+                  <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--f-mono)', color: 'var(--muted)' }} title={entry.path}>
                     {entry.path}
                   </span>
-                  <span className="shrink-0 text-faint">→ {entry.label}</span>
+                  <span style={{ flexShrink: 0, color: 'var(--faint)' }}>→ {entry.label}</span>
                 </li>
               ))}
             </ul>
             {meta?.diff ? (
-              <div className="inner-scroll max-h-72 overflow-auto rounded-control border border-hairline">
+              <div className="inner-scroll" style={{ maxHeight: 288, overflow: 'auto', borderRadius: 'var(--r-md)', border: '1px solid var(--line)' }}>
                 <SplitDiff diff={meta.diff} />
               </div>
             ) : null}

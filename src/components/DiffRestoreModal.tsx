@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import { Loader2, RotateCcw, Trash2 } from './icons';
-import { Modal, cx } from './ui';
+import { Modal } from './ui';
 import { SplitDiff } from './SplitDiff';
 import {
   fetchVaultSnapshots,
@@ -74,7 +74,6 @@ export function DiffRestoreModal({
   const [busy, setBusy] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
 
-  // Only snapshots of THIS file (the vault query is a loose substring match).
   const fileEntries = useMemo(() => {
     if (!entries) return [];
     const norm = (value: string) => value.replace(/\\/g, '/').toLowerCase();
@@ -195,14 +194,14 @@ export function DiffRestoreModal({
       onClose={onClose}
       title="Restore file"
       description={`Choose the state to return ${path} to. Only THIS file changes — and the restore is undoable.`}
-      size="max-w-3xl"
+      size="wide"
       footer={
         <>
           <button
             type="button"
             onClick={onClose}
             disabled={busy}
-            className="pill-button px-3 py-1.5 text-[12px] text-muted hover:text-ink"
+            className="btn ghost sm"
           >
             Cancel
           </button>
@@ -211,12 +210,13 @@ export function DiffRestoreModal({
               type="button"
               onClick={() => void applyRestore()}
               disabled={!selectedEntry || busy || previewBusy}
-              className="pill-button border border-accent/60 bg-accent/10 px-3 py-1.5 text-[12px] font-medium text-ink transition-colors hover:bg-accent/20 disabled:opacity-40"
+              className="btn sm"
+              style={{ borderColor: 'rgb(var(--c-accent) / 0.6)', background: 'rgb(var(--c-accent) / 0.1)', color: 'rgb(var(--c-ink))' }}
             >
               {busy ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                <Loader2 className="ic spin" aria-hidden="true" />
               ) : (
-                <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                <RotateCcw className="ic" aria-hidden="true" />
               )}
               Restore this file
             </button>
@@ -225,9 +225,9 @@ export function DiffRestoreModal({
               type="button"
               onClick={() => void applyRemove()}
               disabled={busy}
-              className="pill-button border border-danger/50 px-3 py-1.5 text-[12px] font-medium text-danger transition-colors hover:bg-danger/10 disabled:opacity-40"
+              className="btn danger sm"
             >
-              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+              <Trash2 className="ic" aria-hidden="true" />
               Delete file (created by agent)
             </button>
           ) : null}
@@ -235,37 +235,38 @@ export function DiffRestoreModal({
       }
     >
       {error ? (
-        <p className="text-[12px] text-danger">Could not load the vault: {error}</p>
+        <p style={{ margin: 0, fontSize: 12, color: 'rgb(var(--c-danger))' }}>Could not load the vault: {error}</p>
       ) : entries === null ? (
-        <p className="flex items-center gap-2 text-[12px] text-muted">
-          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+        <p style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--muted)' }}>
+          <Loader2 className="ic spin" aria-hidden="true" />
           Reading vault snapshots…
         </p>
       ) : fileEntries.length === 0 ? (
-        <div className="space-y-2">
-          <p className="text-[12.5px] leading-relaxed text-muted">
-            No earlier state exists for this file — the agent <strong className="text-ink">created</strong> it,
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.625, color: 'var(--muted)' }}>
+            No earlier state exists for this file — the agent <strong style={{ color: 'rgb(var(--c-ink))' }}>created</strong> it,
             so there is nothing to restore to.
           </p>
           {!confirmRemove ? (
             <button
               type="button"
               onClick={() => setConfirmRemove(true)}
-              className="pill-button border border-hairline px-2.5 py-1 text-[11.5px] text-muted transition-colors hover:border-danger/50 hover:text-danger"
+              className="btn ghost xs"
+              style={{ alignSelf: 'flex-start', color: 'var(--muted)' }}
             >
-              <Trash2 className="h-3 w-3" aria-hidden="true" />
+              <Trash2 className="ic" aria-hidden="true" />
               Delete this file instead…
             </button>
           ) : (
-            <p className="rounded-control border border-danger/40 bg-danger/5 px-2.5 py-1.5 text-[11.5px] leading-snug text-danger">
+            <p style={{ margin: 0, borderRadius: 'var(--r-md)', border: '1px solid rgb(var(--c-danger) / 0.4)', background: 'rgb(var(--c-danger) / 0.05)', padding: '6px 10px', fontSize: 11.5, lineHeight: 1.375, color: 'rgb(var(--c-danger))' }}>
               Deleting removes the file from disk. A pre-delete snapshot is taken first, so the
               &quot;Restore file&quot; button on the marker can bring it back. Use the footer button to confirm.
             </p>
           )}
         </div>
       ) : (
-        <div className="space-y-2">
-          <ul className="space-y-0.5">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <ul style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: 0, margin: 0, listStyle: 'none' }}>
             {fileEntries.map((entry) => {
               const info = labelFor(entry, turns);
               return (
@@ -273,16 +274,16 @@ export function DiffRestoreModal({
                     <button
                       type="button"
                       onClick={() => setSelectedId(entry.id)}
-                      className={cx(
-                        'flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left transition-colors',
-                        selectedId === entry.id
-                          ? 'border border-accent/50 bg-accent/10 text-ink'
-                          : 'border border-transparent text-muted hover:bg-elevated/60 hover:text-ink',
-                      )}
+                      className="mi"
+                      style={{
+                        border: `1px solid ${selectedId === entry.id ? 'rgb(var(--c-accent) / 0.5)' : 'transparent'}`,
+                        background: selectedId === entry.id ? 'rgb(var(--c-accent) / 0.1)' : undefined,
+                        padding: '6px 8px',
+                      }}
                     >
-                      <RotateCcw className="h-3 w-3 shrink-0" aria-hidden="true" />
-                      <span className="min-w-0 flex-1 truncate text-[11.5px]">{info.label}</span>
-                      <span className="shrink-0 text-[10px] tabular-nums text-faint">
+                      <RotateCcw className="ic" style={{ width: 12, height: 12, flexShrink: 0 }} aria-hidden="true" />
+                      <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11.5 }}>{info.label}</span>
+                      <span style={{ flexShrink: 0, fontSize: 10, fontVariantNumeric: 'tabular-nums', color: 'var(--faint)' }}>
                         {new Date(entry.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </span>
                     </button>
@@ -290,24 +291,24 @@ export function DiffRestoreModal({
               );
             })}
           </ul>
-          <div className="rounded-control border border-hairline">
-            <div className="border-b border-hairline px-2.5 py-1 text-[10.5px] font-medium text-faint">
+          <div className="card" style={{ borderRadius: 'var(--r-md)', padding: 0, overflow: 'hidden' }}>
+            <div style={{ borderBottom: '1px solid var(--line)', padding: '4px 10px', fontSize: 10.5, fontWeight: 500, color: 'var(--faint)' }}>
               Preview — what restoring would change (dry-run)
             </div>
-            <div className="inner-scroll max-h-72 overflow-auto">
+            <div className="inner-scroll" style={{ maxHeight: 288, overflow: 'auto' }}>
               {previewBusy ? (
-                <p className="flex items-center gap-2 px-2.5 py-2 text-[11.5px] text-muted">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                <p style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', fontSize: 11.5, color: 'var(--muted)' }}>
+                  <Loader2 className="ic spin" aria-hidden="true" />
                   Building preview…
                 </p>
               ) : preview ? (
                 preview.diff ? (
                   <SplitDiff diff={preview.diff} />
                 ) : (
-                  <p className="px-2.5 py-2 text-[11.5px] text-muted">{preview.text}</p>
+                  <p style={{ margin: 0, padding: '8px 10px', fontSize: 11.5, color: 'var(--muted)' }}>{preview.text}</p>
                 )
               ) : (
-                <p className="px-2.5 py-2 text-[11.5px] text-faint">
+                <p style={{ margin: 0, padding: '8px 10px', fontSize: 11.5, color: 'var(--faint)' }}>
                   Pick a restore point above to preview it.
                 </p>
               )}

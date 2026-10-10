@@ -78,19 +78,22 @@ function bucketize(days: UsageDay[]): { buckets: Bucket[]; unit: string } {
 }
 
 /**
- * Daily token bar chart (Claude's reference mechanism, Moriko theming):
- * zero-filled day series → bucketed bars, round grid lines, hover tooltip
- * with the prompt/output/cache split, peak + start/end axis labels.
+ * Daily token bar chart in the design dashboard's chart mechanism
+ * (design/moriko-design-1-panel-dashboard.html): .chart grid with the .yax
+ * labels, .plot holding .gridl grid lines and .bars whose `.bar i` grow from
+ * the baseline with a 35ms stagger (animation:grow), .xax labels below, and
+ * the hover tooltip with the prompt/output/cache split.
  *
- * Tooltip placement: the chart box is a fixed 170px and the pill ~110px
- * (5 lines with Cache) + 6px gap ⇒ ~32% of headroom is the most a bar can
- * have while the pill still fits ABOVE its top — 30% leaves margin. Taller
- * bars flip the pill BELOW the bar top (over the bar itself). The pill's
- * near edge is anchored with NO y-translate: the old -translate-y-full
- * lifted it a second full height upward, out of the chart box and into the
- * card's overflow-hidden clip (the cut-off pill in the screenshot).
+ * Tooltip placement: the plot is a fixed 220px (.chart) and the pill ~105px
+ * (5 lines with Cache) + 6px gap ⇒ a bar up to ~49% of the plot still fits
+ * the pill ABOVE its top — 45% leaves margin. Taller bars flip the pill
+ * BELOW the bar top (over the bar itself), clamped so the pill never spills
+ * past the plot's bottom edge. The pill's near edge is anchored with NO
+ * y-translate: a -translate-y-full would lift it a second full height
+ * upward, out of the chart box and into the card's overflow-hidden clip.
  */
-const FLIP_ABOVE_MAX_PCT = 30;
+const FLIP_ABOVE_MAX_PCT = 45;
+const FLIP_BELOW_CLAMP_PX = 110;
 export function UsageChart({ days }: { days: UsageDay[] }) {
   const [hover, setHover] = useState<number | null>(null);
   const { buckets, unit } = useMemo(() => bucketize(days), [days]);
@@ -111,88 +114,105 @@ export function UsageChart({ days }: { days: UsageDay[] }) {
       : hovered
         ? shortDate(hovered.date)
         : '';
+  /** Label every Nth bar so the axis never crowds (design prints sparse labels). */
+  const labelEvery = Math.max(1, Math.ceil(buckets.length / 8));
 
   return (
-    <div className="border-b border-hairline px-4 py-3">
-      <div className="mb-3 flex items-center justify-between text-[11px] text-faint">
+    <div>
+      <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 11, color: 'var(--faint)' }}>
         <span>Tokens per {unit}</span>
         <span>
           {rawMax > 0 ? `Peak ${compact(totals[peakIndex])} · ${shortDate(buckets[peakIndex].date)}` : ''}
         </span>
       </div>
 
-      <div className="relative ml-10 h-[170px]">
-        {/* Adaptive grid: 3–5 round steps derived from the peak, not a fixed 4. */}
-        {Array.from({ length: lines + 1 }, (_, index) => (
-          <div
-            key={index}
-            className="absolute inset-x-0 border-t border-dashed border-hairline"
-            style={{ bottom: `${(index / lines) * 100}%` }}
-          >
-            <span className="absolute -left-10 -top-2 w-8 text-right text-[10px] tabular-nums text-faint">
-              {compact(step * index)}
-            </span>
-          </div>
-        ))}
-
-        <div className="absolute inset-0 flex items-end gap-[3px]">
-          {buckets.map((bucket, index) => (
-            <div
-              key={bucket.date}
-              className="group relative flex h-full flex-1 items-end"
-              onMouseEnter={() => setHover(index)}
-              onMouseLeave={() => setHover(null)}
-            >
-              <div
-                className="w-full rounded-t-[3px] bg-accent opacity-75 transition-opacity group-hover:opacity-100"
-                style={{ height: `${pct(bucket.total)}%`, minHeight: 2 }}
-              />
-            </div>
+      <div className="chart">
+        <div className="yax">
+          {Array.from({ length: lines + 1 }, (_, index) => (
+            <span key={index}>{compact(step * (lines - index))}</span>
           ))}
         </div>
+        <div className="plot">
+          <div className="gridl" aria-hidden="true">
+            {Array.from({ length: lines + 1 }, (_, index) => (
+              <i key={index} />
+            ))}
+          </div>
 
-        {hover !== null && hovered ? (() => {
-          const valuePct = pct(totals[hover]);
-          // Above for short bars (pill still fits under the box ceiling);
-          // below for tall ones — pinned to the bar top, never translated up.
-          const above = valuePct <= FLIP_ABOVE_MAX_PCT;
-          return (
-            <div
-              role="tooltip"
-              className="pointer-events-none absolute z-10 -translate-x-1/2 whitespace-nowrap rounded-control border border-hairline bg-elevated px-2.5 py-2 text-[11px] leading-relaxed shadow-popover"
-              style={{
-                left: `${Math.min(Math.max(((hover + 0.5) / buckets.length) * 100, 12), 88)}%`,
-                ...(above
-                  ? { bottom: `calc(${valuePct}% + 6px)` }
-                  : // Bar-top edge from the TOP of the box is (100 − valuePct)%;
-                    // clamp at 57px (170 chart − ~107 tooltip − 6 margin) so a
-                    // mid-height bar can't push the tooltip past the box bottom.
-                    { top: `min(calc(${(100 - valuePct).toFixed(2)}% + 6px), 57px)` }),
-              }}
-            >
-              <p className="text-[12px] font-medium text-ink">{hoveredRange}</p>
-              <p className="text-faint">
-                Total <span className="tabular-nums text-ink">{hovered.total.toLocaleString()}</span>
-              </p>
-              <p className="text-faint">
-                Prompt <span className="tabular-nums text-ink">{hovered.prompt.toLocaleString()}</span>
-              </p>
-              <p className="text-faint">
-                Output <span className="tabular-nums text-ink">{hovered.completion.toLocaleString()}</span>
-              </p>
-              {hovered.cacheRead > 0 ? (
-                <p className="text-faint">
-                  Cache <span className="tabular-nums text-ink">{hovered.cacheRead.toLocaleString()}</span>
+          <div className="bars">
+            {buckets.map((bucket, index) => (
+              <div
+                key={bucket.date}
+                className={bucket.total > 0 ? 'bar' : 'bar z'}
+                onMouseEnter={() => setHover(index)}
+                onMouseLeave={() => setHover(null)}
+              >
+                <i
+                  style={
+                    {
+                      '--h': `${pct(bucket.total)}%`,
+                      '--dl': `${index * 35}ms`,
+                    } as React.CSSProperties
+                  }
+                />
+              </div>
+            ))}
+          </div>
+
+          {hover !== null && hovered ? (() => {
+            const valuePct = pct(totals[hover]);
+            const above = valuePct <= FLIP_ABOVE_MAX_PCT;
+            return (
+              <div
+                role="tooltip"
+                className="tip show"
+                style={{
+                  pointerEvents: 'none',
+                  position: 'absolute',
+                  zIndex: 10,
+                  transform: 'translateX(-50%)',
+                  whiteSpace: 'nowrap',
+                  borderRadius: 'var(--r-md)',
+                  border: '1px solid var(--line)',
+                  background: 'rgb(var(--c-elev))',
+                  padding: '8px 10px',
+                  fontSize: 11,
+                  lineHeight: 1.625,
+                  boxShadow: 'var(--sh2)',
+                  left: `${Math.min(Math.max(((hover + 0.5) / buckets.length) * 100, 12), 88)}%`,
+                  ...(above
+                    ? { bottom: `calc(${valuePct}% + 6px)` }
+                    :
+                      { top: `min(calc(${(100 - valuePct).toFixed(2)}% + 6px), ${FLIP_BELOW_CLAMP_PX}px)` }),
+                }}
+              >
+                <p style={{ margin: 0, fontSize: 12, fontWeight: 500, color: 'rgb(var(--c-ink))' }}>{hoveredRange}</p>
+                <p style={{ margin: 0, color: 'var(--faint)' }}>
+                  Total <span style={{ fontVariantNumeric: 'tabular-nums', color: 'rgb(var(--c-ink))' }}>{hovered.total.toLocaleString()}</span>
                 </p>
-              ) : null}
-            </div>
-          );
-        })() : null}
+                <p style={{ margin: 0, color: 'var(--faint)' }}>
+                  Prompt <span style={{ fontVariantNumeric: 'tabular-nums', color: 'rgb(var(--c-ink))' }}>{hovered.prompt.toLocaleString()}</span>
+                </p>
+                <p style={{ margin: 0, color: 'var(--faint)' }}>
+                  Output <span style={{ fontVariantNumeric: 'tabular-nums', color: 'rgb(var(--c-ink))' }}>{hovered.completion.toLocaleString()}</span>
+                </p>
+                {hovered.cacheRead > 0 ? (
+                  <p style={{ margin: 0, color: 'var(--faint)' }}>
+                    Cache <span style={{ fontVariantNumeric: 'tabular-nums', color: 'rgb(var(--c-ink))' }}>{hovered.cacheRead.toLocaleString()}</span>
+                  </p>
+                ) : null}
+              </div>
+            );
+          })() : null}
+        </div>
       </div>
 
-      <div className="ml-10 mt-2 flex justify-between text-[10px] text-faint">
-        <span>{shortDate(buckets[0].date)}</span>
-        <span>{shortDate(buckets[buckets.length - 1].end)}</span>
+      <div className="xax">
+        {buckets.map((bucket, index) => (
+          <span key={bucket.date}>
+            {index % labelEvery === 0 || index === buckets.length - 1 ? shortDate(bucket.date) : ''}
+          </span>
+        ))}
       </div>
     </div>
   );

@@ -298,12 +298,13 @@ export function recordAfterWrite(
 }
 
 /** Fire-and-forget invalidation — avoids circular import at module scope. */
-function invalidateSearchIndexInline(_absolute: string): void {
+function invalidateSearchIndexInline(absolute: string): void {
   try {
-    const ws = owningWorkspaceInline(_absolute);
+    const ws = owningWorkspaceInline(absolute);
     if (ws) {
       const { invalidateSearchIndex } = require('./search.js') as typeof import('./search.js');
-      invalidateSearchIndex(ws);
+      const rel = path.relative(ws, absolute).split(path.sep).join('/');
+      invalidateSearchIndex(ws, rel);
     }
   } catch {
   }

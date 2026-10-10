@@ -16,21 +16,18 @@
  *    the layout — a token guard to prevent fast mode switching from causing conflicts.
  *    ‘AGENT MODE ACTIVE’ (accented) / ‘CHAT MODE ONLY’ (dimmed) + flashing block cursor.
  *
- * Theme: glow/cursor uses rgb(var(--c-accent)) to match dark/light/mocha;
- * pixel-art eye colors use the example palette (not theme variables) so that their shape
- * remains consistent with the example across all themes.
+ * Theme: ALL pixel fills are token-driven via index.css (.cat-eye .ec/.eo/.ei/.ep/.eh):
+ * closed lids = muted ink (readable on light & dark), open outline + iris follow the
+ * accent swatch (data-accent → --al/--ad), pupil = shadow token (dark in every theme),
+ * specular = paper — so the eye recolors with light/dark/mocha like the rest of the UI.
  */
 import { useEffect, useRef, useState } from 'react';
 import { cx } from './ui';
+import { useStore } from '../store/useStore';
+import { isMotionReduced } from '../lib/appearance';
 
-/** Palet pixel-art contoh (tetap, bukan dari tema) — kucing clay + mata oranye. */
-const EYE_CLAY = '#cfc8c2';
-const EYE_ORANGE = '#ff7a1a';
-const EYE_AMBER = '#ffb347';
-const EYE_PUPIL = '#1a0f08';
-const EYE_HIGHLIGHT = '#ffffff';
-
-/** Satu rect pixel-art: [x, y, width, height]. */
+/** Satu rect pixel-art: [x, y, width, height]. Fill didefinisikan di index.css
+ *  (.cat-eye .ec/.eo/.ei/.ep/.eh) — token tema, bukan literal warna. */
 
 /** Mata TERBUKA (Agent) — rect list VERBATIM dari SVG operator (#ff7a1a outline). */
 const OPEN_ORANGE: Array<[number, number, number, number]> = [
@@ -68,12 +65,12 @@ const CLOSED_CLAY: Array<[number, number, number, number]> = [
   [3, 4, 10, 1],
 ];
 
-/** Render satu grup rect list. */
-function PixelRects({ rects, fill }: { rects: Array<[number, number, number, number]>; fill: string }) {
+/** Render satu grup rect list; warna fill datang dari kelas CSS (token tema). */
+function PixelRects({ rects, className }: { rects: Array<[number, number, number, number]>; className: string }) {
   return (
     <>
       {rects.map(([x, y, width, height], index) => (
-        <rect key={`${x}-${y}-${index}`} x={x} y={y} width={width} height={height} fill={fill} />
+        <rect key={`${x}-${y}-${index}`} x={x} y={y} width={width} height={height} className={className} />
       ))}
     </>
   );
@@ -86,21 +83,22 @@ function CatEyeSvg({ agent, blinking }: { agent: boolean; blinking: boolean }) {
       viewBox="0 0 16 8"
       aria-label={agent ? 'Eyes Open, Agent Mode' : 'Eyes Closed, Chat Mode'}
       role="img"
-      className="h-[16px] w-[32px]"
       style={{ shapeRendering: 'crispEdges', overflow: 'visible' }}
     >
       <g
-        className={cx('origin-center transition-transform duration-[110ms]', blinking && 'scale-y-[0.08]')}
+        className={cx('eye-g', blinking && 'blink')}
       >
         {agent ? (
           <>
-            <PixelRects rects={OPEN_ORANGE} fill={EYE_ORANGE} />
-            <PixelRects rects={OPEN_AMBER} fill={EYE_AMBER} />
-            <PixelRects rects={OPEN_PUPIL} fill={EYE_PUPIL} />
-            <PixelRects rects={OPEN_HIGHLIGHT} fill={EYE_HIGHLIGHT} />
+            <PixelRects rects={OPEN_ORANGE} className="eo" />
+            <PixelRects rects={OPEN_AMBER} className="ei" />
+            <g className="pupil">
+              <PixelRects rects={OPEN_PUPIL} className="ep" />
+            </g>
+            <PixelRects rects={OPEN_HIGHLIGHT} className="eh" />
           </>
         ) : (
-          <PixelRects rects={CLOSED_CLAY} fill={EYE_CLAY} />
+          <PixelRects rects={CLOSED_CLAY} className="ec" />
         )}
       </g>
     </svg>
@@ -147,7 +145,19 @@ export function useTypewriterStatus(text: string, holdMs = 0): { text: string; d
     };
 
     setDone(false);
-    if (currentRef.current === text) {
+    if (isMotionReduced(useStore.getState().reduceMotion)) {
+      // No type/backspace animation: show full for holdMs, then clear the line.
+      currentRef.current = text;
+      setDisplay(text);
+      if (holdMs > 0) {
+        tick(() => {
+          if (cancelled || tokenRef.current !== token) return;
+          currentRef.current = '';
+          setDisplay('');
+          setDone(true);
+        }, holdMs);
+      }
+    } else if (currentRef.current === text) {
       if (holdMs > 0) tick(() => eraseTo(() => setDone(true)), holdMs);
     } else {
       eraseTo(() => write(1));
@@ -172,8 +182,39 @@ export function CatEyeModeToggle({
   onToggle: () => void;
 }) {
   const [blinking, setBlinking] = useState(false);
+  const rootRef = useRef<HTMLButtonElement>(null);
 
-  // Idle blink tiap 10s hanya di mode agent (setInterval contoh).
+  /** Canvas-chat design: the open pupils follow the cursor (--px/--py, rAF-throttled). */
+  useEffect(() => {
+    if (!agent || isMotionReduced(useStore.getState().reduceMotion)) return;
+    /** The SVG is a fixed 32px wide over a 16-unit viewBox → 0.5 units per px. */
+    const UNITS_PER_PX = 16 / 32;
+    let frame = 0;
+    let last: PointerEvent | null = null;
+    const onMove = (event: PointerEvent) => {
+      last = event;
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        const button = rootRef.current;
+        const pointer = last;
+        if (!button || !pointer || !button.offsetParent) return;
+        const rect = button.getBoundingClientRect();
+        const dx = pointer.clientX - (rect.left + rect.width / 2);
+        const dy = pointer.clientY - (rect.top + rect.height / 2);
+        const dist = Math.hypot(dx, dy) || 1;
+        const strength = Math.min(1, dist / 200);
+        button.style.setProperty('--px', `${(dx / dist) * 2.6 * strength * UNITS_PER_PX}px`);
+        button.style.setProperty('--py', `${(dy / dist) * 1.4 * strength * UNITS_PER_PX}px`);
+      });
+    };
+    window.addEventListener('pointermove', onMove, { passive: true });
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [agent]);
+
   useEffect(() => {
     if (!agent) return;
     const timer = window.setInterval(() => {
@@ -192,15 +233,11 @@ export function CatEyeModeToggle({
   const eye = (
     <button
       type="button"
+      ref={rootRef}
       aria-pressed={agent}
       aria-label={agent ? 'Agent Mode Active' : 'Chat Mode Only'}
       onClick={handleClick}
-      className={cx(
-        'inline-flex h-8 w-[46px] shrink-0 items-center justify-center rounded-control border transition-all duration-200',
-        agent
-          ? 'border-accent/60 bg-accent/10 shadow-[0_0_10px_rgb(var(--c-accent)/0.4)] hover:border-accent/85'
-          : 'border-hairline bg-transparent hover:border-muted/60',
-      )}
+      className="cat-eye"
     >
       <CatEyeSvg agent={agent} blinking={blinking} />
     </button>

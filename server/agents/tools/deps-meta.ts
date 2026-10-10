@@ -48,6 +48,10 @@ export function depsTool(args: Record<string, unknown>, ctx: AgentToolContext): 
   parts.push('');
   parts.push(`external packages (${report.externals.length}): ${report.externals.join(', ') || '(none)'}`);
   parts.push('');
+  if (report.unresolved.length > 0) {
+    parts.push(`unresolved (${report.unresolved.length}): ${report.unresolved.map((s) => `${s} (missing)`).join(', ')}`);
+    parts.push('');
+  }
   parts.push(
     `blast radius: ${report.reachableDependents} file(s) reachable through the import chain (BFS radius ≤ 3). ` +
       'Signature/type changes here propagate to all of them — run their tests after editing.',

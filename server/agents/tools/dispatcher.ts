@@ -27,6 +27,7 @@ import { addonManageTool } from './addonManage.js';
 import { hashTool, remindTool, depsTool } from './deps-meta.js';
 import { explainErrorTool } from './explain-error.js';
 import { visionTool, visionStatusTool } from './vision.js';
+import { imageTool, imageModelsTool } from './image.js';
 import { searchTool } from './search.js';
 import { batchReadTool } from './batch-read.js';
 import { checkpointTool, undoTool, checkpointListTool } from './checkpoint.js';
@@ -45,6 +46,8 @@ import { execTool } from './exec.js';
 import { browserOpenTool, browserReadTool, browserScreenshotTool, browserWaitTool, browserEvalTool, browserUrlTool, browserClickTool, browserTypeTool, browserCursorMoveTool, browserScrollTool, browserHandoverTool, browserReleaseTool, browserTabsTool, browserSwitchTabTool, browserCloseTabTool, browserClearDataTool, browserDragTool, browserMouseDownTool, browserMouseUpTool, browserHoverTool, browserPressTool, browserBackTool, browserForwardTool, browserReloadTool, browserInspectTool, browserSemanticTool, browserFormTool, browserReadArticleTool, browserWatchTool, browserWatchResultTool, browserMetadataTool, browserSavePageTool, browserSaveImagesTool, browserUploadTool, browserDownloadTool, browserTableTool, browserPdfTool, browserCrawlTool, browserBlockRequestsTool, browserUnblockRequestsTool, browserAuditLogTool, browserRequestApprovalTool, browserPlanTool, browserDebugTool, browserInstallScriptTool, browserListScriptsTool, browserRemoveScriptTool, browserBaselineTool, browserVisualDiffTool, browserMergeTabsTool, browserFanOutTool, browserMarkTool, browserMarksTool, browserRecordTool, browserReplayTool, browserTouchTapTool, browserDialogTool, browserAnnotationsTool } from './browser.js';
 import { harnessLockdownTool, harnessChoiceTool } from './lockdown.js';
 import { isWebTool } from './web-access.js';
+import { toolByName } from './registry.js';
+import './registered.js';
 import { harnessReloadNow } from '../reload.js';
 
 /** Routes one `agent__*` wire call to its handler; never throws.
@@ -56,9 +59,6 @@ export async function callAgentTool(
   ctx: AgentToolContext = {},
 ): Promise<HarnessToolResult> {
   const name = wireName.replace(/^agent__/, '');
-  // WEB ACCESS KILL-SWITCH — belt-and-suspenders behind the catalogue gate:
-  // catalogue filtering already hides these tools, but NESTED agent__exec calls
-  // and stale-catalogue recall must hit this hard refusal instead of the web.
   if (ctx.webAccess === false && isWebTool(wireName)) {
     return {
       ok: false,
@@ -71,9 +71,6 @@ export async function callAgentTool(
   }
   const execute = async (call: PipelineCall): Promise<HarnessToolResult> => {
     const callArgs = call.args;
-    // VISUAL v2 — fail-fast shape contract BEFORE the pipeline runs: an id
-    // that is not a string can never resolve, and a bad id must be refused
-    // here (a tool_exception would hide the exact cause from the model).
     if (call.name === 'render_visual') {
       const id = callArgs['id'];
       if (id !== undefined && (typeof id !== 'string' || id.trim().length === 0 || id.trim().length > 200)) {
@@ -95,6 +92,8 @@ export async function callAgentTool(
       }
     }
     const callCtx = call.ctx;
+    const registered = toolByName(call.wireName);
+    if (registered) return await registered.handler(callArgs, callCtx);
     switch (call.name) {
       case 'list':
         return await listTool(callArgs, callCtx);
@@ -152,6 +151,10 @@ export async function callAgentTool(
         return await visionTool(callArgs, callCtx);
       case 'vision_status':
         return await visionStatusTool(callArgs, callCtx);
+      case 'image':
+        return await imageTool(callArgs, callCtx);
+      case 'image_models':
+        return await imageModelsTool(callArgs, callCtx);
       case 'explain_error':
         return await explainErrorTool(callArgs, callCtx);
       case 'search':
@@ -321,7 +324,6 @@ export async function callAgentTool(
       case 'addon_manage':
         return await addonManageTool(callArgs as unknown as import('./addonManage.js').AddonManageArgs);
       default: {
-        // FASE 5 — addon tools: route to the addon handler if registered.
         const addonHandler = getAddonToolHandler(call.wireName);
         if (addonHandler) {
           return await runPipeline(

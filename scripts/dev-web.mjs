@@ -1,6 +1,4 @@
-// Web side of `pnpm dev`: runs vite with the staged esbuild binary matching
 // VITE's own esbuild version (tsx pins a different one — see setup-esbuild.mjs).
-// The binary is injected via env, so no shell quoting is involved.
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';

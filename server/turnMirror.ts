@@ -200,9 +200,6 @@ export function applyMirrorEvent(
         totalTokens: event.totalTokens,
         cacheReadTokens: event.cacheReadTokens,
       };
-      // USAGE LEDGER — persist per-provider token accounting (the dashboard's
-      // durable accumulation source; survives provider switches and chat
-      // clears, unlike the in-memory turns sum).
       recordUsage({
         providerId: state.providerId,
         model: state.model,
@@ -310,9 +307,6 @@ export function startTurnMirror(options: {
   return {
     apply(event: StreamEvent): void {
       applyMirrorEvent(state, event, { suppressText: options.suppressText });
-      // VISUAL v2: a visual-bearing tool_result flushes IMMEDIATELY — the
-      // next tool round may be an edit-in-place that must find this id in
-      // the store, and a heavy artifact should never wait for the cadence.
       if (event.type === 'tool_result' && event.visual) flush();
       if (state.terminal) {
         flush();

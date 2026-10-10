@@ -99,7 +99,6 @@ function BrowserView() {
     let attempt = 0;
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
-    // Keep the agent viewport matched to the panel frame across resizes.
     let resizeTimer: ReturnType<typeof setTimeout> | undefined;
     const onWindowResize = () => {
       if (resizeTimer) clearTimeout(resizeTimer);
@@ -141,8 +140,6 @@ function BrowserView() {
         }
         switch (msg.type) {
           case 'shutdown': {
-            // WEB ACCESS OFF (or context closed): stop reconnecting, tear the
-            // peer down and close this window — nothing keeps running.
             closed = true;
             if (reconnectTimer) clearTimeout(reconnectTimer);
             if (pcRef.current) {
@@ -191,7 +188,6 @@ function BrowserView() {
             break;
           }
           case 'cursorUpdate': {
-            // Imperative — no React re-render per cursor move.
             const cursor = msg.cursor as { x: number; y: number; visible: boolean } | undefined;
             if (!cursor) break;
             cursorPosRef.current = cursor;
@@ -391,7 +387,6 @@ function BrowserView() {
   const toViewport = (clientX: number, clientY: number): { x: number; y: number } => {
     const video = videoRef.current;
     if (!video) return { x: 0, y: 0 };
-    // Video renders FILL (stretched, no letterbox offsets).
     const rect = video.getBoundingClientRect();
     const x = ((clientX - rect.left) / rect.width) * viewportRef.current.width;
     const y = ((clientY - rect.top) / rect.height) * viewportRef.current.height;

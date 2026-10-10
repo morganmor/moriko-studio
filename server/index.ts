@@ -20,6 +20,8 @@ import { syncSessionContext } from './agents/read-policy.js';
 import { goalsRouter } from './goals/routes.js';
 import { remindersRouter } from './reminders/routes.js';
 import { addonRouter } from './addons/routes.js';
+import { watchRouter } from './watch/routes.js';
+import { uiExportRouter } from './uiExport.js';
 import { loadAllAddons, startAddonWatcher } from './addons/loader.js';
 import { aggregateUsage, dailyUsage, USAGE_WINDOWS } from './usageLedger.js';
 import { listReminders, renderReminder, takeDueReminders } from './reminders/store.js';
@@ -29,15 +31,18 @@ import { subscribeTree } from './agents/treeIndex.js';
 import { buildHarnessInjections, ladderReminderInjection, operatorDirectiveInjection, agentHarnessInjection, agentsMdInjection } from './agents/systemPrompt.js';
 import { attachmentsInjection } from './agents/systemPrompt.js';
 import { jobStore, withRun } from './agents/journal.js';
-import { resolveImageAdapter, type ImageProviderSelection } from './adapters/images/registry.js';
-import { classifyImageModels } from './adapters/images/modelCaps.js';
 import {
-  ImageAdapterError,
-  isTerminalImageStatus,
-  type ImagePollResult,
-  type ImageTaskRecord,
-  type NormalizedImage,
-} from './adapters/images/types.js';
+  imageCapabilitiesOrNull,
+  loadImageTasksFromDisk,
+  localImageExists,
+  localImageName,
+  logImageTask,
+  pollImageTaskOnce,
+  readGallery,
+  submitImageTask,
+  writeGallery,
+} from './images/runtime.js';
+import { ImageAdapterError } from './adapters/images/types.js';
 import type {
   ChatRequestBody,
   CustomProviderInput,
@@ -58,8 +63,11 @@ import { getUiState, patchUiState } from './uiState.js';
 import { getStorageLocation, setStorageLocation } from './storageLocation.js';
 import {
   applyTurnPatches,
+  emptyTrash,
   getStoredConversation,
   listStoredConversationSummaries,
+  listTrash,
+  restoreFromTrash,
   summarizeConversation,
   syncStoredConversations,
 } from './conversationStore.js';
@@ -93,7 +101,6 @@ import {
 } from './mcp/config.js';
 import {
   BUILT_IN_PROVIDERS,
-  CIVITAI_MODEL_LABELS,
   findBuiltIn,
   isProviderKind,
 } from './providers.js';
@@ -107,10 +114,7 @@ import { startSweepTimer, touchSession } from './sessionLease.js';
 import { getVisionConfig, setVisionConfig, type VisionConfig } from './visionConfig.js';
 import { getActiveWorkspace } from './agents/workspace.js';
 import {
-  galleryFile,
   imageSessionsFile,
-  imageTaskJournalFile,
-  imageTaskStateFile,
   imagesDir,
   morikoHomeDisplay,
   migrateLegacyLayout,
@@ -164,32 +168,10 @@ function resolveBuiltIn(providerId: string): ProviderPublic {
  * no resolvable image adapter (chat-only providers stay without the field, so
  * the UI keeps its permissive legacy behavior). `models` carries the
  * per-model image classification so the picker can hide chat models and flag
- * edit-capable ones.
+ * edit-capable ones. The implementation is shared with the agent image tool —
+ * see ./images/runtime.ts.
  */
-function imageCapabilitiesOrNull(
-  selection: ImageProviderSelection | undefined,
-  baseUrl: string,
-  models?: string[],
-): ProviderPublic['imageCapabilities'] {
-  try {
-    const adapter = resolveImageAdapter(selection, baseUrl);
-    const capabilities = { ...adapter.capabilities };
-    if (models) {
-      const classified = classifyImageModels(models);
-      if (/civitai/i.test(baseUrl)) {
-        for (const id of models) {
-          classified[id] = /^urn:air/.test(id)
-            ? { modes: ['text-to-image'], maxReferences: 0, label: CIVITAI_MODEL_LABELS[id] }
-            : { modes: ['text-to-image', 'edit'], maxReferences: 2, label: CIVITAI_MODEL_LABELS[id] };
-        }
-      }
-      capabilities.models = classified;
-    }
-    return capabilities;
-  } catch {
-    return undefined;
-  }
-}
+
 
 async function listProviders(): Promise<ProviderPublic[]> {
   const custom = await store.list();
@@ -336,9 +318,8 @@ app.delete(
 
 /**
  * Sets (or clears, with an empty string) the UI-supplied API key for a
- * BUILT-IN provider, and/or its user-added model ids (Tensor.Art model ids,
- * specific Civitai checkpoints). Built-in definitions themselves are
- * immutable — only the credential + model slots are writable.
+ * BUILT-IN provider, and/or its user-added model ids. Built-in definitions
+ * themselves are immutable — only the credential + model slots are writable.
  */
 app.put(
   '/api/providers/builtins/:id/key',
@@ -393,6 +374,39 @@ app.put(
   }),
 );
 
+/**
+ * ComfyUI model discovery — scans /models/{folder} for checkpoints,
+ * diffusion_models, and unet (legacy). Returns tagged IDs:
+ * "ckpt:name" (CheckpointLoaderSimple) or "diff:name" / "unet:name" (UNETLoader).
+ */
+async function probeComfyuiModels(baseUrl: string): Promise<string[]> {
+  const base = baseUrl.replace(/\/+$/, '');
+  const models: string[] = [];
+  const folders = ['checkpoints', 'diffusion_models', 'unet'] as const;
+  for (const folder of folders) {
+    try {
+      const res = await fetch(`${base}/models/${folder}`, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) continue;
+      const files = (await res.json()) as string[];
+      if (!Array.isArray(files)) continue;
+      const tag = folder === 'checkpoints' ? 'ckpt' : folder === 'diffusion_models' ? 'diff' : 'unet';
+      for (const f of files) if (f) models.push(`${tag}:${f}`);
+    } catch { /* folder may not exist */ }
+  }
+  return models;
+}
+
+/** Detect ComfyUI by probing /system_stats. */
+async function isComfyui(baseUrl: string): Promise<boolean> {
+  const base = baseUrl.replace(/\/+$/, '');
+  try {
+    const res = await fetch(`${base}/system_stats`, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return false;
+    const data = (await res.json()) as { system?: unknown };
+    return Boolean(data.system);
+  } catch { return false; }
+}
+
 /** Proxies a model list so the UI can populate pickers from the provider itself. */
 app.get(
   '/api/providers/:id/models',
@@ -426,12 +440,32 @@ app.get(
       return;
     }
 
-    const response = await fetch(`${base}/models`, {
-      headers: credentials.apiKey ? { Authorization: `Bearer ${credentials.apiKey}` } : {},
-    });
+    // ComfyUI detection — scan /models/{folder} instead of /models
+    if (await isComfyui(base)) {
+      const comfyuiModels = await probeComfyuiModels(base);
+      res.json({ models: comfyuiModels });
+      return;
+    }
+
+    const headers: Record<string, string> = credentials.apiKey ? { Authorization: `Bearer ${credentials.apiKey}` } : {};
+    const response = await fetch(`${base}/models`, { headers });
     if (!response.ok) throw new HttpError(response.status, 'The provider rejected the model list request.');
     const payload = (await response.json()) as { data?: Array<{ id?: string }> };
-    res.json({ models: (payload.data ?? []).map((model) => model.id ?? '').filter(Boolean) });
+    const textModels = (payload.data ?? []).map((model) => model.id ?? '').filter(Boolean);
+
+    // Some providers (e.g. NanoGPT) have a dedicated /image-models endpoint
+    // that returns image models not listed in /models.
+    let imageModels: string[] = [];
+    try {
+      const imgRes = await fetch(`${base}/image-models`, { headers });
+      if (imgRes.ok) {
+        const imgPayload = (await imgRes.json()) as { data?: Array<{ id?: string }> };
+        imageModels = (imgPayload.data ?? []).map((m) => m.id ?? '').filter(Boolean);
+      }
+    } catch { /* endpoint may not exist — ignore */ }
+
+    const merged = [...new Set([...textModels, ...imageModels])];
+    res.json({ models: merged });
   }),
 );
 
@@ -477,12 +511,31 @@ app.post(
       return;
     }
 
-    const response = await fetch(`${baseUrl}/models`, {
-      headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
-    });
+    // ComfyUI detection — scan /models/{folder} instead of /models
+    if (await isComfyui(baseUrl)) {
+      const comfyuiModels = await probeComfyuiModels(baseUrl);
+      res.json({ models: comfyuiModels });
+      return;
+    }
+
+    const headers: Record<string, string> = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+    const response = await fetch(`${baseUrl}/models`, { headers });
     if (!response.ok) throw new HttpError(response.status, 'The provider rejected the model list request.');
     const payload = (await response.json()) as { data?: Array<{ id?: string }> };
-    res.json({ models: (payload.data ?? []).map((model) => model.id ?? '').filter(Boolean) });
+    const textModels = (payload.data ?? []).map((model) => model.id ?? '').filter(Boolean);
+
+    // Some providers (e.g. NanoGPT) have a dedicated /image-models endpoint.
+    let imageModels: string[] = [];
+    try {
+      const imgRes = await fetch(`${baseUrl}/image-models`, { headers });
+      if (imgRes.ok) {
+        const imgPayload = (await imgRes.json()) as { data?: Array<{ id?: string }> };
+        imageModels = (imgPayload.data ?? []).map((m) => m.id ?? '').filter(Boolean);
+      }
+    } catch { /* endpoint may not exist — ignore */ }
+
+    const merged = [...new Set([...textModels, ...imageModels])];
+    res.json({ models: merged });
   }),
 );
 
@@ -555,10 +608,6 @@ app.post(
       inLockdown === false &&
       settings.webAccess !== false &&
       (Boolean(settings.fetchWeb) || (typeof legacyUrls === 'string' && legacyUrls.trim().length > 0));
-    // WEB ACCESS KILL-SWITCH — keep the shared browser gate in sync with the
-    // conversation's setting. Any ON conversation arms the browser; a run with
-    // webAccess off does NOT tear it down (another conversation may be using
-    // the panel) — the SPA calls POST /browser/web-access on the toggle flip.
     const { browserManager } = await import('./agents/browser/manager.js');
     if (settings.webAccess === true) await browserManager.setWebAccess(true);
     resolveWireRefs(body.messages);
@@ -614,9 +663,6 @@ app.post(
     });
     attachStream(streamId, res);
 
-    // WRITING-RULES WATCH (#3): scans outgoing text/reasoning for the model
-    // starting its own E2E test code; one steer-reminder per run, agent mode
-    // only — plain chat has no Writing Rules to remind the model about.
     const writingRules = settings.agentMode === true && steerSessionId
       ? watchWritingRules((reminder) => {
           const entry = pushSteer(steerSessionId, [{ type: 'text', text: reminder }]);
@@ -624,11 +670,16 @@ app.post(
         })
       : null;
 
+    /** finishReason reported by the adapter's terminal `done` — the fallback
+     *  `done` in `finally` must carry it forward, or the client's last-write-
+     *  wins handler overwrites a real cut (max_tokens) with `undefined`. */
+    let lastFinishReason: string | undefined;
     const send: StreamHandler = (event: StreamEvent) => {
       if (writingRules && !writingRules.consumed) {
         if (event.type === 'text' && typeof event.delta === 'string') writingRules.observe(event.delta);
         else if (event.type === 'reasoning' && typeof event.delta === 'string') writingRules.observe(event.delta);
       }
+      if (event.type === 'done' && event.finishReason) lastFinishReason = event.finishReason;
       publishFrame(streamId, `data: ${JSON.stringify(event)}\n\n`);
       turnMirror?.apply(event);
     };
@@ -662,11 +713,6 @@ app.post(
 
     if (sessionId) touchSession(sessionId);
 
-    // ATTACHMENTS v2 — per-conversation storage: every upload lives in the
-    // CHAT'S OWN folder (conversation/<chat>/attachment/) inside the app
-    // store, independent of any workspace. A no-workspace agent session
-    // still gets full attachment persistence; the agent reads those paths
-    // through the always-allowed attachment exemption (isAttachmentPath).
     const attachmentPaths: string[] = [];
     {
       const attachmentSessionId =
@@ -747,9 +793,6 @@ app.post(
           send({ type: 'harness_injection', id: stub.id, title: stub.title, content: stub.content });
           harnessInjections = harnessInjections.map((entry) => (entry.id === 'agent-tools' ? stub : entry));
         }
-        // AGENTS.md — rebuilt EVERY send (mtime-cached, stat-cheap) so an edit
-        // to the file lands mid-conversation, diffed against the persisted copy
-        // like agent-tools (client only re-sends what actually changed).
         const freshMd = agentsMdInjection(harnessSessionId);
         const oldMd = harnessInjections.find((entry) => entry.id === 'agents-md');
         if (freshMd && (!oldMd || oldMd.content !== freshMd.content)) {
@@ -759,9 +802,6 @@ app.post(
             : [...harnessInjections, freshMd];
         }
       }
-      // PLAIN CHAT PURITY: the live injection channel follows the same gate as
-      // buildHarnessInjections — attachments (and their workspace persistence)
-      // are agent-mode business; a plain chat turn injects nothing.
       const attachments = settings.agentMode
         ? attachmentsInjection(
             attachmentPaths,
@@ -877,7 +917,7 @@ app.post(
       }
     } finally {
       clearInterval(heartbeat);
-      send({ type: 'done' });
+      send({ type: 'done', finishReason: lastFinishReason });
       turnMirror?.flushFinal();
       finishStream(streamId);
       jobStore.end(streamId, controller.signal.aborted ? 'aborted' : failed ? 'error' : 'completed');
@@ -991,8 +1031,6 @@ app.post(
 
     let parts: SteerPart[];
     if (Array.isArray(body?.parts)) {
-      // VALIDATE + BOUND every part: text ≤ 4000 chars per steer; image/file
-      // parts keep their wire URL (data URL or moriko-ref) as-is.
       parts = [];
       for (const raw of body.parts.slice(0, 12)) {
         if (!raw || typeof raw !== 'object') continue;
@@ -1036,165 +1074,12 @@ app.post(
 
 
 /**
- * In-flight image task records, kept server-side so the browser only ever
- * holds the task id. Each record carries everything its adapter needs to poll
- * later. Cleared when a task reaches a terminal status.
+ * IMAGE RUNTIME — task submission, polling, the failure journal and the
+ * Gallery live in ONE shared engine (./images/runtime.ts), used by both the
+ * HTTP routes below and the agent tool `agent__image` (LLM-driven
+ * generation; see docs/plans/PLAN-AGENT-DRIVEN-IMAGE-GENERATION.md).
  */
-const imageTasks = new Map<string, ImageTaskRecord>();
 
-/** A pending task older than this expires as FAILED instead of polling forever. */
-const IMAGE_TASK_TTL_MS = 15 * 60 * 1000;
-
-/**
- * In-flight tasks survive restarts: the map is mirrored to
- * `.data/image-session/task-state.json` on every change and reloaded at boot.
- * This closes the original failure mode — a server restart used to vaporize
- * every pending task, and with it all evidence of what the provider was doing.
- * (The file holds the same credentials as `~/.moriko/providers.json`, so it
- * lives under the same trust boundary and must never be committed.)
- */
-const IMAGE_TASKS_STATE = imageTaskStateFile;
-
-function persistImageTasks(): void {
-  try {
-    atomicWriteJson(IMAGE_TASKS_STATE, [...imageTasks.entries()]);
-  } catch (error) {
-    console.error('[images] failed to persist task state:', error);
-  }
-}
-
-function loadImageTasksFromDisk(): void {
-  try {
-    if (!fs.existsSync(IMAGE_TASKS_STATE)) return;
-    const parsed = JSON.parse(fs.readFileSync(IMAGE_TASKS_STATE, 'utf8')) as unknown;
-    if (!Array.isArray(parsed)) return;
-    for (const entry of parsed) {
-      if (!Array.isArray(entry) || typeof entry[0] !== 'string' || !entry[1]) continue;
-      const record = entry[1] as ImageTaskRecord;
-      if (typeof record.adapterId !== 'string' || !record.credentials) continue;
-      imageTasks.set(entry[0], record);
-    }
-    if (imageTasks.size > 0) {
-      console.log(`[images] restored ${imageTasks.size} in-flight task(s) from disk`);
-    }
-  } catch (error) {
-    console.error('[images] failed to restore task state:', error);
-  }
-}
-
-function rememberTask(taskId: string, record: ImageTaskRecord): void {
-  if (imageTasks.size > 200) {
-    const oldest = imageTasks.keys().next().value;
-    if (oldest) imageTasks.delete(oldest);
-  }
-  imageTasks.set(taskId, record);
-  persistImageTasks();
-}
-
-/**
- * Resolves the image target for a request: credentials (server key first,
- * browser-supplied second) plus the adapter that speaks this provider's API.
- * Custom providers may pin an adapter via `imageAdapter`/`imageConfig`;
- * everything else is inferred from the base URL.
- */
-async function resolveImageTarget(providerId: string, browserKey?: string) {
-  const credentials = await resolveCredentials(providerId, browserKey);
-  let selection: ImageProviderSelection | undefined;
-  const custom = await store.get(providerId);
-  const builtIn = findBuiltIn(providerId);
-  if (custom) {
-    selection = {
-      imageAdapter: custom.imageAdapter ?? builtIn?.imageAdapter,
-      imageConfig: custom.imageConfig,
-    };
-  } else if (builtIn?.imageAdapter) {
-    selection = { imageAdapter: builtIn.imageAdapter };
-  }
-  const adapter = resolveImageAdapter(selection, credentials.baseUrl);
-  return { credentials, adapter, providerId };
-}
-
-/**
- * Re-resolves the adapter for an in-flight task at poll time. Registry
- * adapters resolve from their id; factory-based adapters (declarative) are
- * rebuilt from the provider's stored `imageConfig` on demand.
- */
-async function resolveAdapterForTask(task: ImageTaskRecord) {
-  const custom = task.providerId ? await store.get(task.providerId) : undefined;
-  const selection = custom
-    ? { imageAdapter: custom.imageAdapter ?? task.adapterId, imageConfig: custom.imageConfig }
-    : { imageAdapter: task.adapterId };
-  return resolveImageAdapter(selection, task.credentials.baseUrl);
-}
-
-/**
- * Append-only journal of image-task lifecycle events, persisted to
- * `.data/image-tasks.jsonl`.
- *
- * Why this exists: the in-memory `imageTasks` map is wiped on every server
- * restart and each entry is deleted the moment it reaches a terminal state,
- * while failure details were previously printed only to the server's stdout —
- * which nothing captures. Together that meant a provider failure could destroy
- * its own evidence in seconds, making the bug impossible to diagnose after the
- * fact. This journal is the durable record: submit, terminal status (with the
- * provider's raw failure payload), and polls for tasks that no longer exist
- * (the restart-orphan signature).
- */
-type ImageTaskEvent =
-  | {
-      kind: 'submit';
-      taskId: string;
-      adapter: string;
-      provider: string;
-      model: string;
-      prompt: string;
-      aspectRatio: string | null;
-      size: string | null;
-    }
-  | {
-      kind: 'terminal';
-      taskId: string;
-      adapter: string;
-      status: string;
-      /** The provider's own status string, when it differs from `status`. */
-      providerStatus?: string;
-      imageCount: number;
-      failure?: string;
-      raw?: unknown;
-    }
-  | { kind: 'unknown-task'; taskId: string }
-  | {
-      kind: 'submit-rejected';
-      adapter: string;
-      provider: string;
-      model: string;
-      upstreamStatus: number | string;
-      raw: string;
-    }
-  | { kind: 'sweep'; removed: number; retentionDays: number }
-  | { kind: 'cleanup'; removed: number; skipped: number }
-  | { kind: 'session-created'; sessionId: string; label: string }
-  | { kind: 'session-deleted'; sessionId: string; label: string; removedFiles: number };
-
-const IMAGE_TASK_JOURNAL = imageTaskJournalFile;
-
-function logImageTask(event: ImageTaskEvent): void {
-  const line = JSON.stringify({ at: new Date().toISOString(), ...event });
-  try {
-    fs.appendFileSync(IMAGE_TASK_JOURNAL, `${line}\n`);
-  } catch {
-  }
-  console.log(`[images] ${event.kind}: ${line.slice(0, 400)}`);
-}
-
-/**
- * Submits a generation task and returns its id. The provider is resolved
- * exactly like chat (server-side key first, browser-supplied second); the
- * provider-specific protocol lives in the resolved adapter. Picking a provider
- * that does not speak the image API simply surfaces the provider's error.
- */
-/** Transport bound for reference images — shape/capacity are checked in the handler. */
-const MAX_REFERENCE_IMAGES = 8;
 
 app.post(
   '/api/images/generations',
@@ -1209,112 +1094,27 @@ app.post(
       aspectRatio?: unknown;
       images?: unknown;
     };
-    if (!body?.providerId?.trim()) throw new HttpError(400, 'Pick a provider in Run settings first.');
-    if (!body?.model?.trim()) throw new HttpError(400, 'Pick a model in Run settings first.');
-    if (!body?.prompt?.trim()) throw new HttpError(400, 'A prompt is required.');
-
-    const { credentials, adapter, providerId } = await resolveImageTarget(
-      body.providerId.trim(),
-      body.apiKey?.trim() || undefined,
-    );
-    const apiKey = credentials.apiKey || process.env.MODELSCOPE_API_KEY || '';
-    if (!apiKey) {
-      throw new HttpError(
-        400,
-        `No API key for ${credentials.label}. Add one in Provider settings, or set MODELSCOPE_API_KEY in .env.`,
-      );
-    }
-
-    const width = Number(body.width);
-    const height = Number(body.height);
-    const requested =
-      Number.isFinite(width) &&
-      Number.isFinite(height) &&
-      width >= 64 &&
-      height >= 64 &&
-      width <= 4096 &&
-      height <= 4096
-        ? { width: Math.round(width), height: Math.round(height) }
-        : null;
-
-    const aspectRatio =
-      typeof body.aspectRatio === 'string' ? body.aspectRatio.trim() || undefined : undefined;
-
-    // REFERENCE IMAGES — SHAPE-VALIDATED PASS-THROUGH.
-    //
-    // The HF/pattern classifier (modelCaps.ts) is a UI HINT and must never
-    // decide transmission: capability belongs to the provider. What we DO
-    // enforce here is the adapter's own declared capacity — the endpoint's
-    // truth, "provider wins" — and refuse loudly (400) instead of silently
-    // dropping attachments. Providers that can't take references are called
-    // out by the composer's chip before the user ever presses Generate.
-    const images = (Array.isArray(body.images) ? body.images : [])
-      .filter((entry): entry is string => typeof entry === 'string')
-      .filter((entry) => /^(data:image\/|https?:\/\/)/.test(entry));
-    if (images.length > MAX_REFERENCE_IMAGES) {
-      throw new HttpError(400, `At most ${MAX_REFERENCE_IMAGES} reference images per request.`);
-    }
-    const referenceCapacity = adapter.capabilities.maxReferences;
-    if (images.length > referenceCapacity) {
-      throw new HttpError(
-        400,
-        referenceCapacity === 0
-          ? `The ${adapter.id} adapter for ${credentials.label} cannot forward reference images — remove them, or pick a provider that supports image references.`
-          : `${credentials.label} accepts at most ${referenceCapacity} reference image(s) per request — you sent ${images.length}. Remove some in Image Studio.`,
-      );
-    }
-
-    let taskId: string;
     try {
-      ({ taskId } = await adapter.submit(
-        {
-          model: body.model.trim(),
-          prompt: body.prompt.trim(),
-          aspectRatio,
-          width: requested?.width,
-          height: requested?.height,
-          ...(images.length > 0 ? { images } : {}),
-        },
-        { credentials: { ...credentials, apiKey } },
-      ));
+      const { taskId } = await submitImageTask({
+        providerId: body.providerId ?? '',
+        model: body.model ?? '',
+        prompt: body.prompt ?? '',
+        apiKey: body.apiKey,
+        width: body.width,
+        height: body.height,
+        aspectRatio: body.aspectRatio,
+        images: body.images,
+      });
+      res.status(202).json({ taskId });
     } catch (error) {
       if (error instanceof ImageAdapterError) {
-        logImageTask({
-          kind: 'submit-rejected',
-          adapter: adapter.id,
-          provider: credentials.label,
-          model: body.model.trim(),
-          upstreamStatus: error.status,
-          raw: (error.upstreamBody ?? error.message).slice(0, 600),
-        });
         throw new HttpError(error.status, error.message);
       }
       throw error;
     }
-
-    rememberTask(taskId, {
-      adapterId: adapter.id,
-      providerId,
-      credentials: { label: credentials.label, baseUrl: credentials.baseUrl, apiKey },
-      model: body.model.trim(),
-      prompt: body.prompt.trim(),
-      requested,
-      aspectRatio: aspectRatio ?? null,
-      submittedAt: new Date().toISOString(),
-    });
-    logImageTask({
-      kind: 'submit',
-      taskId,
-      adapter: adapter.id,
-      provider: credentials.label,
-      model: body.model.trim(),
-      prompt: body.prompt.trim(),
-      aspectRatio: aspectRatio ?? null,
-      size: requested ? `${requested.width}x${requested.height}` : null,
-    });
-    res.status(202).json({ taskId });
   }),
 );
+
 
 /**
  * Generated images are downloaded to disk so they outlive the provider's CDN
@@ -1326,7 +1126,6 @@ fs.mkdirSync(IMAGES_DIR, { recursive: true });
 
 app.use('/api/images/local', express.static(IMAGES_DIR, { fallthrough: false }));
 
-// FASE 5 — serve addon client modules to the widget host (dev + production).
 const ADDONS_DIR = path.join(morikoHome, 'addons');
 app.use('/addon-modules', express.static(ADDONS_DIR, { fallthrough: false }));
 
@@ -1361,203 +1160,26 @@ app.get(
   }),
 );
 
-/** Creation metadata saved beside every downloaded image, powering the lightbox. */
-interface ImageMeta {
-  prompt: string;
-  model: string;
-  provider: string;
-  createdAt: string;
-  file: string;
-  requested: { width: number; height: number } | null;
-  output: { width: number; height: number } | null;
-  aspectRatio: string | null;
-}
-
-/** Reads the real pixel dimensions from a PNG/JPEG/WebP buffer. */
-function readImageSize(buffer: Buffer): { width: number; height: number } | null {
-  if (buffer.length > 24 && buffer.readUInt32BE(0) === 0x89504e47) {
-    return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
-  }
-  if (buffer.length > 4 && buffer[0] === 0xff && buffer[1] === 0xd8) {
-    let offset = 2;
-    while (offset + 9 < buffer.length) {
-      if (buffer[offset] !== 0xff) {
-        offset += 1;
-        continue;
-      }
-      const marker = buffer[offset + 1];
-      const isSof = marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker);
-      if (isSof) {
-        return { height: buffer.readUInt16BE(offset + 5), width: buffer.readUInt16BE(offset + 7) };
-      }
-      offset += 2 + buffer.readUInt16BE(offset + 2);
-    }
-  }
-  if (
-    buffer.length > 30 &&
-    buffer.toString('ascii', 0, 4) === 'RIFF' &&
-    buffer.toString('ascii', 8, 12) === 'WEBP' &&
-    buffer.toString('ascii', 12, 16) === 'VP8X'
-  ) {
-    return {
-      width: 1 + (buffer[24] | (buffer[25] << 8) | (buffer[26] << 16)),
-      height: 1 + (buffer[27] | (buffer[28] << 8) | (buffer[29] << 16)),
-    };
-  }
-  return null;
-}
-
-/** Picks a file extension from raw image bytes (PNG/JPEG/WebP magic). */
-function sniffImageExt(buffer: Buffer): 'png' | 'jpg' | 'webp' {
-  if (buffer.length > 8 && buffer.readUInt32BE(0) === 0x89504e47) return 'png';
-  if (buffer.length > 3 && buffer[0] === 0xff && buffer[1] === 0xd8) return 'jpg';
-  if (
-    buffer.length > 12 &&
-    buffer.toString('ascii', 0, 4) === 'RIFF' &&
-    buffer.toString('ascii', 8, 12) === 'WEBP'
-  ) {
-    return 'webp';
-  }
-  return 'jpg';
-}
-
-/**
- * Persists one generated image — a provider CDN URL or inline base64 — into
- * IMAGES_DIR, so the client only ever sees same-origin local links. When the
- * creation context is known, a sidecar JSON ("<file>.json") keeps the prompt
- * that produced the image beside the file itself — so the lightbox can still
- * show it long after the provider's CDN link has expired.
- */
-async function saveImageLocally(
-  taskId: string,
-  index: number,
-  image: NormalizedImage,
-  meta?: {
-    prompt: string;
-    model: string;
-    provider: string;
-    requested?: { width: number; height: number } | null;
-    aspectRatio?: string | null;
-  },
-): Promise<string> {
-  try {
-    let buffer: Buffer;
-    let ext: 'png' | 'jpg' | 'webp';
-    if (image.kind === 'b64') {
-      const raw = image.data.includes(',') ? (image.data.split(',')[1] ?? '') : image.data;
-      buffer = Buffer.from(raw, 'base64');
-      ext = sniffImageExt(buffer);
-    } else {
-      const upstream = await fetch(image.url);
-      if (!upstream.ok) return image.url;
-      const type = upstream.headers.get('content-type') ?? 'image/jpeg';
-      ext = type.includes('png') ? 'png' : type.includes('webp') ? 'webp' : 'jpg';
-      buffer = Buffer.from(await upstream.arrayBuffer());
-    }
-    const safeId = taskId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80) || 'task';
-    const name = `${safeId}-${index}.${ext}`;
-    fs.writeFileSync(path.join(IMAGES_DIR, name), buffer);
-
-    if (meta) {
-      const payload: ImageMeta = {
-        ...meta,
-        createdAt: new Date().toISOString(),
-        file: `/api/images/local/${name}`,
-        requested: meta.requested ?? null,
-        output: readImageSize(buffer),
-        aspectRatio: meta.aspectRatio ?? null,
-      };
-      fs.writeFileSync(
-        path.join(IMAGES_DIR, name.replace(/\.[^.]+$/, '.json')),
-        JSON.stringify(payload, null, 2),
-      );
-    }
-
-    return `/api/images/local/${name}`;
-  } catch {
-    return image.kind === 'url' ? image.url : image.data;
-  }
-}
-
 /** Polls one task. Results are saved locally; the task is then forgotten. */
 app.get(
   '/api/images/tasks/:taskId',
   asyncRoute(async (req, res) => {
     const { taskId } = req.params;
-    const task = imageTasks.get(taskId);
-    if (!task) {
-      logImageTask({ kind: 'unknown-task', taskId });
-      throw new HttpError(404, 'Unknown image task — it may have finished or the server restarted. Submit again.');
-    }
-
-
-    const submittedMs = Date.parse(task.submittedAt);
-    if (Number.isFinite(submittedMs) && Date.now() - submittedMs > IMAGE_TASK_TTL_MS) {
-      logImageTask({
-        kind: 'terminal',
-        taskId,
-        adapter: task.adapterId,
-        status: 'FAILED',
-        imageCount: 0,
-        failure: 'Task expired after 15 minutes without reaching a terminal status.',
-      });
-      imageTasks.delete(taskId);
-      persistImageTasks();
-      res.json({
-        status: 'FAILED',
-        images: [],
-        error: 'This image task expired after 15 minutes without finishing. Submit again.',
-      });
-      return;
-    }
-
-    const adapter = await resolveAdapterForTask(task);
-
-    let result: ImagePollResult;
+    let outcome;
     try {
-      result = await adapter.poll(taskId, { credentials: task.credentials, record: task });
+      outcome = await pollImageTaskOnce(taskId);
     } catch (error) {
       if (error instanceof ImageAdapterError) throw new HttpError(error.status, error.message);
       throw error;
     }
-
-    const { status } = result;
-    const failure = result.error;
-    const meta = task.prompt
-      ? {
-          prompt: task.prompt,
-          model: task.model,
-          provider: task.credentials.label,
-          requested: task.requested,
-          aspectRatio: task.aspectRatio,
-        }
-      : undefined;
-    const images =
-      result.images.length > 0
-        ? await Promise.all(
-            result.images.map((image, index) => saveImageLocally(taskId, index, image, meta)),
-          )
-        : [];
-    if (isTerminalImageStatus(status)) {
-      logImageTask({
-        kind: 'terminal',
-        taskId,
-        adapter: adapter.id,
-        status,
-        ...(result.providerStatus && result.providerStatus !== status
-          ? { providerStatus: result.providerStatus }
-          : {}),
-        imageCount: images.length,
-        ...(status === 'FAILED' ? { failure, raw: result.raw } : {}),
-      });
-      imageTasks.delete(taskId);
-      persistImageTasks();
+    if (!outcome) {
+      throw new HttpError(404, 'Unknown image task — it may have finished or the server restarted. Submit again.');
     }
     res.json({
-      status,
-      images,
-      ...(result.note ? { note: result.note } : {}),
-      ...(failure ? { error: String(failure).slice(0, 1200) } : {}),
+      status: outcome.status,
+      images: outcome.images,
+      ...(outcome.note ? { note: outcome.note } : {}),
+      ...(outcome.error ? { error: outcome.error } : {}),
     });
   }),
 );
@@ -1584,27 +1206,13 @@ app.get(
 );
 
 
-/**
- * The Gallery is a persisted, ordered list of image URLs — usually local ones
- * under `/api/images/local/...`, occasionally a provider CDN link. The client
- * owns the ordering and sends the whole collection on every change.
- */
-const GALLERY_FILE = galleryFile;
-
-function readGallery(): string[] {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(GALLERY_FILE, 'utf8')) as unknown;
-    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeGallery(images: string[]): void {
-  fs.writeFileSync(GALLERY_FILE, JSON.stringify(images, null, 2));
-}
+/** The Gallery collection itself lives in ./images/runtime.ts (shared with agent__image). */
 
 app.get('/api/gallery', (_req, res) => {
+  // no-store: the client refetches this on every bus event and view mount —
+  // a heuristic browser cache made agent-added images invisible until a
+  // hard refresh (count stale in the sidebar, grid stale in the view).
+  res.setHeader('Cache-Control', 'no-store');
   res.json({ images: readGallery() });
 });
 
@@ -1670,18 +1278,6 @@ function writeImageSessions(sessions: ImageSession[]): void {
   atomicWriteJson(IMAGE_SESSIONS_FILE, sessions);
 }
 
-const LOCAL_IMAGE_PREFIX = '/api/images/local/';
-
-/** Extracts a safe filename from a local image URL, or null for foreign URLs. */
-function localImageName(url: string): string | null {
-  if (!url.startsWith(LOCAL_IMAGE_PREFIX)) return null;
-  const name = path.basename(url.slice(LOCAL_IMAGE_PREFIX.length));
-  return /^[a-zA-Z0-9_-]+\.(jpg|jpeg|png|webp)$/i.test(name) ? name : null;
-}
-
-function localImageExists(name: string): boolean {
-  return fs.existsSync(path.join(IMAGES_DIR, name));
-}
 
 /**
  * Drops session items whose backing file no longer exists (swept, cleaned, or
@@ -1792,8 +1388,6 @@ app.get('/api/ui-state', readUiState);
 app.put('/api/ui-state', writeUiState);
 app.post('/api/ui-state', writeUiState);
 
-// Storage location — the .env-backed MORIKO_HOME pick. The change goes live
-// on the next harness reload (see Settings → Data → Reload harness).
 app.get('/api/storage/location', (_req, res) => {
   res.json(getStorageLocation());
 });
@@ -1945,17 +1539,11 @@ app.use('/api/agent', agentRouter());
 app.use('/api/goals', goalsRouter());
 app.use('/api/reminders', remindersRouter());
 app.use('/api/addons', addonRouter());
+app.use('/api/watch', watchRouter());
+app.use('/api/ui', uiExportRouter());
 
-// USAGE LEDGER — durable, per-provider token accumulation with a window
-// selector (1d .. 12mo). The dashboard's "Tokens used" reads this instead of
-// the in-memory turns sum, so switching providers or clearing chats never
-// erases history; per-provider breakdown and cross-provider aggregation are
-// both server-computed.
 app.get('/api/usage', (req, res) => {
   const windowKey = typeof req.query.window === 'string' ? req.query.window : '30d';
-  // `providers=a,b,c` narrows ONLY the daily series to the dashboard's checked
-  // subset so the chart matches the headline; the provider list itself stays
-  // complete (checkboxes need every provider present to toggle back on).
   const providerIds =
     typeof req.query.providers === 'string' && req.query.providers.trim()
       ? req.query.providers.split(',').map((id) => id.trim()).filter(Boolean)
@@ -2242,6 +1830,36 @@ app.get(
   }),
 );
 
+/** TRASH — list (sweep >30 hari berjalan di sini), restore satu chat,
+ *  empty semua. Restore memindahkan folder kembali ke archive dan
+ *  mendaftarkannya lagi di manifest, sehingga muncul di list normal. */
+app.get(
+  '/api/conversations/trash',
+  asyncRoute(async (_req, res) => {
+    res.json({ trash: listTrash() });
+  }),
+);
+
+app.post(
+  '/api/conversations/trash/restore',
+  asyncRoute(async (req, res) => {
+    const body = (req.body ?? {}) as { folder?: unknown };
+    const folder = typeof body.folder === 'string' ? body.folder : '';
+    if (!folder) throw new HttpError(400, 'trash/restore needs a "folder" name from the trash list.');
+    const id = restoreFromTrash(folder);
+    if (!id) throw new HttpError(404, 'Trash folder not found or unreadable.');
+    const summary = getStoredConversation(id);
+    res.json({ ok: true, id, summary: summary ? summarizeConversation(summary) : null });
+  }),
+);
+
+app.post(
+  '/api/conversations/trash/empty',
+  asyncRoute(async (_req, res) => {
+    res.json({ ok: true, removed: emptyTrash() });
+  }),
+);
+
 /**
  * P2 EXTERNALIZATION — the byte store's read route. Content-addressed and
  * immutable: a hash always serves the exact same bytes, so the response is
@@ -2395,7 +2013,6 @@ const httpServer = app.listen(PORT, () => {
 
   attachBrowserPanelWs(httpServer);
 
-  // FASE 5 — addon system: load all addons and start hot-reload watcher.
   void loadAllAddons().then(() => {
     startAddonWatcher(() => console.log('  Addons reloaded.'));
   });

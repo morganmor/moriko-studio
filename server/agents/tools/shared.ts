@@ -404,10 +404,6 @@ export async function resolveWithPermission(
   ctx: AgentToolContext,
   intent: 'read' | 'write' = 'read',
 ): Promise<{ absolute: string; relative: string; outside: boolean }> {
-  // CONVERSATION-ATTACHMENT EXEMPTION: absolute store paths under
-  // conversation/<chat>/attachment/ are readable with NO approval and NO
-  // workspace — they belong to the session, not to any project root. Writes
-  // there stay refused (the app's own store is user-owned).
   const raw = rawPath.trim();
   if (path.isAbsolute(raw) && isAttachmentPath(path.resolve(raw))) {
     const absolute = path.resolve(raw);
@@ -438,8 +434,6 @@ export async function resolveManyWithPermission(
   ctx: AgentToolContext,
   intent: 'read' | 'write' = 'read',
 ): Promise<Record<string, { absolute: string; relative: string; outside: boolean }>> {
-  // Attachment exemption first (see resolveWithPermission): absolute
-  // conversation-store attachment paths read free, no workspace required.
   const exempted: Record<string, { absolute: string; relative: string; outside: boolean }> = {};
   const workspacePaths: Array<{ key: string; value: string }> = [];
   for (const entry of rawPaths) {

@@ -36,7 +36,8 @@ import { attachmentRefWireUrl } from './api';
  */
 
 const CHARS_PER_TOKEN = 4;
-const DEFAULT_KEEP_RECENT = 2;
+/** Image offload only: live turns newer than this keep their pixels. */
+const IMAGE_OFFLOAD_RECENT_TURNS = 4;
 /** Fire the context-limit trigger at 95% of the effective limit. */
 const LIMIT_TRIGGER_RATIO = 0.95;
 /**
@@ -559,8 +560,6 @@ export function wireMessages(
       })),
     });
     for (const call of pendingCalls) {
-      // IMAGE OFFLOAD: a pruned wire drops every tool image up front; the
-      // note below keeps the pixels recoverable (read_file the source again).
       const keptImages = opts?.offloadImages
         ? []
         : (call.images ?? []).filter((image) => imageBudget.has(image));
@@ -690,9 +689,6 @@ export function wireUserContent(
   if (turn.content.trim()) parts.push({ type: 'text', text: turn.content });
   for (const attachment of turn.attachments) {
     // send the PATH ONLY — no preview, no excerpt. The model reads the file
-    // via the read tool when it needs the contents. (The pathless branch
-    // below stays full-inline: tool-less plain chat has no other way to see
-    // a text file.)
     if (attachment.textContent !== undefined) {
       if (attachment.path) {
         parts.push({
@@ -706,8 +702,6 @@ export function wireUserContent(
         });
       }
     } else if (attachment.mime.startsWith('image/')) {
-      // IMAGE OFFLOAD: a pathless image is unrecoverable once dropped, so it
-      // always rides inline — only stored files degrade to a pointer.
       if (opts?.offloadImages && attachment.path) {
         parts.push({
           type: 'text',
@@ -807,10 +801,6 @@ export function contextPlan(conversation: Conversation, opts?: WireOptions): Con
   }
 
   const turns = conversation.turns;
-  const keepWindow = Math.max(
-    2,
-    (conversation.settings.compactKeepRecentTurns ?? DEFAULT_KEEP_RECENT) * 2,
-  );
   for (let index = 0; index < turns.length; index += 1) {
     const turn = turns[index];
     if (covered.has(turn.id)) continue;
@@ -820,20 +810,14 @@ export function contextPlan(conversation: Conversation, opts?: WireOptions): Con
     if (!hasWork) continue;
     const fromEnd = turns.length - 1 - index;
     const withDigest = fromEnd < (opts?.prune ? PRUNE_DIGEST_TURNS : TOOL_DIGEST_TURNS);
-    // IMAGE OFFLOAD: pixels ride only inside the protected keep-recent window
-    // (settings.imageOffload); a pruned wire offloads everything but the
-    // newest turn.
     const offloadImages = opts?.prune
       ? fromEnd >= 1
-      : (conversation.settings.imageOffload !== false) && fromEnd >= keepWindow;
+      : (conversation.settings.imageOffload !== false) && fromEnd >= IMAGE_OFFLOAD_RECENT_TURNS;
     const wireOpts: WireOptions = { prune: opts?.prune, offloadImages };
 
     if (turn.kind === 'probation') continue;
 
     if (turn.role === 'user') {
-      // DSH-STYLE STEER: stored steers ride as ORDINARY user messages — the
-      // steer message first (it was sent mid-run, before this turn), then the
-      // turn itself. No framing: the model just sees the user spoke.
       const next = turns[index + 1];
       const steerEntries = (next && next.role === 'user' ? (next.steers ?? []) : []).filter(
         (entry) => entry.parts?.length || entry.text.trim(),
@@ -854,8 +838,6 @@ export function contextPlan(conversation: Conversation, opts?: WireOptions): Con
       messages.push(message);
       tags.push(turn.id);
     }
-    // Steers recorded on the ASSISTANT turn (delivered after its reply) also
-    // rebuild as plain user messages — no framing.
     const assistantSteers = (turn.steers ?? []).filter(
       (entry) => entry.parts?.length || entry.text.trim(),
     );
@@ -915,8 +897,6 @@ export function triggerForMeasuredTokens(
   if (threshold && measuredTokens >= threshold) return 'threshold';
 
   const { limit } = effectiveContextLimit(settings, modelMeta);
-  // CONFIGURABLE TRIGGER: the user's context-limit ratio (sidebar), 95% when
-  // unset. Clamped so a fat-fingered value cannot disable or hyper-arm it.
   const ratio = Math.min(0.98, Math.max(0.5, settings.compactThresholdRatio ?? LIMIT_TRIGGER_RATIO));
   if (limit && measuredTokens >= limit * ratio) return 'context-limit';
 
@@ -1102,14 +1082,6 @@ function serializeGoals(goals: import('../types').Goal[] | undefined): string {
  */
 const MAX_TRANSCRIPT_CHARS = 600_000;
 
-/**
- * The keep-recent window is bounded by SIZE as well as count — see
- * `compactCandidate`. ~60k tokens of immediate context: generous for a genuine
- * continuation chain, far below the megabyte turns that made compaction a
- * no-op on reasoning-heavy threads.
- */
-const PROTECTED_WINDOW_CHARS = 240_000;
-
 /** Marker rendered where an oversized turn's body was cut. */
 function elisionMarker(dropped: number): string {
   return `\n\n[… ${dropped} characters elided to fit the summarization request …]\n\n`;
@@ -1138,59 +1110,28 @@ function elideBody(body: string, allowance: number): string {
  * the wire and is replaced by the checkpoint. Two policies used to break that
  * contract on reasoning-heavy agent threads, and both are fixed here:
  *
- *  - the keep-recent window is bounded by SIZE as well as count, so a single
- *    megabyte exchange cannot hide inside it forever (three "successful"
- *    compactions once left a thread at 143% of its limit because the window
- *    held 4.4M characters);
+ *  - every eligible turn is covered; nothing is kept verbatim outside the
+ *    checkpoint;
  *  - the transcript cap ELIDES an oversized body instead of dropping the turn
  *    from coverage — the cap exists to fit the summarization request, and the
  *    largest turn is exactly the one it would otherwise exclude.
  *
- * `underPressure`: the caller measured the reconstructed context and it is
- * already at a compaction trigger point. The keep-recent guard below is a
- * heuristic for "is a summary worth it yet" — under pressure it is disabled,
- * because a short turn count there only means the turns are LARGE (tool
- * dumps, big pastes, long single exchanges), which is exactly the case
- * compaction exists to rescue. Without this, a 180K thread of a few fat turns
- * answers "Nothing to compact yet" while the context sits at 95%.
  */
-export function compactCandidate(
-  conversation: Conversation,
-  underPressure = false,
-): {
+export function compactCandidate(conversation: Conversation): {
   turns: Turn[];
   transcript: string;
   replacedTokens: number;
   /** Serialized live goal state — rides with the compaction directive. */
   goalBlock: string;
 } | null {
-  const keep = Math.max(0, conversation.settings.compactKeepRecentTurns ?? DEFAULT_KEEP_RECENT);
-  const eligible = conversation.turns.filter(
+  // Every eligible turn is summarized — no verbatim tail is kept.
+  let covered = conversation.turns.filter(
     (turn) =>
       (turn.role === 'user' || turn.role === 'assistant') &&
       turn.kind !== 'compaction' &&
       turn.kind !== 'probation' &&
       turn.kind !== 'restore',
   );
-  if (!underPressure && eligible.length <= keep * 2) return null;
-
-  const weightOf = (turn: Turn): number =>
-    (turn.content ?? '').length +
-    (turn.reasoning ?? '').length +
-    JSON.stringify(turn.segments ?? []).length;
-
-  let protectedCount = 0;
-  let protectedChars = 0;
-  let boundary = eligible.length;
-  for (let index = eligible.length - 1; index >= 0; index -= 1) {
-    if (protectedCount >= keep * 2) break;
-    const weight = weightOf(eligible[index]);
-    if (protectedCount > 0 && protectedChars + weight > PROTECTED_WINDOW_CHARS) break;
-    protectedCount += 1;
-    protectedChars += weight;
-    boundary = index;
-  }
-  let covered = eligible.slice(0, boundary);
   if (covered.length === 0) return null;
 
   const render = (turn: Turn): string => {

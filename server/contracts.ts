@@ -194,8 +194,6 @@ export interface ChatSettingsDTO {
   autoCompact: boolean;
   /** Explicit auto-compact trigger; `null` = only the context-limit trigger. */
   compactThresholdTokens: number | null;
-  /** Newest turns compaction always keeps verbatim. */
-  compactKeepRecentTurns: number;
   /**
    * ENFORCEMENT — the user's graduated punishment ladder. Replaces the old
    * binary `lockdown` flag. `level` (0–5) is the user-controlled trigger:

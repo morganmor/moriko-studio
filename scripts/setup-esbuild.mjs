@@ -1,15 +1,6 @@
-// Per-host esbuild binary staging for `pnpm dev` (Windows).
-//
-// WHY: the dev chain runs TWO esbuild hosts — tsx (server transpile) and vite
 // (web) — pinned to DIFFERENT esbuild versions by their dependency ranges.
-// ESBUILD_BINARY_PATH is a single global switch: pointing it at one binary
 // breaks the other host ("Host version X does not match binary version Y").
-// So each host gets its OWN staged copy, and dev.mjs injects the right one
-// per side (MORIKO_ESBUILD_SERVER / MORIKO_ESBUILD_WEB).
-//
 // The source binary is always matched to the host's EXACT esbuild version —
-// never the hidden-hoist copy (version-ambiguous when several esbuilds
-// coexist; that was the crash).
 import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
@@ -31,12 +22,10 @@ function hostEsbuild(host) {
 
 /** The platform binary for ONE exact esbuild version (never another's). */
 function binaryForVersion(esbuildPkg, version) {
-  // 1) the version-matched optional dep, resolved from the host's own esbuild.
   try {
     const exe = createRequire(esbuildPkg).resolve('@esbuild/win32-x64/esbuild.exe');
     if (existsSync(exe)) return exe;
-  } catch { /* fall through */ }
-  // 2) pnpm virtual store by exact version tag.
+  } catch {  }
   const storeExe = join(
     root, 'node_modules', '.pnpm',
     `@esbuild+win32-x64@${version}`, 'node_modules', '@esbuild', 'win32-x64', 'esbuild.exe',
@@ -70,13 +59,12 @@ export function ensureEsbuildCopies() {
     out[side] = { version: es.version, exe: dest };
     console.log(`[setup-esbuild] ${side} (${host}, esbuild ${es.version}) -> ${dest}`);
   }
-  // Legacy single-copy artifact — version-ambiguous once two esbuilds coexist.
   const legacy = join(destDir, 'esbuild.exe');
   if (existsSync(legacy)) {
     try {
       unlinkSync(legacy);
       console.log('[setup-esbuild] removed stale .esbuild/esbuild.exe (version-ambiguous).');
-    } catch { /* best effort */ }
+    } catch {  }
   }
   return out;
 }

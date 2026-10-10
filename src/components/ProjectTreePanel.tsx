@@ -126,6 +126,9 @@ export function ProjectTreePanel({ width }: { width?: number }) {
   const boundWorkspaceId = useStore((state) => state.activeAgentWorkspaceId);
   const rightPanelMode = useStore((state) => state.rightPanelMode);
   const setRightPanelMode = useStore((state) => state.setRightPanelMode);
+  const activeId = useStore((state) => state.activeId);
+  const showNotice = useStore((state) => state.showNotice);
+  const queueComposerFiles = useStore((state) => state.queueComposerFiles);
 
   const [filter, setFilter] = useState('');
   const [rulesOpen, setRulesOpen] = useState(false);
@@ -166,15 +169,37 @@ export function ProjectTreePanel({ width }: { width?: number }) {
     });
   }, []);
 
+  /**
+   * TREE ATTACH (right-dock design): clicking a file fetches it through the
+   * workspace-scoped raw endpoint and hands it to the composer's normal
+   * attachment pipeline as a reference. The raw route already clamps to the
+   * active workspace and 403s on traversal, so no extra guard is needed here.
+   */
+  const attachFile = useCallback(
+    async (node: TreeNodeInfo) => {
+      try {
+        const params = new URLSearchParams();
+        if (activeId) params.set('sessionId', activeId);
+        const query = params.toString();
+        const response = await fetch(
+          `/api/agent/raw/${node.relPath.split('/').map(encodeURIComponent).join('/')}${query ? `?${query}` : ''}`,
+        );
+        if (!response.ok) throw new Error(String(response.status));
+        const blob = await response.blob();
+        queueComposerFiles([new File([blob], node.name, { type: blob.type || 'application/octet-stream' })]);
+        showNotice('tree.attached', { name: node.name });
+      } catch {
+        showNotice('tree.attachFailed', { name: node.name });
+      }
+    },
+    [activeId, queueComposerFiles, showNotice],
+  );
+
   const rows = useMemo(
     () => (treeView ? flatten(treeView.root, expanded, filter) : []),
     [treeView, expanded, filter],
   );
 
-  // Docked: the scroll container's OWN height drives the window (a docked
-  // panel has no fixed geometry — the fold column sets the width, the aside
-  // fills the height), so a ResizeObserver keeps the viewport honest across
-  // resizes of the dock itself.
   const scrollRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportH, setViewportH] = useState(360);
@@ -190,64 +215,63 @@ export function ProjectTreePanel({ width }: { width?: number }) {
   const last = Math.min(rows.length, Math.ceil((scrollTop + viewportH) / ROW_H) + OVERSCAN);
   const visible = rows.slice(first, last);
 
-  // Docked panels only mount while they are the visible right-dock mode.
   useTreeLive(boundWorkspaceId, true);
 
   const stats = treeView?.stats;
 
   return (
     <aside
-      className="my-5 ml-2 mr-4 flex h-[calc(100%-2.5rem)] shrink-0 flex-col overflow-hidden rounded-2xl border border-hairline bg-elevated shadow-workspace"
-      style={{ width: width ?? 300 }}
+      className="dock-in"
+      style={{ height: '100%', width: width ?? 300, flexShrink: 0, overflow: 'hidden', borderRadius: 'var(--r-xl)', border: '1px solid var(--line)', background: 'rgb(var(--c-elev))', boxShadow: 'var(--sh1)' }}
       role="region"
       aria-label="Project structure"
     >
-      {/* Two-row header: row 1 = workspace identity + close; row 2 = the
-          sidebar slot and panel actions — a 300px dock cannot fit all of them
-          on one line without crushing the workspace title. */}
-      <div className="flex shrink-0 items-center gap-1.5 border-b border-hairline bg-elevated px-2.5 py-1.5">
-        <Folder className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden="true" />
-        <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-ink">
+      {}
+      <div style={{ display: 'flex', flexShrink: 0, alignItems: 'center', gap: 6, borderBottom: '1px solid var(--line)', background: 'rgb(var(--c-elev))', padding: '6px 10px' }}>
+        <Folder className="ic" style={{ color: 'rgb(var(--c-accent))' }} aria-hidden="true" />
+        <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12, fontWeight: 500, color: 'rgb(var(--c-ink))' }}>
           {treeView?.root.name ?? 'Project tree'}
         </span>
         <RightDockCloseButton />
       </div>
-      <div className="flex shrink-0 items-center gap-1.5 border-b border-hairline bg-elevated px-2.5 py-1.5">
+      <div style={{ display: 'flex', flexShrink: 0, alignItems: 'center', gap: 6, borderBottom: '1px solid var(--line)', background: 'rgb(var(--c-elev))', padding: '6px 10px' }}>
         <RightDockSlot mode={rightPanelMode} onChange={setRightPanelMode} />
-        <div className="flex-1" />
+        <div style={{ flex: 1 }} />
         {treeView?.refreshing ? (
-          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-faint" aria-hidden="true" />
+          <Loader2 className="ic spin" style={{ flexShrink: 0, color: 'var(--faint)' }} aria-hidden="true" />
         ) : null}
         <button
           type="button"
-          className="icon-button h-6 w-6 shrink-0"
+          className="ib xs"
+          style={{ flexShrink: 0 }}
           onClick={() => setRulesOpen((value) => !value)}
           aria-label="Ignore rules"
         >
-          <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+          <SlidersHorizontal className="ic" aria-hidden="true" />
         </button>
         <button
           type="button"
-          className="icon-button h-6 w-6 shrink-0"
+          className="ib xs"
+          style={{ flexShrink: 0 }}
           onClick={() => workspaceId && void refreshTreeView(workspaceId)}
           aria-label="Rebuild index"
         >
-          <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+          <RefreshCw className="ic" aria-hidden="true" />
         </button>
       </div>
 
       {}
-      <div className="flex shrink-0 items-center gap-1.5 border-b border-hairline px-2.5 py-1.5">
-        <Filter className="h-3 w-3 shrink-0 text-faint" aria-hidden="true" />
+      <div style={{ display: 'flex', flexShrink: 0, alignItems: 'center', gap: 6, borderBottom: '1px solid var(--line)', padding: '6px 10px' }}>
+        <Filter className="ic" style={{ flexShrink: 0, color: 'var(--faint)' }} aria-hidden="true" />
         <input
           value={filter}
           onChange={(event) => setFilter(event.target.value)}
           placeholder="Filter…"
           spellCheck={false}
-          className="min-w-0 flex-1 bg-transparent text-[12px] text-ink outline-none placeholder:text-faint"
+          style={{ minWidth: 0, flex: 1, background: 'transparent', border: 0, outline: 0, fontSize: 12, color: 'rgb(var(--c-ink))' }}
         />
         {stats ? (
-            <span className="shrink-0 text-[10.5px] text-faint">
+            <span style={{ flexShrink: 0, fontSize: 10.5, color: 'var(--faint)' }}>
               {stats.files}f·{Math.max(0, stats.dirs - 1)}d{stats.truncated ? ' ⋯' : ''}
             </span>
         ) : null}
@@ -255,32 +279,34 @@ export function ProjectTreePanel({ width }: { width?: number }) {
 
       {}
       <CollapseSection open={showRules}>
-        <div className="shrink-0 border-b border-hairline bg-canvas px-2.5 py-2">
-          <div className="mb-1 flex items-center gap-1.5">
-            <Settings2 className="h-3 w-3 text-faint" aria-hidden="true" />
-            <span className="text-[11px] font-medium text-muted">Ignore rules (this workspace)</span>
+        <div style={{ flexShrink: 0, borderBottom: '1px solid var(--line)', background: 'rgb(var(--c-canvas))', padding: '8px 10px' }}>
+          <div style={{ marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Settings2 className="ic" style={{ width: 12, height: 12, color: 'var(--faint)' }} aria-hidden="true" />
+            <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--muted)' }}>Ignore rules (this workspace)</span>
           </div>
           <input
             value={ruleDirs}
             onChange={(event) => setRuleDirs(event.target.value)}
             placeholder="dirs: temp, scratch"
             spellCheck={false}
-            className="mb-1 w-full rounded-control border border-hairline bg-surface px-2 py-1 text-[11.5px] text-ink outline-none placeholder:text-faint"
+            className="field"
+            style={{ marginBottom: 4, fontSize: 11.5, padding: '4px 8px' }}
           />
           <input
             value={rulePatterns}
             onChange={(event) => setRulePatterns(event.target.value)}
             placeholder="patterns: *.log, *.tmp"
             spellCheck={false}
-            className="mb-1.5 w-full rounded-control border border-hairline bg-surface px-2 py-1 text-[11.5px] text-ink outline-none placeholder:text-faint"
+            className="field"
+            style={{ marginBottom: 6, fontSize: 11.5, padding: '4px 8px' }}
           />
-          <div className="flex items-center justify-end gap-1.5">
-            <button type="button" className="pill-button text-[11px] text-muted hover:text-ink" onClick={() => setRulesOpen(false)}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
+            <button type="button" className="btn ghost xs" onClick={() => setRulesOpen(false)}>
               Cancel
             </button>
             <button
               type="button"
-              className="pill-button bg-accent text-[11px] text-accent-ink hover:brightness-110"
+              className="btn primary xs"
               onClick={() => {
                 if (!workspaceId) return;
                 void saveTreeRules(workspaceId, {
@@ -299,11 +325,11 @@ export function ProjectTreePanel({ width }: { width?: number }) {
       {}
       <div
         ref={scrollRef}
-        className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden"
+        style={{ minHeight: 0, flex: 1, overflowY: 'auto', overflowX: 'hidden' }}
         onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
       >
         {rows.length === 0 ? (
-          <p className="px-3 py-4 text-[11.5px] text-faint">
+          <p style={{ padding: '16px 12px', fontSize: 11.5, color: 'var(--faint)' }}>
             {treeView ? 'No entries match the filter.' : 'No workspace bound to this chat.'}
           </p>
         ) : (
@@ -317,38 +343,41 @@ export function ProjectTreePanel({ width }: { width?: number }) {
                 <button
                   key={node.relPath}
                   type="button"
-                  className={cx(
-                    'absolute left-0 flex w-full items-center gap-1 px-2 text-left text-[12px] transition-colors hover:bg-elevated',
-                    isDir ? 'text-ink' : 'text-muted',
-                  )}
-                  style={{ top: index * ROW_H, height: ROW_H, paddingLeft: 8 + row.depth * 12 }}
-                  onClick={() => isDir && toggle(node.relPath)}
+                  className={cx('pt-tree-row', isDir ? 'pt-dir' : 'pt-file')}
+                  style={{ top: index * ROW_H, height: ROW_H, paddingLeft: 8 + row.depth * 12, width: '100%', textAlign: 'left', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}
+                  onClick={() => {
+                    if (isDir) toggle(node.relPath);
+                    else void attachFile(node);
+                  }}
                 >
                   {isDir ? (
                     isOpen ? (
-                      <ChevronDown className="h-3 w-3 shrink-0 text-faint" aria-hidden="true" />
+                      <ChevronDown className="ic" style={{ width: 12, height: 12, flexShrink: 0, color: 'var(--faint)' }} aria-hidden="true" />
                     ) : (
-                      <ChevronRight className="h-3 w-3 shrink-0 text-faint" aria-hidden="true" />
+                      <ChevronRight className="ic" style={{ width: 12, height: 12, flexShrink: 0, color: 'var(--faint)' }} aria-hidden="true" />
                     )
                   ) : (
-                    <span className="inline-block w-3 shrink-0" />
+                    <span style={{ display: 'inline-block', width: 12, flexShrink: 0 }} />
                   )}
                   {isDir ? (
-                    <Folder className="h-3.5 w-3.5 shrink-0 text-accent/80" aria-hidden="true" />
+                    <Folder className="ic" style={{ width: 14, height: 14, flexShrink: 0, color: 'rgb(var(--c-accent) / 0.8)' }} aria-hidden="true" />
                   ) : (
-                    <FileIcon className="h-3.5 w-3.5 shrink-0 text-faint" aria-hidden="true" />
+                    <FileIcon className="ic" style={{ width: 14, height: 14, flexShrink: 0, color: 'var(--faint)' }} aria-hidden="true" />
                   )}
-                  <span className="min-w-0 flex-1 truncate">{node.name}</span>
+                  <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: isDir ? 'rgb(var(--c-ink))' : 'var(--muted)' }}>{node.name}</span>
                   {node.kind === 'file' && node.size > 0 ? (
-                    <span className="shrink-0 text-[10px] text-faint">{formatSize(node.size)}</span>
+                    <span style={{ flexShrink: 0, fontSize: 10, color: 'var(--faint)' }}>{formatSize(node.size)}</span>
                   ) : null}
-                  {node.truncated ? <span className="shrink-0 text-[10px] text-faint">⋯</span> : null}
+                  {node.truncated ? <span style={{ flexShrink: 0, fontSize: 10, color: 'var(--faint)' }}>⋯</span> : null}
                 </button>
               );
             })}
           </div>
         )}
       </div>
+      <p className="hint2" style={{ flexShrink: 0, margin: 0, padding: '6px 12px 10px', borderTop: '1px solid var(--line)' }}>
+        Click a file to attach it to the composer as a reference.
+      </p>
     </aside>
   );
 }

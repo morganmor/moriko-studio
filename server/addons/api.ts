@@ -52,12 +52,12 @@ export function createAddonApi(addonId: string, workspacePath: string): AddonApi
           registerAddonWidget(addonId, site as import('./types.js').RenderSite, element.component);
         }
       },
-      invalidate() { /* client polls /api/addons on demand */ },
+      invalidate() {  },
       log(text: string) {
-        try { console.log(`[addon:${addonId}] ${text}`); } catch { /* noop */ }
+        try { console.log(`[addon:${addonId}] ${text}`); } catch {  }
       },
       toast(text: string, kind?: 'info' | 'warn' | 'error') {
-        try { console.log(`[addon:${addonId}] toast ${kind ?? 'info'}: ${text}`); } catch { /* noop */ }
+        try { console.log(`[addon:${addonId}] toast ${kind ?? 'info'}: ${text}`); } catch {  }
       },
     },
     store: {
@@ -94,7 +94,7 @@ export function createAddonApi(addonId: string, workspacePath: string): AddonApi
       },
       write(filePath: string, content: string): void {
         try { writeFileSync(path.resolve(workspacePath, filePath), content, 'utf-8'); }
-        catch { /* fail silently */ }
+        catch {  }
       },
       list(dir: string): string[] {
         try { return readdirSync(path.resolve(workspacePath, dir)); }
@@ -126,7 +126,7 @@ export function createAddonApi(addonId: string, workspacePath: string): AddonApi
           const abs = path.resolve(root, filePath);
           if (!abs.startsWith(path.resolve(root))) return;
           writeFileSync(abs, content, 'utf-8');
-        } catch { /* fail silently */ }
+        } catch {  }
       },
       list(dir: string): string[] {
         try {
@@ -164,11 +164,11 @@ export function createAddonApi(addonId: string, workspacePath: string): AddonApi
     },
     clock: {
       every(ms: number, fn: () => void): () => void {
-        const id = setInterval(() => { try { fn(); } catch { /* fail-closed */ } }, ms);
+        const id = setInterval(() => { try { fn(); } catch {  } }, ms);
         return () => clearInterval(id);
       },
       after(ms: number, fn: () => void): () => void {
-        const id = setTimeout(() => { try { fn(); } catch { /* fail-closed */ } }, ms);
+        const id = setTimeout(() => { try { fn(); } catch {  } }, ms);
         return () => clearTimeout(id);
       },
       async sleep(ms: number): Promise<void> {

@@ -44,6 +44,7 @@ export const MESSAGE_CATALOG = {
   'share.copied': { text: 'Link copied to clipboard.', tone: 'success', surface: 'notice' },
   'share.clipboardFailed': { text: 'Could not access the clipboard.', tone: 'error', surface: 'notice' },
   'workspace.bound': { text: 'Agent workspace: {label}.', tone: 'success', surface: 'notice' },
+  'workspace.moved': { text: 'Moved to {label}.', tone: 'success', surface: 'notice' },
   'workspace.pickFailed': { text: 'Native picker failed.', tone: 'error', surface: 'notice' },
   'workspace.removed': { text: 'Workspace unregistered — files on disk are untouched.', tone: 'info', surface: 'notice' },
   'workspace.removeFailed': { text: 'Could not unregister the workspace.', tone: 'error', surface: 'notice' },
@@ -55,6 +56,12 @@ export const MESSAGE_CATALOG = {
     surface: 'notice',
   },
   'tree.rulesSaveFailed': { text: 'Could not save the ignore rules.', tone: 'error', surface: 'notice' },
+  'tree.attached': {
+    text: '"{name}" attached — it rides your next message as a reference.',
+    tone: 'success',
+    surface: 'notice',
+  },
+  'tree.attachFailed': { text: 'Could not read "{name}" to attach it.', tone: 'error', surface: 'notice' },
 
   'run.steeredAsNew': {
     text: 'The run just finished — sending it as a new message instead.',
@@ -91,11 +98,27 @@ export const MESSAGE_CATALOG = {
   'goal.reminderCancelFailed': { text: 'Could not cancel the reminder.', tone: 'error', surface: 'notice' },
 
   'conversations.cleared': { text: 'All conversations cleared.', tone: 'success', surface: 'notice' },
+  'conversations.restored': { text: 'Conversation restored.', tone: 'success', surface: 'notice' },
+
+  'slash.unknown': {
+    text: 'Unknown command: {name}. Type / to browse the available commands.',
+    tone: 'error',
+    surface: 'notice',
+  },
+  'slash.runFailed': { text: 'The command failed: {detail}.', tone: 'error', surface: 'notice' },
+  'slash.addonRan': { text: '{name}: {detail}', tone: 'success', surface: 'notice', dedupe: false },
+  'slash.compactQueued': { text: 'Compacting the conversation…', tone: 'info', surface: 'notice' },
+  'slash.themeSwitched': { text: 'Theme switched to {label}.', tone: 'success', surface: 'notice' },
+  'slash.modelOpened': { text: 'Model picker opened.', tone: 'info', surface: 'notice' },
+  'slash.imageOpened': { text: 'Image Studio opened.', tone: 'info', surface: 'notice' },
+  'slash.imageQueued': { text: 'Image request sent — the agent composes the prompt and generates.', tone: 'info', surface: 'notice' },
+  'slash.clearStarted': { text: 'Started a fresh chat.', tone: 'success', surface: 'notice' },
+  'slash.helpOpened': { text: 'Keyboard shortcuts opened.', tone: 'info', surface: 'notice' },
 
   'storage.saved': { text: 'Storage location saved — press Reload harness to apply.', tone: 'success', surface: 'notice' },
 
   'image.notAnImage': { text: '{name} is not an image.', tone: 'error', surface: 'notice' },
-  'image.tooLarge': { text: '{name} is larger than 3 MB and was skipped.', tone: 'error', surface: 'notice' },
+  'image.tooLarge': { text: '{name} is larger than {max} MB and was skipped.', tone: 'error', surface: 'notice' },
   'image.readFailed': { text: '{name} could not be read.', tone: 'error', surface: 'notice' },
   'image.tooManyRefs': {
     text: '{model} accepts at most {max} reference image(s).',
@@ -131,6 +154,7 @@ export const MESSAGE_CATALOG = {
     surface: 'notice',
   },
   'image.cleanupFailed': { text: 'Cleanup failed.', tone: 'error', surface: 'notice' },
+  'image.emptyPrompt': { text: 'Describe the image first.', tone: 'warn', surface: 'notice' },
 
   'provider.saved': { text: '{label} saved.', tone: 'success', surface: 'notice' },
   'provider.updated': { text: '{message}', tone: 'success', surface: 'notice' },
@@ -204,6 +228,32 @@ export const MESSAGE_CATALOG = {
     surface: 'notice',
   },
   'export.done': { text: 'Exported {count} conversation(s).', tone: 'success', surface: 'notice' },
+  'export.uiBusy': {
+    text: 'Exporting UI — collecting panels & pages (a few seconds)…',
+    tone: 'info',
+    surface: 'notice',
+    ttl: 20000,
+  },
+  'export.uiDone': {
+    text: 'UI exported to {file} ({kb} KB) — {panels} panel(s), {views} page(s) stay interactive.',
+    tone: 'success',
+    surface: 'notice',
+    ttl: 8000,
+  },
+  'export.uiFailed': { text: 'UI export failed.', tone: 'error', surface: 'notice' },
+  'export.pillBusy': {
+    text: 'Exporting pill panel — capturing markup & styles…',
+    tone: 'info',
+    surface: 'notice',
+    ttl: 15000,
+  },
+  'export.pillDone': {
+    text: 'Pill panel exported to {file} ({kb} KB, {source}) — states, animations & live demo included.',
+    tone: 'success',
+    surface: 'notice',
+    ttl: 8000,
+  },
+  'export.pillFailed': { text: 'Pill panel export failed.', tone: 'error', surface: 'notice' },
   'export.notBundle': { text: 'That file is not a Moriko export bundle.', tone: 'error', surface: 'notice' },
   'export.notConversation': {
     text: 'That file is not a Moriko conversation export.',

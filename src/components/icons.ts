@@ -29,7 +29,7 @@ const Archive = Archive__raw as unknown as LucideIcon;
 export { Archive };
 
 import ArrowUp__raw from 'lucide-react/dist/esm/icons/arrow-up.js';
-/** ArrowUp — used in src\components\ImageStudio.tsx */
+/** ArrowUp — used in src\components\Composer.tsx */
 const ArrowUp = ArrowUp__raw as unknown as LucideIcon;
 export { ArrowUp };
 
@@ -43,15 +43,15 @@ import BookOpen__raw from 'lucide-react/dist/esm/icons/book-open.js';
 const BookOpen = BookOpen__raw as unknown as LucideIcon;
 export { BookOpen };
 
+import Braces__raw from 'lucide-react/dist/esm/icons/braces.js';
+/** Braces — used in src\components\SettingsPanel.tsx */
+const Braces = Braces__raw as unknown as LucideIcon;
+export { Braces };
+
 import Check__raw from 'lucide-react/dist/esm/icons/check.js';
 /** Check — used in src\components\Composer.tsx */
 const Check = Check__raw as unknown as LucideIcon;
 export { Check };
-
-import CheckCircle2__raw from 'lucide-react/dist/esm/icons/circle-check.js';
-/** CheckCircle2 — used in src\components\DashboardView.tsx */
-const CheckCircle2 = CheckCircle2__raw as unknown as LucideIcon;
-export { CheckCircle2 };
 
 import CheckSquare__raw from 'lucide-react/dist/esm/icons/square-check-big.js';
 /** CheckSquare — used in src\components\ImageStudio.tsx */
@@ -64,7 +64,7 @@ const ChevronDown = ChevronDown__raw as unknown as LucideIcon;
 export { ChevronDown };
 
 import ChevronLeft__raw from 'lucide-react/dist/esm/icons/chevron-left.js';
-/** ChevronLeft — used in src\components\Composer.tsx */
+/** ChevronLeft — used in src\components\ImageLightbox.tsx */
 const ChevronLeft = ChevronLeft__raw as unknown as LucideIcon;
 export { ChevronLeft };
 
@@ -104,7 +104,7 @@ const CircleSlash = CircleSlash__raw as unknown as LucideIcon;
 export { CircleSlash };
 
 import Clock3__raw from 'lucide-react/dist/esm/icons/clock-3.js';
-/** Clock3 — used in src\components\Thread.tsx */
+/** Clock3 — used in src\components\CommandPalette.tsx */
 const Clock3 = Clock3__raw as unknown as LucideIcon;
 export { Clock3 };
 
@@ -119,12 +119,12 @@ const Copy = Copy__raw as unknown as LucideIcon;
 export { Copy };
 
 import CornerDownLeft__raw from 'lucide-react/dist/esm/icons/corner-down-left.js';
-/** CornerDownLeft — used in src\components\Composer.tsx */
+/** CornerDownLeft — used in src\components\Thread.tsx */
 const CornerDownLeft = CornerDownLeft__raw as unknown as LucideIcon;
 export { CornerDownLeft };
 
 import Cpu__raw from 'lucide-react/dist/esm/icons/cpu.js';
-/** Cpu — used in src\components\DashboardView.tsx */
+/** Cpu — used in src\components\Composer.tsx */
 const Cpu = Cpu__raw as unknown as LucideIcon;
 export { Cpu };
 
@@ -133,13 +133,8 @@ import Crop__raw from 'lucide-react/dist/esm/icons/crop.js';
 const Crop = Crop__raw as unknown as LucideIcon;
 export { Crop };
 
-import Database__raw from 'lucide-react/dist/esm/icons/database.js';
-/** Database — used in src\components\DashboardView.tsx */
-const Database = Database__raw as unknown as LucideIcon;
-export { Database };
-
 import Download__raw from 'lucide-react/dist/esm/icons/download.js';
-/** Download — used in src\components\DashboardView.tsx */
+/** Download — used in src\components\CommandPalette.tsx */
 const Download = Download__raw as unknown as LucideIcon;
 export { Download };
 
@@ -154,9 +149,14 @@ const ExternalLink = ExternalLink__raw as unknown as LucideIcon;
 export { ExternalLink };
 
 import Eye__raw from 'lucide-react/dist/esm/icons/eye.js';
-/** Eye — used in src\components\SettingsPanel.tsx */
+/** Eye — used in src\components\ProvidersDialog.tsx */
 const Eye = Eye__raw as unknown as LucideIcon;
 export { Eye };
+
+import EyeOff__raw from 'lucide-react/dist/esm/icons/eye-off.js';
+/** EyeOff — used in src\components\ProvidersDialog.tsx */
+const EyeOff = EyeOff__raw as unknown as LucideIcon;
+export { EyeOff };
 
 import File__raw from 'lucide-react/dist/esm/icons/file.js';
 /** File — used in src\components\ProjectTreePanel.tsx */
@@ -204,7 +204,7 @@ const FolderOpen = FolderOpen__raw as unknown as LucideIcon;
 export { FolderOpen };
 
 import Gauge__raw from 'lucide-react/dist/esm/icons/gauge.js';
-/** Gauge — used in src\components\SettingsPanel.tsx */
+/** Gauge — used in src\components\CommandPalette.tsx */
 const Gauge = Gauge__raw as unknown as LucideIcon;
 export { Gauge };
 
@@ -218,8 +218,13 @@ import Globe__raw from 'lucide-react/dist/esm/icons/globe.js';
 const Globe = Globe__raw as unknown as LucideIcon;
 export { Globe };
 
+import Hand__raw from 'lucide-react/dist/esm/icons/hand.js';
+/** Hand — used in src\components\Thread.tsx */
+const Hand = Hand__raw as unknown as LucideIcon;
+export { Hand };
+
 import History__raw from 'lucide-react/dist/esm/icons/history.js';
-/** History — used in src\components\ImageHistoryView.tsx */
+/** History — used in src\components\ImageStudio.tsx */
 const History = History__raw as unknown as LucideIcon;
 export { History };
 
@@ -229,7 +234,7 @@ const Image = Image__raw as unknown as LucideIcon;
 export { Image };
 
 import ImageIcon__raw from 'lucide-react/dist/esm/icons/image.js';
-/** ImageIcon — used in src\components\Gallery.tsx */
+/** ImageIcon — used in src\components\CommandPalette.tsx */
 const ImageIcon = ImageIcon__raw as unknown as LucideIcon;
 export { ImageIcon };
 
@@ -239,7 +244,7 @@ const ImagePlus = ImagePlus__raw as unknown as LucideIcon;
 export { ImagePlus };
 
 import Images__raw from 'lucide-react/dist/esm/icons/images.js';
-/** Images — used in src\components\ImageHistoryView.tsx */
+/** Images — used in src\components\CommandPalette.tsx */
 const Images = Images__raw as unknown as LucideIcon;
 export { Images };
 
@@ -248,13 +253,8 @@ import Info__raw from 'lucide-react/dist/esm/icons/info.js';
 const Info = Info__raw as unknown as LucideIcon;
 export { Info };
 
-import KeyRound__raw from 'lucide-react/dist/esm/icons/key-round.js';
-/** KeyRound — used in src\components\DashboardView.tsx */
-const KeyRound = KeyRound__raw as unknown as LucideIcon;
-export { KeyRound };
-
 import LayoutPanelLeft__raw from 'lucide-react/dist/esm/icons/layout-panel-left.js';
-/** LayoutPanelLeft — used in src\components\Gallery.tsx */
+/** LayoutPanelLeft — used in src\components\CommandPalette.tsx */
 const LayoutPanelLeft = LayoutPanelLeft__raw as unknown as LucideIcon;
 export { LayoutPanelLeft };
 
@@ -264,7 +264,7 @@ const Link2 = Link2__raw as unknown as LucideIcon;
 export { Link2 };
 
 import ListFilter__raw from 'lucide-react/dist/esm/icons/list-filter.js';
-/** ListFilter — used in src\components\ImageStudio.tsx */
+/** ListFilter — used in src\components\Composer.tsx */
 const ListFilter = ListFilter__raw as unknown as LucideIcon;
 export { ListFilter };
 
@@ -294,17 +294,12 @@ const Maximize = Maximize__raw as unknown as LucideIcon;
 export { Maximize };
 
 import Maximize2__raw from 'lucide-react/dist/esm/icons/maximize-2.js';
-/** Maximize2 — used in src\components\ImageLightbox.tsx */
+/** Maximize2 — used in src\components\VisualCard.tsx */
 const Maximize2 = Maximize2__raw as unknown as LucideIcon;
 export { Maximize2 };
 
-import Menu__raw from 'lucide-react/dist/esm/icons/menu.js';
-/** Menu — used in src\components\TopBar.tsx */
-const Menu = Menu__raw as unknown as LucideIcon;
-export { Menu };
-
 import MessageSquare__raw from 'lucide-react/dist/esm/icons/message-square.js';
-/** MessageSquare — used in src\components\HistoryView.tsx */
+/** MessageSquare — used in src\components\CommandPalette.tsx */
 const MessageSquare = MessageSquare__raw as unknown as LucideIcon;
 export { MessageSquare };
 
@@ -313,13 +308,18 @@ import Minimize__raw from 'lucide-react/dist/esm/icons/minimize.js';
 const Minimize = Minimize__raw as unknown as LucideIcon;
 export { Minimize };
 
+import Minus__raw from 'lucide-react/dist/esm/icons/minus.js';
+/** Minus — used in src\components\ImageLightbox.tsx */
+const Minus = Minus__raw as unknown as LucideIcon;
+export { Minus };
+
 import Moon__raw from 'lucide-react/dist/esm/icons/moon.js';
-/** Moon — used in src\components\Sidebar.tsx */
+/** Moon — used in src\components\CommandPalette.tsx */
 const Moon = Moon__raw as unknown as LucideIcon;
 export { Moon };
 
 import MoreHorizontal__raw from 'lucide-react/dist/esm/icons/ellipsis.js';
-/** MoreHorizontal — used in src\components\Sidebar.tsx */
+/** MoreHorizontal — used in src\components\TopBar.tsx */
 const MoreHorizontal = MoreHorizontal__raw as unknown as LucideIcon;
 export { MoreHorizontal };
 
@@ -328,15 +328,20 @@ import Music__raw from 'lucide-react/dist/esm/icons/music.js';
 const Music = Music__raw as unknown as LucideIcon;
 export { Music };
 
+import Palette__raw from 'lucide-react/dist/esm/icons/palette.js';
+/** Palette — used in src\components\SettingsDialog.tsx */
+const Palette = Palette__raw as unknown as LucideIcon;
+export { Palette };
+
 import PanelLeftClose__raw from 'lucide-react/dist/esm/icons/panel-left-close.js';
-/** PanelLeftClose — used in src\components\TopBar.tsx */
+/** PanelLeftClose — used in src\components\CommandPalette.tsx */
 const PanelLeftClose = PanelLeftClose__raw as unknown as LucideIcon;
 export { PanelLeftClose };
 
-import PanelLeftOpen__raw from 'lucide-react/dist/esm/icons/panel-left-open.js';
-/** PanelLeftOpen — used in src\components\TopBar.tsx */
-const PanelLeftOpen = PanelLeftOpen__raw as unknown as LucideIcon;
-export { PanelLeftOpen };
+import PanelRight__raw from 'lucide-react/dist/esm/icons/panel-right.js';
+/** PanelRight — used in src\components\ImageLightbox.tsx */
+const PanelRight = PanelRight__raw as unknown as LucideIcon;
+export { PanelRight };
 
 import PanelRightClose__raw from 'lucide-react/dist/esm/icons/panel-right-close.js';
 /** PanelRightClose — used in src\components\ui.tsx */
@@ -344,7 +349,7 @@ const PanelRightClose = PanelRightClose__raw as unknown as LucideIcon;
 export { PanelRightClose };
 
 import PanelRightOpen__raw from 'lucide-react/dist/esm/icons/panel-right-open.js';
-/** PanelRightOpen — used in src\components\TopBar.tsx */
+/** PanelRightOpen — used in src\components\CommandPalette.tsx */
 const PanelRightOpen = PanelRightOpen__raw as unknown as LucideIcon;
 export { PanelRightOpen };
 
@@ -368,6 +373,11 @@ import Pencil__raw from 'lucide-react/dist/esm/icons/pencil.js';
 const Pencil = Pencil__raw as unknown as LucideIcon;
 export { Pencil };
 
+import Pin__raw from 'lucide-react/dist/esm/icons/pin.js';
+/** Pin — used in src\components\Sidebar.tsx */
+const Pin = Pin__raw as unknown as LucideIcon;
+export { Pin };
+
 import Play__raw from 'lucide-react/dist/esm/icons/play.js';
 /** Play — used in src\components\GoalsPanel.tsx */
 const Play = Play__raw as unknown as LucideIcon;
@@ -384,12 +394,12 @@ const PlugZap = PlugZap__raw as unknown as LucideIcon;
 export { PlugZap };
 
 import Plus__raw from 'lucide-react/dist/esm/icons/plus.js';
-/** Plus — used in src\components\ImageStudio.tsx */
+/** Plus — used in src\components\CommandPalette.tsx */
 const Plus = Plus__raw as unknown as LucideIcon;
 export { Plus };
 
 import RefreshCw__raw from 'lucide-react/dist/esm/icons/refresh-cw.js';
-/** RefreshCw — used in src\components\ProjectTreePanel.tsx */
+/** RefreshCw — used in src\components\DashboardView.tsx */
 const RefreshCw = RefreshCw__raw as unknown as LucideIcon;
 export { RefreshCw };
 
@@ -409,7 +419,7 @@ const Save = Save__raw as unknown as LucideIcon;
 export { Save };
 
 import Search__raw from 'lucide-react/dist/esm/icons/search.js';
-/** Search — used in src\components\HistoryView.tsx */
+/** Search — used in src\components\CommandPalette.tsx */
 const Search = Search__raw as unknown as LucideIcon;
 export { Search };
 
@@ -424,7 +434,7 @@ const Server = Server__raw as unknown as LucideIcon;
 export { Server };
 
 import Settings__raw from 'lucide-react/dist/esm/icons/settings.js';
-/** Settings — used in src\components\Sidebar.tsx */
+/** Settings — used in src\components\CommandPalette.tsx */
 const Settings = Settings__raw as unknown as LucideIcon;
 export { Settings };
 
@@ -459,7 +469,7 @@ const SlidersHorizontal = SlidersHorizontal__raw as unknown as LucideIcon;
 export { SlidersHorizontal };
 
 import Sparkles__raw from 'lucide-react/dist/esm/icons/sparkles.js';
-/** Sparkles — used in src\components\ImageStudio.tsx */
+/** Sparkles — used in src\components\CommandPalette.tsx */
 const Sparkles = Sparkles__raw as unknown as LucideIcon;
 export { Sparkles };
 
@@ -468,18 +478,13 @@ import Square__raw from 'lucide-react/dist/esm/icons/square.js';
 const Square = Square__raw as unknown as LucideIcon;
 export { Square };
 
-import SquarePen__raw from 'lucide-react/dist/esm/icons/square-pen.js';
-/** SquarePen — used in src\components\ImageLightbox.tsx */
-const SquarePen = SquarePen__raw as unknown as LucideIcon;
-export { SquarePen };
-
 import SquareTerminal__raw from 'lucide-react/dist/esm/icons/square-terminal.js';
 /** SquareTerminal — used in src\components\AgentPermissionDialog.tsx */
 const SquareTerminal = SquareTerminal__raw as unknown as LucideIcon;
 export { SquareTerminal };
 
 import Sun__raw from 'lucide-react/dist/esm/icons/sun.js';
-/** Sun — used in src\components\Sidebar.tsx */
+/** Sun — used in src\components\CommandPalette.tsx */
 const Sun = Sun__raw as unknown as LucideIcon;
 export { Sun };
 
@@ -504,7 +509,7 @@ const UnfoldVertical = UnfoldVertical__raw as unknown as LucideIcon;
 export { UnfoldVertical };
 
 import Upload__raw from 'lucide-react/dist/esm/icons/upload.js';
-/** Upload — used in src\components\DashboardView.tsx */
+/** Upload — used in src\components\CommandPalette.tsx */
 const Upload = Upload__raw as unknown as LucideIcon;
 export { Upload };
 
@@ -514,7 +519,7 @@ const User = User__raw as unknown as LucideIcon;
 export { User };
 
 import Wand2__raw from 'lucide-react/dist/esm/icons/wand-sparkles.js';
-/** Wand2 — used in src\components\SettingsPanel.tsx */
+/** Wand2 — used in src\components\CommandPalette.tsx */
 const Wand2 = Wand2__raw as unknown as LucideIcon;
 export { Wand2 };
 
@@ -523,22 +528,12 @@ import Waypoints__raw from 'lucide-react/dist/esm/icons/waypoints.js';
 const Waypoints = Waypoints__raw as unknown as LucideIcon;
 export { Waypoints };
 
-import Wrench__raw from 'lucide-react/dist/esm/icons/wrench.js';
-/** Wrench — used in src\components\Composer.tsx */
-const Wrench = Wrench__raw as unknown as LucideIcon;
-export { Wrench };
-
 import X__raw from 'lucide-react/dist/esm/icons/x.js';
 /** X — used in src\components\Composer.tsx */
 const X = X__raw as unknown as LucideIcon;
 export { X };
 
-import ZoomIn__raw from 'lucide-react/dist/esm/icons/zoom-in.js';
-/** ZoomIn — used in src\components\ImageLightbox.tsx */
-const ZoomIn = ZoomIn__raw as unknown as LucideIcon;
-export { ZoomIn };
-
-import ZoomOut__raw from 'lucide-react/dist/esm/icons/zoom-out.js';
-/** ZoomOut — used in src\components\ImageLightbox.tsx */
-const ZoomOut = ZoomOut__raw as unknown as LucideIcon;
-export { ZoomOut };
+import Zap__raw from 'lucide-react/dist/esm/icons/zap.js';
+/** Zap — used in src\components\ProvidersDialog.tsx */
+const Zap = Zap__raw as unknown as LucideIcon;
+export { Zap };

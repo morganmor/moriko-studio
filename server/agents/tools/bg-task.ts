@@ -50,8 +50,6 @@ export async function taskStartTool(args: Record<string, unknown>, ctx: AgentToo
   const rawCommand = str(args, 'command').trim();
   if (!rawCommand) return { ok: false, isError: true, text: 'task_start needs a "command" line.' };
 
-  // WEB ACCESS LOOPHOLE — same guard as agent__run: a background shell can
-  // launch the browser or fetch when Web Access is off; refuse it.
   if (ctx.webAccess === false && isSneakyWebCommand(rawCommand)) {
     return { ok: false, isError: true, errorCode: 'web_access_off', text: sneakyWebRefusal(rawCommand) };
   }
@@ -66,8 +64,6 @@ export async function taskStartTool(args: Record<string, unknown>, ctx: AgentToo
     return { ok: false, isError: true, text: `cwd "${resolved.relative}" is not a directory.` };
   }
 
-  // Same script-content scan as agent__run: a background task is an even
-  // better hiding spot for a browser launcher — check what it runs.
   if (ctx.webAccess === false && commandTouchesWebScripts(rawCommand, resolved.absolute)) {
     return { ok: false, isError: true, errorCode: 'web_access_off', text: sneakyWebRefusal(rawCommand) };
   }

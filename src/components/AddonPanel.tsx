@@ -4,7 +4,7 @@
  */
 
 import { memo, useEffect, useState } from 'react';
-import { RightDockCloseButton, RightDockSlot } from './ui';
+import { RightDockCloseButton, RightDockSlot, cx } from './ui';
 import { useStore } from '../store/useStore';
 import type { AddonClientEntry } from '../types/addon';
 
@@ -16,23 +16,20 @@ function CollapsibleItem({ title, subtitle, defaultOpen = false, children }: {
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="rounded-lg border border-line bg-elevated overflow-hidden">
+    <div className="card" style={{ borderRadius: 'var(--r-lg)', overflow: 'hidden', background: 'rgb(var(--c-elev))', padding: 0 }}>
       <button
-        className="w-full flex items-center justify-between px-3 py-2 text-left"
+        style={{ display: 'flex', width: '100%', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', textAlign: 'left' }}
         onClick={() => setOpen(!open)}
       >
-        <div className="flex flex-col">
-          <span className="text-xs font-medium">{title}</span>
-          {subtitle && <span className="text-[10px] text-muted">{subtitle}</span>}
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <span style={{ fontSize: 12, fontWeight: 500, color: 'rgb(var(--c-ink))' }}>{title}</span>
+          {subtitle && <span style={{ fontSize: 10, color: 'var(--muted)' }}>{subtitle}</span>}
         </div>
-        <span className={`text-xs text-muted transition-transform duration-200 ${open ? 'rotate-90' : ''}`}>▶</span>
+        <span style={{ fontSize: 12, color: 'var(--muted)', transition: 'transform .2s', transform: open ? 'rotate(90deg)' : undefined }}>▶</span>
       </button>
-      <div
-        className="grid transition-[grid-template-rows] duration-300 ease-in-out"
-        style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
-      >
-        <div className="overflow-hidden">
-          <div className="px-3 pb-2">{children}</div>
+      <div className={cx('col', !open && 'shut')}>
+        <div className="col-in">
+          <div style={{ padding: '0 12px 8px' }}>{children}</div>
         </div>
       </div>
     </div>
@@ -51,7 +48,7 @@ export const AddonPanel = memo(function AddonPanel({ width: _width }: { width?: 
         const payload = await resp.json() as { addons: AddonClientEntry[] };
         setAddons(payload.addons);
       }
-    } catch { /* ignore */ }
+    } catch {  }
     setLoading(false);
   };
 
@@ -66,17 +63,17 @@ export const AddonPanel = memo(function AddonPanel({ width: _width }: { width?: 
   const setRightPanelMode = useStore((state) => state.setRightPanelMode);
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-line">
+    <div className="dock-card" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', columnGap: 8, rowGap: 6, padding: '10px 12px', borderBottom: '1px solid var(--line)' }}>
         <RightDockSlot mode={rightPanelMode} onChange={setRightPanelMode} />
         <RightDockCloseButton />
       </div>
-      <div className="flex-1 overflow-y-auto p-3 space-y-2">
+      <div style={{ flex: 1, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
         {loading ? (
-          <div className="text-xs text-muted">Loading addons…</div>
+          <div style={{ fontSize: 12, color: 'var(--muted)' }}>Loading addons…</div>
         ) : addons.length === 0 ? (
-          <div className="text-xs text-muted">
-            No addons installed. Addon directory: <code className="text-xs">~/.moriko-studio/addons/</code>
+          <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+            No addons installed. Addon directory: <code style={{ fontSize: 12 }}>~/.moriko-studio/addons/</code>
           </div>
         ) : (
           addons.map((addon) => (
@@ -86,31 +83,43 @@ export const AddonPanel = memo(function AddonPanel({ width: _width }: { width?: 
               subtitle={`v${addon.version} · ${addon.hasTools ? 'T' : ''}${addon.hasWidgets ? 'W' : ''}${addon.commands.length ? 'C' : ''}`}
               defaultOpen={false}
             >
-              <div className="space-y-2 py-2">
-                <p className="text-xs text-muted">{addon.description}</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '8px 0' }}>
+                <p style={{ margin: 0, fontSize: 12, color: 'var(--muted)' }}>{addon.description}</p>
                 {addon.commands.length > 0 && (
-                  <div className="text-[10px] text-muted">
+                  <div style={{ fontSize: 10, color: 'var(--muted)' }}>
                     Commands: {addon.commands.map((c) => `/${c.name}`).join(', ')}
                   </div>
                 )}
-                <div className="flex items-center gap-2">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <button
-                    className={`text-xs px-2 py-1 rounded ${addon.enabled ? 'bg-green-600 text-white' : 'bg-elevated text-muted'}`}
+                    className="btn xs"
+                    style={{
+                      background: addon.enabled ? 'rgb(var(--c-ok))' : 'rgb(var(--c-elev))',
+                      color: addon.enabled ? '#fff' : 'var(--muted)',
+                      borderColor: 'transparent',
+                    }}
                     onClick={() => toggle(addon.id)}
                   >
                     {addon.enabled ? 'Enabled' : 'Disabled'}
                   </button>
-                  {addon.hasTools && <span className="text-xs px-1.5 py-0.5 rounded bg-blue-600/20 text-blue-400">tools</span>}
-                  {addon.hasWidgets && <span className="text-xs px-1.5 py-0.5 rounded bg-purple-600/20 text-purple-400">widgets</span>}
-                  {addon.commands.length > 0 && <span className="text-xs px-1.5 py-0.5 rounded bg-amber-600/20 text-amber-400">commands</span>}
+                  {addon.hasTools && <span className="cap" style={{ color: '#7ab8ff' }}>tools</span>}
+                  {addon.hasWidgets && <span className="cap" style={{ color: '#c9a6ff' }}>widgets</span>}
+                  {addon.commands.length > 0 && <span className="cap" style={{ color: '#ffc46b' }}>commands</span>}
                 </div>
               </div>
             </CollapsibleItem>
           ))
         )}
         <button
-          className="text-xs text-muted hover:text-fg mt-2"
-          onClick={() => fetch('/api/addons/reload', { method: 'POST' }).then(() => refresh())}
+          className="nav"
+          style={{ height: 'auto', marginTop: 8, padding: '4px 8px', fontSize: 12 }}
+          onClick={() =>
+            fetch('/api/addons/reload', { method: 'POST' }).then(() => {
+              refresh();
+              // SlashMenu re-fetches /api/addons/commands on this event.
+              window.dispatchEvent(new CustomEvent('moriko:addons-reloaded'));
+            })
+          }
         >
           ↻ Reload all addons
         </button>

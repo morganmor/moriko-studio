@@ -54,7 +54,7 @@ const SIGNATURE_LOOKBACK = 6;
 export const FOLD_BLOCK_CAP = 600;
 const SIGNATURE_MAX_CHARS = 160;
 
-const INDENT_EXTENSIONS = new Set(['.py', '.pyi']);
+const INDENT_EXTENSIONS = new Set(['.py', '.pyi', '.gd']);
 /** Indent-heuristic reusers: `key:` + deeper indent matches the scanner. */
 const YAML_EXTENSIONS = new Set(['.yaml', '.yml']);
 /** Languages the brace scanner is allowed to touch. Anything else: no map. */
@@ -68,6 +68,9 @@ const BRACE_EXTENSIONS = new Set([
   '.sql', '.graphql', '.gql',
   '.vue', '.svelte',
   '.prisma', '.proto',
+  // F1.7 — shader / game script languages.
+  '.glsl', '.vert', '.frag', '.geom', '.comp', '.wgsl', '.hlsl', '.fx',
+  '.shader', '.compute', '.cginc', '.gdshader',
 ]);
 /** Brace-family languages where `#` opens a line comment. */
 const HASH_COMMENT_EXTENSIONS = new Set(['.php', '.phtml', '.pl', '.pm', '.rb']);

@@ -34,8 +34,18 @@ import { uiStateFile } from './paths.js';
  * deliberately, so the device file stays a known, inspectable shape.
  */
 export const UI_STATE_KEYS = [
-  /** 'dark' | 'light' */
+  /** 'dark' | 'light' | 'mocha' | 'system' (theme mechanism). */
   'theme',
+  /** Accent swatch: 'ember' | 'sakura' | 'matcha' | 'ocean' | 'violet'. */
+  'accent',
+  /** Row density: 'comfy' | 'compact'. */
+  'density',
+  /** Ambient glow behind the app (default on). */
+  'ambient',
+  /** Reduce-motion override: true/false; absent = follow the OS. */
+  'reduceMotion',
+  /** Confirm before deleting a chat (design's confirmDel). */
+  'confirmDel',
   /** Workspace zoom (0.8–1.4). */
   'fontScale',
   /** Context-panel zoom (0.8–1.4). */

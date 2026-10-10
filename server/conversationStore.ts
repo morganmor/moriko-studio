@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import { atomicWriteJson } from './atomicWrite.js';
@@ -217,6 +217,7 @@ function ensureLoaded(): Map<string, StoredConversation> {
   manifest = active;
   cache = map;
   if (!existsSync(INDEX_FILE)) atomicWriteJson(INDEX_FILE, buildIndex());
+  sweepTrash();
   return map;
 }
 
@@ -257,7 +258,6 @@ export function updateStoredVisual(
       if (!visual || typeof visual !== 'object') continue;
       const candidate = visual as Record<string, unknown>;
       if (candidate.id !== visualId) continue;
-      // Found — the NEWEST stored copy of this id wins (same rule as the UI).
       const { html } = patch;
       if (typeof html === 'string' && html.length >= INLINE_DATA_URL_LIMIT) {
         candidate.htmlRef = {
@@ -368,9 +368,7 @@ export function listStoredConversationSummaries(): ConversationSummary[] {
 export function getStoredConversation(id: string): StoredConversation | null {
   const record = ensureLoaded().get(id) ?? null;
   if (!record) return null;
-  // The dup-turn guard: a record that once caught two paint passes of the
   // same run (duplicate ids — the reported ghost-turn bug) must not ship its
-  // duplicates onward; the LAST occurrence is the newest paint.
   const turns = record.turns;
   if (!Array.isArray(turns)) return record;
   const seen = new Set<string>();
@@ -426,8 +424,6 @@ export function ensureChatDirFor(sessionId: string): string | null {
     folder = chatFolderName(seq, Date.now());
     active.folders[sessionId] = folder;
     active.order.push(sessionId);
-    // Persist the manifest NOW so the mapping survives a restart even if the
-    // chat record itself has not synced yet (the folder holds its uploads).
     try {
       atomicWriteJson(MANIFEST_FILE, {
         version: 1,
@@ -481,9 +477,7 @@ export function syncStoredConversations(
     if (!isStoredConversation(entry)) continue;
     stripAttachmentDataUrls(entry);
     if (JSON.stringify(entry).length > MAX_RECORD_JSON) continue;
-    // The dup-turn guard: never persist a record carrying duplicate turn ids
     // (two paint passes of one run — the ghost-turn bug's root shape). The
-    // LAST occurrence is the newest paint.
     if (Array.isArray(entry.turns) && entry.turns.length > 1) {
       const seen = new Set<string>();
       let dirty = false;
@@ -577,21 +571,6 @@ export function syncStoredConversations(
  * (its stale local copy fails localMatchesSummary on the count and fetches
  * the live body).
  */
-/*
- * ORDERED INSERTION — an unknown turn is placed by (createdAt, roleRank)
- * instead of a blind push at the end. The mirror fires on the FIRST stream
- * event (lastFlushAt = 0 always passes the cadence gate), while the client's
- * patch carrying the USER turn rides a ~1.5s sync debounce — so the assistant
- * turn often lands in the record BEFORE the user turn that preceded it. A
- * push-at-end then left the record as [..., assistant, user], and a reload
- * (which adopts the server body wholesale) painted the user bubble BELOW the
- * Doing Work block, with the pill's `isLast && streaming` indicator dead.
- * Inserting by chronology lets the late user turn land before its assistant.
- * roleRank breaks the same-millisecond tie (the client appends user then
- * assistant in one tick) and survives a same-host clock (the dev case); a
- * large client/server clock skew can still misorder, which the run-end full
- * upsert then heals.
- */
 function turnOrderKey(turn: { createdAt?: unknown; role?: unknown }): [number, number] {
   const createdAt = typeof turn.createdAt === 'number' ? turn.createdAt : 0;
   const role = turn.role;
@@ -635,7 +614,6 @@ export function applyTurnPatches(patches: unknown[]): void {
       (entry) => typeof entry === 'object' && entry !== null && (entry as { id?: unknown }).id === patch.turnId,
     );
 
-    // DELETION PATCH (turn: null): remove the turn id from the record.
     if (patch.turn === null) {
       if (index === -1) continue;
       turns.splice(index, 1);
@@ -659,13 +637,42 @@ export function applyTurnPatches(patches: unknown[]): void {
   scheduleFlush(changed, []);
 }
 
-/** Where a deleted chat's folder goes. Never read by the app. */
+/** Where a deleted chat's folder goes. Restore & purge live in the trash API. */
 const TRASH_DIR = 'trash';
+
+/** Trash entries older than this are swept on boot and on every trash read.
+ *  User decision: bekas percakapan di folder trash dihapus otomatis setelah
+ *  30 hari — purga berjalan best-effort, kegagalan disk tidak pernah fatal. */
+const TRASH_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+function trashDir(): string {
+  return path.join(conversationDir, TRASH_DIR);
+}
+
+/** Removes trash folders older than 30 hari — boot + tiap listTrash. */
+function sweepTrash(): void {
+  try {
+    if (!existsSync(trashDir())) return;
+    const cutoff = Date.now() - TRASH_MAX_AGE_MS;
+    for (const entry of readdirSync(trashDir(), { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      try {
+        if (statSync(path.join(trashDir(), entry.name)).mtimeMs < cutoff) {
+          rmSync(path.join(trashDir(), entry.name), { recursive: true, force: true });
+        }
+      } catch {
+      }
+    }
+  } catch {
+  }
+}
 
 /**
  * NEVER DESTROY A CHAT. A removed record leaves the manifest — so it is gone
  * from every list, every wire, and every browser — but its folder MOVES to
- * `conversation/trash/<folder>-<stamp>` instead of being deleted.
+ * `conversation/trash/<folder>-<stamp>` instead of being deleted. Restore
+ * (`restoreFromTrash`) and the 30-day purge (`sweepTrash`) live in the trash
+ * API; `emptyTrash` is the manual cleanup.
  *
  * This store is the only copy of the user's history: the browser keeps no
  * durable record and there is no backup. An archive that can shrink from ~123
@@ -673,16 +680,15 @@ const TRASH_DIR = 'trash';
  * were left on disk) is the reason recovery must not depend on having
  * predicted the failure. The trash is never scanned — `adoptOrphanFolders`
  * only re-adopts `chat-NNN-*` folders at the archive root — so a trashed chat
- * stays out of every list until a human moves it back.
+ * stays out of every list until it is restored explicitly.
  */
 function moveToTrash(folder: string): void {
   const from = path.join(conversationDir, folder);
   if (!existsSync(from)) return;
   try {
-    const trashDir = path.join(conversationDir, TRASH_DIR);
-    mkdirSync(trashDir, { recursive: true });
+    mkdirSync(trashDir(), { recursive: true });
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    renameSync(from, path.join(trashDir, `${folder}-${stamp}`));
+    renameSync(from, path.join(trashDir(), `${folder}-${stamp}`));
   } catch {
   }
 }
@@ -738,4 +744,128 @@ function scheduleFlush(changed: Set<string>, removedFolders: string[]): void {
 /** Awaits every queued disk write (tests / shutdown; routes don't need it). */
 export function flushConversationWrites(): Promise<void> {
   return writeChain;
+}
+
+/**
+ * TRASH API — list, restore, empty. A trashed chat is a folder under
+ * `conversation/trash/` (`chat-NNN-YYYYMMDD-<stamp>`) holding its original
+ * chat-data.json. The stamp splits id → folder: the FIRST `chat-NNN-*` run is
+ * the original folder name, the trailing ISO stamp belongs to the deletion.
+ */
+export interface TrashEntry {
+  /** Conversation id (parsed from the folder name). */
+  id: string;
+  /** Trash folder name (used by restore/empty). */
+  folder: string;
+  title: string;
+  updatedAt: number;
+  turnCount: number;
+  /** Deletion time (the folder's mtime) — ms epoch. */
+  deletedAt: number;
+}
+
+/** Parses `chat-012-20261005-2026-10-07T...` → original folder + stamp. */
+function splitTrashFolder(folder: string): { original: string; id: string | null } | null {
+  const match = /^((chat-\d{3,})-\d{8})-/.exec(folder);
+  if (!match) return null;
+  // Read the id from the record — the folder name alone is ambiguous.
+  try {
+    const parsed: unknown = JSON.parse(
+      readFileSync(path.join(trashDir(), folder, 'chat-data.json'), 'utf8'),
+    );
+    if (isStoredConversation(parsed)) return { original: match[1], id: parsed.id };
+  } catch {
+  }
+  return { original: match[1], id: null };
+}
+
+/** Every trashed chat, newest deletion first. Sweeps >30-day entries first. */
+export function listTrash(): TrashEntry[] {
+  sweepTrash();
+  const entries: TrashEntry[] = [];
+  try {
+    if (!existsSync(trashDir())) return entries;
+    for (const entry of readdirSync(trashDir(), { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      try {
+        const parsed: unknown = JSON.parse(
+          readFileSync(path.join(trashDir(), entry.name, 'chat-data.json'), 'utf8'),
+        );
+        if (!isStoredConversation(parsed)) continue;
+        entries.push({
+          id: parsed.id,
+          folder: entry.name,
+          title: typeof parsed.title === 'string' ? parsed.title : 'Untitled',
+          updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0,
+          turnCount: Array.isArray(parsed.turns) ? parsed.turns.length : 0,
+          deletedAt: statSync(path.join(trashDir(), entry.name)).mtimeMs,
+        });
+      } catch {
+      }
+    }
+  } catch {
+  }
+  return entries.sort((a, b) => b.deletedAt - a.deletedAt);
+}
+
+/** Moves one trash folder back into the archive and re-registers it in the
+ *  manifest. Returns the restored id (null when the folder is unreadable). */
+export function restoreFromTrash(folder: string): string | null {
+  if (!/^([\w.-]+)$/.test(folder)) return null; // no traversal
+  const from = path.join(trashDir(), folder);
+  if (!existsSync(from)) return null;
+  const split = splitTrashFolder(folder);
+  if (!split) return null;
+  try {
+    const parsed: unknown = JSON.parse(
+      readFileSync(path.join(from, 'chat-data.json'), 'utf8'),
+    );
+    if (!isStoredConversation(parsed)) return null;
+    ensureLoaded();
+    const active = manifest!;
+    const map = cache!;
+    // Original folder name may collide with a live chat — never overwrite:
+    // adopt the next free sequence instead.
+    let target = split.original;
+    if (existsSync(path.join(conversationDir, target)) || Object.values(active.folders).includes(target)) {
+      target = chatFolderName(active.nextSeq, typeof parsed.createdAt === 'number' ? parsed.createdAt : Date.now());
+      active.nextSeq += 1;
+      while (existsSync(path.join(conversationDir, target))) {
+        target = chatFolderName(active.nextSeq, typeof parsed.createdAt === 'number' ? parsed.createdAt : Date.now());
+        active.nextSeq += 1;
+      }
+    }
+    renameSync(from, path.join(conversationDir, target));
+    active.folders[parsed.id] = target;
+    active.order.push(parsed.id);
+    active.order.sort((a, b) => {
+      const seqA = Number(CHAT_DIR_RE.exec(active.folders[a] ?? '')?.[1] ?? 0);
+      const seqB = Number(CHAT_DIR_RE.exec(active.folders[b] ?? '')?.[1] ?? 0);
+      return seqA - seqB;
+    });
+    map.set(parsed.id, parsed);
+    scheduleFlush(new Set([parsed.id]), []);
+    return parsed.id;
+  } catch {
+    return null;
+  }
+}
+
+/** Manual cleanup: deletes EVERY trash folder. Returns how many were removed. */
+export function emptyTrash(): number {
+  sweepTrash();
+  let removed = 0;
+  try {
+    if (!existsSync(trashDir())) return 0;
+    for (const entry of readdirSync(trashDir(), { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      try {
+        rmSync(path.join(trashDir(), entry.name), { recursive: true, force: true });
+        removed += 1;
+      } catch {
+      }
+    }
+  } catch {
+  }
+  return removed;
 }

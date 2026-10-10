@@ -22,11 +22,15 @@ interface TscError {
 }
 
 const TSC_ERROR_RE = /^(.+?)\((\d+),(\d+)\): (error|warning) (TS\d+): (.+)$/;
+/** F1.4 — tsc --pretty format: `file:l:c - error TSxxxx: msg`. */
+const TSC_PRETTY_RE = /^(.+?):(\d+):(\d+) - (error|warning) (TS\d+): (.+)$/;
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
-function parseTscOutput(output: string): TscError[] {
+function parseTscOutput(rawOutput: string): TscError[] {
+  const output = rawOutput.replace(ANSI_RE, '');
   const errors: TscError[] = [];
   for (const line of output.split('\n')) {
-    const m = line.match(TSC_ERROR_RE);
+    const m = line.match(TSC_ERROR_RE) ?? line.match(TSC_PRETTY_RE);
     if (m) {
       errors.push({
         file: m[1].replace(/\\/g, '/'),
@@ -86,15 +90,31 @@ export async function typecheckTool(args: Record<string, unknown>, ctx: AgentToo
 
   const errors = parseTscOutput(`${outcome.stdout}\n${outcome.stderr}`);
   if (errors.length === 0) {
+    // F1.4 — show only the last 40 raw lines when parsing failed.
+    const rawLines = (outcome.output ?? '').replace(ANSI_RE, '').trimEnd().split('\n');
+    const tail = rawLines.slice(-40).join('\n');
     return {
       ok: false,
       isError: true,
-      text: truncateOutput(`> ${command}\nexit code: ${outcome.exitCode} · ${Math.round(outcome.durationMs / 100) / 10}s\n\n${outcome.output}`),
+      text: truncateOutput(`> ${command}\nexit code: ${outcome.exitCode} · ${Math.round(outcome.durationMs / 100) / 10}s\n\n${tail}`),
+    };
+  }
+
+  // F1.4 — optional filter to specific paths.
+  const filterPaths = Array.isArray(args['paths']) ? args['paths'].filter((p): p is string => typeof p === 'string') : [];
+  const shownErrors = filterPaths.length > 0
+    ? errors.filter((err) => filterPaths.some((p) => err.file === p || err.file.startsWith(p.replace(/\\/g, '/').replace(/\/$/, '') + '/')))
+    : errors;
+  if (shownErrors.length === 0) {
+    return {
+      ok: false,
+      isError: true,
+      text: `> ${command}\nexit code: ${outcome.exitCode} — ${errors.length} error(s) total, but NONE match the given paths filter.`,
     };
   }
 
   const byFile = new Map<string, TscError[]>();
-  for (const err of errors) {
+  for (const err of shownErrors) {
     const list = byFile.get(err.file) ?? [];
     list.push(err);
     byFile.set(err.file, list);
@@ -104,7 +124,7 @@ export async function typecheckTool(args: Record<string, unknown>, ctx: AgentToo
   lines.push(`> ${command}`);
   lines.push(`exit code: ${outcome.exitCode} · ${Math.round(outcome.durationMs / 100) / 10}s`);
   lines.push('');
-  lines.push(`${errors.length} error${errors.length === 1 ? '' : 's'} across ${byFile.size} file${byFile.size === 1 ? '' : 's'}:`);
+  lines.push(`${shownErrors.length} error${shownErrors.length === 1 ? '' : 's'}${filterPaths.length > 0 ? ` (filtered from ${errors.length})` : ''} across ${byFile.size} file${byFile.size === 1 ? '' : 's'}:`);
   lines.push('');
 
   for (const [file, fileErrors] of byFile) {

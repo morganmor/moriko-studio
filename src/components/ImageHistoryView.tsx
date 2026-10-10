@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import { History, Images, Pencil, Search, Trash2 } from './icons';
+import { Pencil, Plus, Search, Sparkles, Trash2 } from './icons';
 
 import { useStore } from '../store/useStore';
-import type { ImageSession } from '../types';
-import { EmptyState, cx } from './ui';
+import { brandEmptyHistorySvg } from '../lib/brandAssets';
+import type { ImageSession, ImageSessionItem } from '../types';
+import { EmptyState } from './ui';
+import { ImageLightbox } from './ImageLightbox';
 
-/** Groups sessions by calendar day, newest first (HistoryView's mechanism). */
+/** Groups sessions by calendar day, newest first (design day labels). */
 function groupByDay(sessions: ImageSession[]) {
   const groups = new Map<string, ImageSession[]>();
   const sorted = [...sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -21,7 +23,7 @@ function groupByDay(sessions: ImageSession[]) {
         ? 'Today'
         : date.toDateString() === yesterday.toDateString()
           ? 'Yesterday'
-          : date.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
+          : date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 
     const bucket = groups.get(key) ?? [];
     bucket.push(session);
@@ -30,96 +32,222 @@ function groupByDay(sessions: ImageSession[]) {
   return groups;
 }
 
-/** One session card: click opens it in the studio; hover shows rename/delete. */
-function SessionRow({ session }: { session: ImageSession }) {
+/** Design time label: "14:05". */
+const hm = (iso: string) => {
+  const date = new Date(iso);
+  return `${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`;
+};
+
+/** Hover overlay actions shared by every card (design .acts buttons). */
+function SessionActions({ session, onRename }: { session: ImageSession; onRename: () => void }) {
   const selectImageSession = useStore((state) => state.selectImageSession);
   const setView = useStore((state) => state.setView);
   const deleteImageSession = useStore((state) => state.deleteImageSession);
-  const renameImageSession = useStore((state) => state.renameImageSession);
 
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(session.label);
-
-  const openSession = () => {
+  const openInStudio = () => {
     selectImageSession(session.id);
     setView('imagestudio');
   };
 
-  const commitRename = () => {
-    setEditing(false);
-    if (draft.trim() && draft.trim() !== session.label) {
-      void renameImageSession(session.id, draft);
-    }
-  };
-
   return (
-    <div
-      className={cx(
-        'group flex items-center gap-2 rounded-card border border-hairline bg-surface px-3.5 py-3',
-        'transition-colors hover:border-accent/40 hover:bg-elevated',
-      )}
-    >
-      {editing ? (
-        <input
-          autoFocus
-          type="text"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={commitRename}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              event.preventDefault();
-              commitRename();
-            } else if (event.key === 'Escape') {
-              setEditing(false);
-              setDraft(session.label);
-            }
-          }}
-          aria-label={`Rename session "${session.label}"`}
-          className="field min-w-0 flex-1"
-        />
-      ) : (
-        <button type="button" onClick={openSession} className="min-w-0 flex-1 text-left">
-          <p className="truncate text-[13.5px] font-medium text-ink">{session.label}</p>
-          <p className="mt-0.5 truncate text-[11.5px] text-faint">
-            {session.items.length} image{session.items.length === 1 ? '' : 's'} ·{' '}
-            {new Date(session.updatedAt).toLocaleString()}
-          </p>
-        </button>
-      )}
-
+    <div className="tbtns">
       <button
         type="button"
-        onClick={() => {
-          setDraft(session.label);
-          setEditing(true);
+        onClick={(event) => {
+          event.stopPropagation();
+          openInStudio();
         }}
-        aria-label={`Rename session "${session.label}"`}
-        className="icon-button h-8 w-8 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+        aria-label={`Open "${session.label}" in Image Studio`}
       >
-        <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+        <Sparkles className="ic" aria-hidden="true" />
       </button>
       <button
         type="button"
-        onClick={() => void deleteImageSession(session.id)}
-        aria-label={`Delete session "${session.label}"`}
-        className="icon-button h-8 w-8 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+        onClick={(event) => {
+          event.stopPropagation();
+          onRename();
+        }}
+        aria-label={`Rename session "${session.label}"`}
       >
-        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+        <Pencil className="ic" aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          void deleteImageSession(session.id);
+        }}
+        aria-label={`Delete session "${session.label}"`}
+      >
+        <Trash2 className="ic" aria-hidden="true" />
       </button>
     </div>
   );
 }
 
+/** Inline rename field pinned to the card overlay (design .field). */
+function RenameInput({
+  session,
+  draft,
+  onDraft,
+  onCommit,
+  onCancel,
+}: {
+  session: ImageSession;
+  draft: string;
+  onDraft: (value: string) => void;
+  onCommit: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <input
+      autoFocus
+      type="text"
+      value={draft}
+      onChange={(event) => onDraft(event.target.value)}
+      onBlur={onCommit}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          event.stopPropagation();
+          onCommit();
+        } else if (event.key === 'Escape') {
+          event.stopPropagation();
+          onCancel();
+        }
+      }}
+      onClick={(event) => event.stopPropagation()}
+      aria-label={`Rename session "${session.label}"`}
+      className="tren"
+    />
+  );
+}
+
 /**
- * Image Studio history: every generation session, grouped by day and
- * searchable — the same full-page mechanism as the Chat History view (click a
- * session to open it in the studio; rename/delete on the card).
+ * One image card (design .card from image-viewer.html): a 4:3 tile that
+ * opens the lightbox; hover reveals the session caption plus open-in-
+ * studio / rename / delete.
+ */
+function ImageCard({
+  session,
+  item,
+  editing,
+  draft,
+  onDraft,
+  onStartRename,
+  onCommitRename,
+  onCancelRename,
+  onPreview,
+}: {
+  session: ImageSession;
+  item: ImageSessionItem;
+  editing: boolean;
+  draft: string;
+  onDraft: (value: string) => void;
+  onStartRename: () => void;
+  onCommitRename: () => void;
+  onCancelRename: () => void;
+  onPreview: (url: string) => void;
+}) {
+  const label = item.prompt || session.label;
+
+  return (
+    <div
+      className="icard"
+      role="button"
+      tabIndex={0}
+      aria-label={`Open image — ${label.slice(0, 60)}`}
+      onClick={() => onPreview(item.url)}
+      onKeyDown={(event) => {
+        // Keys typed in the nested rename field must not open the lightbox.
+        if (event.target !== event.currentTarget) return;
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onPreview(item.url);
+        }
+      }}
+    >
+      <img src={item.url} alt="" loading="lazy" draggable={false} />
+      <div className="tov">
+        <SessionActions session={session} onRename={onStartRename} />
+        {editing ? (
+          <RenameInput
+            session={session}
+            draft={draft}
+            onDraft={onDraft}
+            onCommit={onCommitRename}
+            onCancel={onCancelRename}
+          />
+        ) : (
+          <span className="tcap" title={session.label}>
+            {hm(session.updatedAt)} · {label}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Placeholder for a session that has no images yet (New session flow). */
+function GhostCard({
+  session,
+  editing,
+  draft,
+  onDraft,
+  onStartRename,
+  onCommitRename,
+  onCancelRename,
+}: {
+  session: ImageSession;
+  editing: boolean;
+  draft: string;
+  onDraft: (value: string) => void;
+  onStartRename: () => void;
+  onCommitRename: () => void;
+  onCancelRename: () => void;
+}) {
+  return (
+    <div className="icard ghost">
+      <b>{session.label}</b>
+      <span>No images yet</span>
+      <div className="tov">
+        <SessionActions session={session} onRename={onStartRename} />
+        {editing ? (
+          <RenameInput
+            session={session}
+            draft={draft}
+            onDraft={onDraft}
+            onCommit={onCommitRename}
+            onCancel={onCancelRename}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Image History — the design's card grid (design/image-viewer.html): a
+ * page-head with a live count and a New session action, day groups of 4:3
+ * image cards, click → lightbox browsing every visible image. Search,
+ * rename and delete stay available on the card overlay.
  */
 export function ImageHistoryView() {
   const sessions = useStore((state) => state.imageSessions);
   const loadImageSessions = useStore((state) => state.loadImageSessions);
+  const createImageSession = useStore((state) => state.createImageSession);
+  const renameImageSession = useStore((state) => state.renameImageSession);
+  const requestImageStudioPrompt = useStore((state) => state.requestImageStudioPrompt);
+  const setView = useStore((state) => state.setView);
+  const galleryImages = useStore((state) => state.galleryImages);
+  const addToGallery = useStore((state) => state.addToGallery);
+  const removeFromGallery = useStore((state) => state.removeFromGallery);
   const [query, setQuery] = useState('');
+  /** Open lightbox preview: current url + every visible image. */
+  const [preview, setPreview] = useState<{ url: string; urls: string[] } | null>(null);
+  /** Inline rename target; url: null marks the session's ghost card. */
+  const [editing, setEditing] = useState<{ id: string; url: string | null } | null>(null);
+  const [draft, setDraft] = useState('');
 
   useEffect(() => {
     void loadImageSessions();
@@ -137,19 +265,90 @@ export function ImageHistoryView() {
     [sessions],
   );
 
-  return (
-    <div className="mx-auto w-full max-w-3xl px-6 py-10">
-      <header className="mb-6">
-        <h2 className="text-2xl font-normal tracking-tight text-ink">Image History</h2>
-        <p className="mt-1 text-sm text-muted">
-          {sessions.length} session{sessions.length === 1 ? '' : 's'} ·{' '}
-          {imageCount} image{imageCount === 1 ? '' : 's'} stored on this device.
-        </p>
-      </header>
+  /** Flat browse list — same order as the grouped cards (design viewer). */
+  const allUrls = useMemo(
+    () => filtered.flatMap((session) => session.items.map((item) => item.url)),
+    [filtered],
+  );
 
-      <div className="relative mb-6">
+  /** Viewer fields by url: prompt + session label (design title/prompt). */
+  const infoByUrl = useMemo(() => {
+    const map = new Map<string, { prompt: string; label: string }>();
+    for (const session of filtered) {
+      for (const item of session.items) {
+        if (!map.has(item.url)) map.set(item.url, { prompt: item.prompt, label: session.label });
+      }
+    }
+    return map;
+  }, [filtered]);
+
+  // Deleting a session shrinks the list — drop stale preview/rename targets.
+  useEffect(() => {
+    if (preview && !allUrls.includes(preview.url)) setPreview(null);
+    if (editing && !sessions.some((session) => session.id === editing.id)) setEditing(null);
+  }, [allUrls, editing, preview, sessions]);
+
+  const openPreview = (url: string) => {
+    if (!allUrls.includes(url)) return;
+    setPreview({ url, urls: allUrls });
+  };
+
+  const startRename = (session: ImageSession, url: string | null) => {
+    setDraft(session.label);
+    setEditing({ id: session.id, url });
+  };
+
+  const commitRename = () => {
+    const target = editing;
+    setEditing(null);
+    if (!target) return;
+    const trimmed = draft.trim();
+    const current = sessions.find((session) => session.id === target.id);
+    if (trimmed && current && trimmed !== current.label) {
+      void renameImageSession(target.id, trimmed);
+    }
+  };
+
+  const cancelRename = () => {
+    if (editing) {
+      const current = sessions.find((session) => session.id === editing.id);
+      setDraft(current?.label ?? '');
+    }
+    setEditing(null);
+  };
+
+  const startNewSession = () => {
+    void (async () => {
+      try {
+        await createImageSession();
+        setView('imagestudio');
+      } catch {
+        // The API surfaces its own error state; stay put.
+      }
+    })();
+  };
+
+  return (
+    <div className="page view-enter">
+      <div className="page-head">
+        <div>
+          <h2>Image history</h2>
+          <p>
+            {sessions.length} session{sessions.length === 1 ? '' : 's'} · {imageCount} image
+            {imageCount === 1 ? '' : 's'} · Select an image to open the viewer.
+          </p>
+        </div>
+        <div className="acts">
+          <button type="button" className="btn ghost" onClick={startNewSession}>
+            <Plus className="ic" aria-hidden="true" />
+            New session
+          </button>
+        </div>
+      </div>
+
+      <div style={{ position: 'relative', marginBottom: 20 }}>
         <Search
-          className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-faint"
+          style={{ pointerEvents: 'none', position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', width: 16, height: 16, color: 'var(--faint)' }}
           aria-hidden="true"
         />
         <input
@@ -158,41 +357,99 @@ export function ImageHistoryView() {
           onChange={(event) => setQuery(event.target.value)}
           placeholder="Search session names"
           aria-label="Search sessions"
-          className="field pl-9"
+          className="field"
+          style={{ paddingLeft: 36 }}
         />
       </div>
 
       {sessions.length === 0 ? (
-        <EmptyState
-          icon={<Images className="h-5 w-5" />}
-          title="No sessions yet"
-          description="Generate an image in the Image Studio and it will show up here."
-        />
+        <div className="empty">
+          <div className="eic">
+            <span
+              className="ic"
+              aria-hidden="true"
+              dangerouslySetInnerHTML={{ __html: brandEmptyHistorySvg }}
+            />
+          </div>
+          <b>No image sessions yet</b>
+          <p>Sessions appear after your first generation in Image Studio.</p>
+          <button type="button" className="btn sm primary" onClick={startNewSession}>
+            <Plus className="ic" aria-hidden="true" />
+            New session
+          </button>
+        </div>
       ) : filtered.length === 0 ? (
         <EmptyState
-          icon={<Search className="h-5 w-5" />}
+          icon={<Search className="ic" style={{ width: 20, height: 20 }} />}
           title="No matches"
           description={`Nothing matched “${query}”. Try a different term.`}
         />
       ) : (
-        <div className="space-y-6">
-          {[...groups.entries()].map(([label, items]) => (
-            <section key={label}>
-              <h3 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-faint">
-                <History className="h-3 w-3" aria-hidden="true" />
-                {label}
-              </h3>
-              <ul className="space-y-1.5">
-                {items.map((session) => (
-                  <li key={session.id}>
-                    <SessionRow session={session} />
-                  </li>
-                ))}
-              </ul>
+        <>
+          {[...groups.entries()].map(([label, group]) => (
+            <section className="hg" key={label}>
+              <div className="hg-h">{label}</div>
+              <div className="icards">
+                {group.flatMap((session) =>
+                  session.items.length === 0
+                    ? [
+                        <GhostCard
+                          key={`${session.id}:empty`}
+                          session={session}
+                          editing={
+                            editing !== null && editing.id === session.id && editing.url === null
+                          }
+                          draft={draft}
+                          onDraft={setDraft}
+                          onStartRename={() => startRename(session, null)}
+                          onCommitRename={commitRename}
+                          onCancelRename={cancelRename}
+                        />,
+                      ]
+                    : session.items.map((item) => (
+                        <ImageCard
+                          key={item.url}
+                          session={session}
+                          item={item}
+                          editing={
+                            editing !== null &&
+                            editing.id === session.id &&
+                            editing.url === item.url
+                          }
+                          draft={draft}
+                          onDraft={setDraft}
+                          onStartRename={() => startRename(session, item.url)}
+                          onCommitRename={commitRename}
+                          onCancelRename={cancelRename}
+                          onPreview={openPreview}
+                        />
+                      )),
+                )}
+              </div>
             </section>
           ))}
-        </div>
+        </>
       )}
+
+      {preview ? (
+        <ImageLightbox
+          url={preview.url}
+          urls={preview.urls}
+          onNavigate={(url) => setPreview((state) => (state ? { ...state, url } : state))}
+          title={infoByUrl.get(preview.url)?.label}
+          prompt={infoByUrl.get(preview.url)?.prompt}
+          onUsePrompt={(value) => {
+            requestImageStudioPrompt(value);
+            setView('imagestudio');
+          }}
+          saved={galleryImages.includes(preview.url)}
+          onToggleSave={() => {
+            if (galleryImages.includes(preview.url)) void removeFromGallery(preview.url);
+            else void addToGallery([preview.url]);
+          }}
+          onClose={() => setPreview(null)}
+        />
+      ) : null}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 /**
  * Non-blocking freshness gate for `pnpm dev`.
  *
- * Checks the three metadata snapshots (models.dev, Hugging Face, Civitai) and
+ * Checks the two metadata snapshots (models.dev, Hugging Face) and
  * re-runs the matching sync script ONLY when the file is missing or older than
  * MORIKO_SYNC_MAX_AGE_HOURS (default 24). A network failure — or a hung
  * fetch — is reported as a warning and never fails the process, so dev still
@@ -33,7 +33,6 @@ const maxAgeMs = (Number.isFinite(maxAgeHours) && maxAgeHours > 0 ? maxAgeHours 
 const targets = [
   ['server/modelMetadata.snapshot.json', 'scripts/sync-model-metadata.mjs'],
   ['server/diffusionMetadata.snapshot.json', 'scripts/sync-diffusion-metadata.mjs'],
-  ['server/civitaiModels.snapshot.json', 'scripts/sync-civitai-models.mjs'],
 ];
 
 for (const [snapshot, script] of targets) {

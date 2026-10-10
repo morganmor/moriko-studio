@@ -39,7 +39,6 @@ export const modelscopeAdapter: ImageAdapter = {
     resultFormat: 'url',
     maxImages: 1,
     supportsNegativePrompt: false,
-    // Reads `req.images` → `image_url`; ModelScope's edit API takes up to 3.
     maxReferences: 3,
   },
 

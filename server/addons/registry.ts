@@ -59,10 +59,8 @@ const hooks: RegisteredHook[] = [];
 const widgets = new Map<string, RegisteredWidget[]>();
 const addons = new Map<string, LoadedAddon>();
 
-// Per-addon KV store
 const stores = new Map<string, Map<string, string>>();
 
-// ─── Addon lifecycle ────────────────────────────────────────────────────────
 
 export function registerAddon(id: string, addon: LoadedAddon): void {
   addons.set(id, addon);
@@ -92,7 +90,6 @@ export function listAddons(): LoadedAddon[] {
   return [...addons.values()].sort((a, b) => a.manifest.id.localeCompare(b.manifest.id));
 }
 
-// ─── Tool registration ───────────────────────────────────────────────────────
 
 export function registerAddonTool(
   addonId: string,
@@ -117,7 +114,6 @@ export function getAddonToolHandler(wireName: string): AddonToolHandler | undefi
 
 export function isAddonTool(wireName: string): boolean { return tools.has(wireName); }
 
-// ─── Command registration ─────────────────────────────────────────────────────
 
 export function registerAddonCommand(addonId: string, def: AddonCommandRegistration): void {
   commands.set(def.name, { addonId, ...def });
@@ -125,7 +121,6 @@ export function registerAddonCommand(addonId: string, def: AddonCommandRegistrat
 
 export function listAddonCommands(): RegisteredCommand[] { return [...commands.values()]; }
 
-// ─── Event hook registration ──────────────────────────────────────────────────
 
 function matchEvent(matcher: AddonMatcher | null, _event: AddonEvent, payload: unknown): boolean {
   if (!matcher) return true;
@@ -178,7 +173,7 @@ export async function emitAddonEvent(
       return await hook.handler(api, e as never, next as never);
     } catch (error) {
       if (hook.errorHandler) {
-        try { hook.errorHandler(error as Error); } catch { /* fail-closed */ }
+        try { hook.errorHandler(error as Error); } catch {  }
       }
       return {};
     }
@@ -186,7 +181,6 @@ export async function emitAddonEvent(
   return next(payload);
 }
 
-// ─── Widget registration ─────────────────────────────────────────────────────
 
 export function registerAddonWidget(addonId: string, site: RenderSite, component: string, label?: string): void {
   if (!widgets.has(addonId)) widgets.set(addonId, []);
@@ -198,14 +192,12 @@ export function listAddonWidgets(site?: RenderSite): RegisteredWidget[] {
   return site ? all.filter((w) => w.site === site) : all;
 }
 
-// ─── KV store ────────────────────────────────────────────────────────────────
 
 export function getAddonStore(addonId: string): Map<string, string> {
   if (!stores.has(addonId)) stores.set(addonId, new Map());
   return stores.get(addonId)!;
 }
 
-// ─── Context providers (system-prompt contribution per addon) ────────────────
 
 const contextProviders = new Map<string, AddonContextProvider>();
 
@@ -221,7 +213,6 @@ export function listContextProviders(): AddonContextProvider[] {
   return [...contextProviders.values()];
 }
 
-// ─── Clear all ───────────────────────────────────────────────────────────────
 
 export function clearAllAddons(): void {
   tools.clear();

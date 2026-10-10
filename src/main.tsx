@@ -5,10 +5,8 @@ import { adoptLegacyProviderKeys } from './lib/providerKeys';
 import { adoptLegacyBrowserState, bootUiState, uiStateReachable } from './lib/storage';
 import type { AddonBusPayload } from './types/addonBus';
 import './styles/index.css';
+import './styles/sidebar.css';
 
-// SPA scroll ownership: the browser's automatic scroll restoration on reload
-// races the app's own anchor restore (it reapplies stale pixel offsets against
-// fresh layout). The app restores scroll itself — see the G5 anchor in Thread.
 if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 
 /**
@@ -43,10 +41,6 @@ async function boot(): Promise<void> {
     import('./App'),
     import('./store/useStore'),
   ]);
-  // VISUAL v2 LIVE BUS — one EventSource per tab: addon bus frames carry
-  // visual-rendered/updated/picked so every open browser re-binds cards live
-  // (VisualCard reads useStore.addonEvent). Failure is non-fatal: the thread
-  // still re-binds on the next conversation hydration.
   try {
     const bus = new EventSource('/api/addons/events');
     bus.onmessage = (message) => {
@@ -54,11 +48,9 @@ async function boot(): Promise<void> {
         const frame = JSON.parse(message.data) as AddonBusPayload;
         if (frame && typeof frame.topic === 'string') useStore.getState().pushAddonEvent(frame);
       } catch {
-        // malformed frame — skip it, the stream continues
       }
     };
   } catch {
-    // EventSource constructor failure (older proxy) — live re-bind stays off.
   }
   createRoot(container).render(
     <StrictMode>

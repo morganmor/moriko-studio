@@ -1,11 +1,11 @@
 /**
  * Client-side reference-image plumbing for Image Studio: file → data URL,
  * remote result → reference, and canvas encoding that stays under the
- * 3 MB submit-body cap (data URLs travel inside POST /api/images/generations).
+ * 15 MB per-reference cap (data URLs travel inside POST /api/images/generations).
  */
 
 /** Per-reference-image upload cap (data URL travels in the submit body). */
-export const MAX_REFERENCE_BYTES = 3 * 1024 * 1024;
+export const MAX_REFERENCE_BYTES = 15 * 1024 * 1024;
 
 /** Reads an image file into a data URL for reference upload. */
 export function readFileAsDataUrl(file: Blob): Promise<string> {

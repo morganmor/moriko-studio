@@ -69,7 +69,6 @@ export function validateLocation(raw: string): { ok: true; resolved: string } | 
       if (!statSync(resolved).isDirectory()) {
         return { ok: false, error: 'That path is a file, not a folder.' };
       }
-      // Writability probe: create + remove a throwaway file.
       const probe = path.join(resolved, '.moriko-write-probe');
       mkdirSync(resolved, { recursive: true });
       writeFileSync(probe, '');

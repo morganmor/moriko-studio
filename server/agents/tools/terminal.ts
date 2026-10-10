@@ -19,6 +19,8 @@ import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, num, truncateOutput, resolveWithPermission, requireWorkspace } from './shared.js';
+import { toolByName } from './registry.js';
+import './registered.js';
 import { requestApproval } from '../permissions.js';
 import { formatRunOutcome, runShellCommand } from '../exec.js';
 import { auditToolCall } from '../audit.js';
@@ -44,9 +46,7 @@ const GIT_ALWAYS_ASK = new Set(['clone', 'push']);
  */
 export function isSneakyWebCommand(commandLine: string): boolean {
   const flattened = commandLine.replace(/[\r\n]+/g, ' ');
-  // Layer 1: any URL in the command line — browser launch or network fetch.
   if (/https?:\/\//i.test(flattened)) return true;
-  // Layer 2: browser executables anywhere in the tokens (quoted or not).
   const tokens = flattened.match(/"[^"]*"|'[^']*'|\S+/g) ?? [flattened];
   const browserNames = ['chrome', 'msedge', 'edge', 'firefox', 'brave', 'opera', 'chromium'];
   for (const rawToken of tokens) {
@@ -88,7 +88,6 @@ export function commandTouchesWebScripts(commandLine: string, cwdAbsolute: strin
     const absolute = path.isAbsolute(token) ? token : path.join(cwdAbsolute, token);
     let source: string;
     try {
-      // 512 KB cap: launch patterns live in the header, not at line 40,000.
       source = readFileSync(absolute, 'utf8').slice(0, 524_288);
     } catch {
       continue;
@@ -142,10 +141,6 @@ export async function runTool(args: Record<string, unknown>, ctx: AgentToolConte
     return { ok: false, isError: true, text: `cwd "${cwd.relative}" is not a directory.` };
   }
 
-  // WEB ACCESS LOOPHOLE — launching a browser / fetching through the shell is
-  // the sneaky path around the kill-switch; refuse it the same way. V2: the
-  // SCRIPTS the command runs are scanned too (a probe.mjs can launch headless
-  // Chrome from inside — the command line itself looks innocent).
   if (
     ctx.webAccess === false &&
     (isSneakyWebCommand(rawCommand) || commandTouchesWebScripts(rawCommand, cwd.absolute))
@@ -246,5 +241,5 @@ export async function gitTool(args: Record<string, unknown>, ctx: AgentToolConte
 
 /** Exported for the loop's tool catalogue filter (Terminal mode). */
 export function isTerminalTool(wireName: string): boolean {
-  return wireName === 'agent__run' || wireName === 'agent__git';
+  return wireName === 'agent__run' || wireName === 'agent__git' || toolByName(wireName)?.terminal === true;
 }

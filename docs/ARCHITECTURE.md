@@ -309,6 +309,53 @@ protected paths are refused, and changes go live only through the
 typecheck-gated, stream-draining supervisor reload. See
 [SELF-EDIT-RESILIENCE.md](./archive/SELF-EDIT-RESILIENCE.md).
 
+### Agent tool registry (F0)
+
+Every NEW tool registers itself in ONE place: `tools/registry.ts`
+(`defineTool({ def, handler, readOnly, web, terminal, category })`). The
+registry is the single source of truth for a tool's definition AND its
+operational metadata:
+
+- `catalogue.ts` appends `registeredTools().map(t => t.def)` after the legacy list.
+- `dispatcher.ts` checks `toolByName()` BEFORE the legacy switch.
+- `mcp/loop.ts` treats `readOnly === true` as parallel-safe (alongside the
+  manual `READ_ONLY_TOOLS` set).
+- `web-access.ts` / `terminal.ts` honor the `web` / `terminal` flags.
+
+Tool modules that call `defineTool` are imported once from
+`tools/registered.ts` (side-effect import list). Migrating the ~90 legacy
+tools into the registry is an explicit follow-up, out of scope for now.
+
+### Quality / Architecture / Game tools (F1–F6)
+
+- **Read quality (F2)**: `agent__read_symbol` (AST symbol ranges + read
+  receipt), `agent__context_pack` (body + callers + tests in one call),
+  grep enclosing-symbol annotations, AST outline for TS/JS.
+- **Code quality (F3)**: `agent__diagnostics` (per-file TS diagnostics),
+  a post-edit pipeline hook that reports NEW syntactic diagnostics after
+  `.ts/.tsx` edits, `agent__lint` / `agent__format` (project's own tools),
+  `agent__refactor` (compiler-driven rename / move_file / organize_imports,
+  atomic + vaulted), `agent__code_metrics`, `agent__dead_code`,
+  `agent__review_diff`, and `agent__verify` (one end-of-task gate).
+- **Architecture (F4)**: `agents/arch.ts` (module aggregation, Tarjan SCC
+  cycles, layer rules) behind `agent__arch_map` / `agent__arch_rules`
+  (`.moriko/architecture.json`), `agent__adr`, `agent__scaffold`
+  (templates in `agents/templates/<id>/*.tpl`).
+- **3D / Game (F5)**: `render_visual { libs }` injects LOCAL vendor bundles
+  (three/pixi/matter built by `scripts/build-visual-vendor.mjs` into
+  `~/.moriko-studio/visual-vendor/`, plus the in-tree zero-dep
+  `agents/vendor/moriko-gl.js`) served from `GET /api/agent/visual-vendor/:lib`
+  and inlined into the sandboxed iframe by the CLIENT — bundles never enter
+  the conversation. `agent__game_probe` (localhost-only headless runtime
+  facts: fps, WebGL, console errors, blank-canvas detection — deliberately
+  NOT Web-Access-gated), `agent__shader_check` (GLSL via headless WebGL,
+  WGSL via WebGPU when available), `agent__asset_inspect` (zero-dependency
+  GLB/PNG/JPEG/WebP/KTX2/WAV parsers).
+- **Prompt guidance (F6)**: system prompt gains Quality/Architecture
+  sections; `agents/domain-packs.ts` conditionally injects a 3D/Game or
+  Architecture pack detected from the workspace itself (cached per root +
+  package.json mtime, visible to the user as a `harness_injection`).
+
 ### Provider registry — `providers.ts` + `store.ts`
 
 - Built-ins: **OpenAI** (chat) and **Civitai** (image, Orchestration API).

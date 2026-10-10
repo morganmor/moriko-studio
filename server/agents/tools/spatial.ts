@@ -101,7 +101,7 @@ export async function spatialTool(args: Record<string, unknown>, ctx: AgentToolC
       const header = renderRuntimeReport(capture, comparison);
       const baselineNote =
         args.saveBaseline === true && readBaseline(url)
-          ? `\n  · baseline persisted in the spatial-baselines dir (readable via the same capture)`
+          ? `\n  · baseline persisted in <workspace>/.moriko-dat/spatial (readable via the same capture)`
           : '';
       const shot = capture.screenshot ? `\n  · screenshot: ${capture.screenshot}` : '';
       const gateHint =

@@ -18,6 +18,9 @@ import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { buildSpatialMap, evaluateSpatialGate, invalidateSpatialMapCache } from './spatial.js';
 import { snakeToCamel, camelizeSchemaNode } from './tools/casing.js';
+import { getLanguageService } from './lsp-service.js';
+import { markTouched } from './tools/diagnostics.js';
+import { getActiveWorkspace } from './workspace.js';
 
 /**
  * Error shape used by a hook that wants to deny a call. Hooks may also just
@@ -412,6 +415,51 @@ const hooks: ToolHook[] = [
       });
     },
   },
+  {
+    // F3.2 — post-edit diagnostics: after a successful edit on .ts/.tsx files,
+    // append NEW syntactic diagnostics (vs before the edit, max 5, 1.5s cap).
+    name: 'diagnosticsHook',
+    async preExecute() {
+      return null;
+    },
+    transform(call, result) {
+      if (!result.ok || result.isError) return result;
+      const gateFiles = collectGateFiles(call);
+      if (!gateFiles) return result;
+      const tsFiles = gateFiles.filter((f) => /\.(ts|tsx|mts|cts)$/.test(f));
+      if (tsFiles.length === 0) return result;
+      try {
+        const ws = getActiveWorkspace(call.ctx.sessionId);
+        if (!ws) return result;
+        const notes: string[] = [];
+        const deadline = Date.now() + 1_500;
+        for (const rel of tsFiles) {
+          if (Date.now() > deadline) break;
+          const abs = path.join(ws.path, rel);
+          markTouched(abs);
+          const service = getLanguageService(abs, ws.path);
+          const diags = (service.getSyntacticDiagnostics(abs) ?? []).slice(0, 5);
+          if (diags.length > 0) {
+            notes.push(`⚠ ${diags.length} new diagnostic(s) in ${rel}:`);
+            for (const d of diags) {
+              if (d.file && d.start !== undefined) {
+                const lc = d.file.getLineAndCharacterOfPosition(d.start);
+                notes.push(`  ${lc.line + 1}:${lc.character + 1}  TS${d.code}: ${d.messageText}`);
+              } else {
+                notes.push(`  TS${d.code}: ${d.messageText}`);
+              }
+            }
+          }
+        }
+        if (notes.length === 0) return result;
+        return { ...result, text: `${result.text}\n\n${notes.join('\n')}` };
+      } catch {
+        return result; // never false-fail an edit
+      }
+    },
+    postExecute() {
+    },
+  },
 ];
 
 /**
@@ -430,8 +478,6 @@ export async function runPipeline(
       return { ok: false, isError: true, text: denial.message, errorCode: denial.errorCode };
     }
   }
-  // FASE 5 — addon event bus: observe/rewrite/deny via addon hooks (Claude
-  // Code mods middleware). A deny short-circuits before the real execution.
   {
     const { emitAddonEvent } = await import('../addons/registry.js');
     const { createAddonApi } = await import('../addons/api.js');
@@ -442,7 +488,6 @@ export async function runPipeline(
     if (outcome.result) {
       const r = outcome.result as Partial<HarnessToolResult>;
       if (typeof r.ok === 'boolean' && typeof r.text === 'string' && typeof r.isError === 'boolean') {
-        // An addon answered on behalf of the real tool — skip execution.
         call.durationMs = 0;
         return { ok: r.ok, text: r.text, isError: r.isError };
       }
@@ -461,13 +506,12 @@ export async function runPipeline(
     };
   }
   call.durationMs = Date.now() - started;
-  // FASE 5 — addon event bus: tool.result observation (errors never break the tool).
   {
     const { emitAddonEvent } = await import('../addons/registry.js');
     const { createAddonApi } = await import('../addons/api.js');
     try {
       await emitAddonEvent('tool.result', { tool: call.wireName, result }, createAddonApi('__harness__', process.cwd()));
-    } catch { /* observation must not break the tool */ }
+    } catch {  }
   }
   for (const hook of hooks) {
     try {

@@ -20,7 +20,7 @@ import { atomicWriteJson } from './atomicWrite.js';
 import { morikoHome } from './paths.js';
 
 const LEDGER_FILE = path.join(morikoHome, 'usage-ledger.json');
-const RETENTION_MS = 400 * 24 * 60 * 60 * 1000; // 13+ months — covers the 12-month window
+const RETENTION_MS = 400 * 24 * 60 * 60 * 1000;
 const MAX_ENTRIES = 10_000;
 const FLUSH_DEBOUNCE_MS = 2_000;
 

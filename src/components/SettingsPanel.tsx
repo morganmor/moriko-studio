@@ -1,24 +1,29 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Braces,
   Check,
   ChevronDown,
   ChevronUp,
   Code2,
   Eye,
   Gauge,
+  Globe,
   Link2,
   Loader2,
   Lock,
   MapPin,
   Plus,
+  Plug,
   RefreshCw,
   Save,
+  Search,
   ShieldCheck,
   Sparkles,
   Trash2,
   ToyBrick,
   Wand2,
   X,
+  Zap,
 } from './icons';
 
 import { PROMPT_PRESETS } from '../lib/prompts';
@@ -42,30 +47,24 @@ import { storage, uid } from '../lib/storage';
 import { useChatController } from '../hooks/useChatController';
 import { DEFAULT_SETTINGS, useEffectiveSettings, useStore } from '../store/useStore';
 import type { ChatSettings, ImageSizeMode, SavedPrompt, ThinkingLevel, TrustTier } from '../types';
-import { CollapseSection, Modal, RightDockCloseButton, RightDockSlot, Tip, Toggle, cx } from './ui';
+import { EffortSlider } from './EffortSlider';
+import { CollapseSection, Modal, RightDockCloseButton, RightDockSlot, Segmented, Toggle, cx } from './ui';
+import { Popover } from './Popover';
 
 /**
  * Copy for every canonical level. WHICH of these are offered is decided per
  * model by `thinkingLevelsFor` (models.dev) — this table only names them.
  */
-/** Exported for the composer's quick Model/Effort picker — one label table, two UIs. */
+/** Exported for the composer's quick Model/Effort picker — one label table, two UIs.
+ *  `hint` renders under the dot-matrix level word (screenshot-008 copy). */
 export const THINKING_COPY: Record<ThinkingLevel, { label: string; hint: string }> = {
-  off: { label: 'Off', hint: 'Fastest. No reasoning budget is sent.' },
-  minimal: {
-    label: 'Minimal',
-    hint: 'A token amount of reasoning — the lightest level some models accept.',
-  },
-  low: { label: 'Low', hint: 'Minimal reasoning — good for lookups.' },
-  medium: { label: 'Medium', hint: 'Balanced default for most work.' },
-  high: { label: 'High', hint: 'Deep reasoning. Best for hard multi-step problems.' },
-  xhigh: {
-    label: 'Xhigh',
-    hint: 'Deeper than high — offered only by models whose catalog entry lists it.',
-  },
-  max: {
-    label: 'Max',
-    hint: 'Maximum reasoning budget — offered only by models whose catalog entry lists it.',
-  },
+  off: { label: 'Off', hint: 'Fastest replies.' },
+  minimal: { label: 'Minimal', hint: 'Light simple tasks.' },
+  low: { label: 'Low', hint: 'Quick and focused.' },
+  medium: { label: 'Medium', hint: 'Balanced for everyday tasks.' },
+  high: { label: 'High', hint: 'Deep for heavy and complex task.' },
+  xhigh: { label: 'Xhigh', hint: 'More Deep Reasoning' },
+  max: { label: 'Max', hint: 'Maximum Capability. Slowest.' },
 };
 
 /** Fallback slider ceiling when no models.dev entry exists: dragging fully
@@ -128,6 +127,8 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
   const setRightPanelMode = useStore((state) => state.setRightPanelMode);
 
   const [presetsOpen, setPresetsOpen] = useState(false);
+  /** Design pop-presets: an anchored menu instead of a full modal. */
+  const presetsRef = useRef<HTMLSpanElement>(null);
   const [savedOpen, setSavedOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   /** Image Studio's "switch to edit model" chip asks for the picker. */
@@ -138,7 +139,6 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
     useStore.getState().consumeImagePickerRequest();
   }, [imagePickerWanted]);
   const [keyDialogOpen, setKeyDialogOpen] = useState(false);
-  const [thinkingOpen, setThinkingOpen] = useState(false);
   const [keyTarget, setKeyTarget] = useState('');
   const [keyDraft, setKeyDraft] = useState('');
 
@@ -157,9 +157,6 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
   const keyTargetProvider = providers.find((entry) => entry.id === keyTarget);
   const modelMeta = useStore((state) => state.modelMeta);
   // P5 BUGFIX: the metadata was never loaded after P3 moved it off boot — the
-  // 4A RETRY: the original fetch is single-flight and NEVER retried, so a
-  // transient failure left the thinking dropdown stale until a manual refresh.
-  // Re-attempt whenever the map is still empty while the panel is open.
   useEffect(() => {
     void useStore.getState().ensureModelMeta();
   }, []);
@@ -175,15 +172,6 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
   const thinking = thinkingLadderFor(modelMeta, providerId, model ?? '');
   const thinkingOptions = thinking.levels;
   const effectiveThinking = nearestThinkingLevel(thinkingOptions, settings.thinkingLevel);
-  const thinkingSubstituted = effectiveThinking !== settings.thinkingLevel;
-  const thinkingSourceNote =
-    thinking.source === 'provider'
-      ? ''
-      : thinking.source === 'model'
-        ? ' This provider is not in models.dev, so every level the catalog records for this model is shown.'
-        : thinking.source === 'none'
-          ? ' models.dev does not record this model as a reasoning model.'
-          : ' No models.dev entry for this model, so the portable ladder is shown.';
 
   const openKeyDialog = (targetId: string) => {
     setKeyTarget(targetId);
@@ -193,56 +181,100 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
 
   return (
 	  <aside
-		className="my-5 ml-2 mr-4 flex h-[calc(100%-2.5rem)] shrink-0 flex-col overflow-hidden rounded-2xl border border-hairline bg-elevated shadow-workspace"
-		style={{ width: width ?? 300 }}
+		className="dock-in"
+		style={{ width: width ?? 340, height: '100%', flexShrink: 0 }}
 		aria-label="Configuration"
 	  >
-      <header className="flex h-14 shrink-0 items-center justify-between gap-2 px-4">
+      <header className="dock-head">
         <RightDockSlot mode={rightPanelMode} onChange={setRightPanelMode} />
+        <span style={{ flex: 1 }} />
         {onClose ? (
           <button
             type="button"
-            className="icon-button"
+            className="ib"
             onClick={onClose}
             aria-label="Close configuration"
           >
-            <X className="h-4 w-4" aria-hidden="true" />
+            <X className="ic" aria-hidden="true" />
           </button>
         ) : (
-          // Generic dock close — same component every right-dock panel renders.
           <RightDockCloseButton />
         )}
       </header>
 
-      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-4">
+      <div className="dock-body" style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingLeft: 4, paddingRight: 4, paddingBottom: 16 }}>
         {}
-        <section className="space-y-2.5">
+        <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ position: 'relative' }}>
           <button
             type="button"
-            onClick={() => setPickerOpen(true)}
-            className="w-full rounded-card border border-hairline bg-surface px-3.5 py-3 text-left transition-colors hover:border-accent/50"
+            onClick={() => setPickerOpen((open) => !open)}
+            className="card"
+            style={{ width: '100%', textAlign: 'left' }}
             aria-label="Change model or provider"
+            aria-haspopup="listbox"
+            aria-expanded={pickerOpen}
           >
-            <span className="block truncate text-base font-medium text-ink">
-              {(isImageStudio ? imageModel : model) || 'No model selected'}
-            </span>
-            <span className="mt-1 block truncate text-[12px] text-muted">
-              {(isImageStudio ? imageProvider?.label : provider?.label) ??
-                'No provider — pick one to start'}
+            {}
+            <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ display: 'flex', minWidth: 0, flex: 1, flexDirection: 'column' }}>
+                <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 14, fontWeight: 600, color: 'rgb(var(--c-ink))' }}>
+                  {(isImageStudio ? imageModel : model) || 'No model selected'}
+                </span>
+                <span style={{ marginTop: 2, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12, color: 'var(--faint)' }}>
+                  {isImageStudio
+                    ? ((imageProvider?.label) ?? 'No provider — pick one to start')
+                    : provider?.label
+                      ? [
+                          provider.label,
+                          modelMetaInfo?.context
+                            ? `${Math.round(modelMetaInfo.context / 1000)}k context`
+                            : null,
+                          modelMetaInfo?.maxOut
+                            ? `${Math.round(modelMetaInfo.maxOut / 1000)}k max out`
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')
+                      : 'No provider — pick one to start'}
+                </span>
+              </span>
+              <ChevronDown
+                className="ic"
+                style={{ flexShrink: 0, color: 'var(--faint)', transform: pickerOpen ? 'rotate(180deg)' : undefined, transition: 'transform .15s' }}
+                aria-hidden="true"
+              />
             </span>
             {}
+            {isImageStudio ? null : (
+              <span className="caps" style={{ marginTop: 10 }} aria-hidden="true">
+                {modelMetaInfo?.tools !== false ? (
+                  <span className="cap">Tools</span>
+                ) : null}
+                {modelMetaInfo?.imageIn ? (
+                  <span className="cap">Vision</span>
+                ) : null}
+                {thinkingOptions.length > 0 ? (
+                  <>
+                    <span className="cap a">Reasoning</span>
+                    <span className="cap">{thinkingOptions.length} thinking levels</span>
+                  </>
+                ) : null}
+              </span>
+            )}
+            {}
             {isImageStudio ? (
-              <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              <span style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
                 {imageModelCaps ? (
                   <>
-                    <span className="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent">
+                    <span className="cap a" style={{ fontSize: 10, padding: '2px 6px' }}>
                       {imageModelCaps.modes.includes('edit')
                         ? imageModelCaps.modes.includes('text-to-image')
                           ? 'T2I + Edit'
                           : 'Edit'
                         : 'T2I'}
                     </span>
-                    <span className="min-w-0 flex-1 truncate text-[11px] text-faint">
+                    <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11, color: 'var(--faint)' }}>
                       {imageModelCaps.modes.includes('edit')
                         ? imageModelCaps.modes.includes('text-to-image')
                           ? `generates & edits · up to ${imageModelCaps.maxReferences} reference${imageModelCaps.maxReferences === 1 ? '' : 's'}`
@@ -251,90 +283,77 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
                     </span>
                   </>
                 ) : (
-                  <span className="text-[11px] text-warning">Unclassified — may fail at the provider</span>
+                  <span style={{ fontSize: 11, color: 'rgb(var(--c-warn))' }}>Unclassified — may fail at the provider</span>
                 )}
               </span>
             ) : null}
           </button>
+          {pickerOpen ? (
+            <ModelPicker
+              variant={isImageStudio ? 'image' : 'chat'}
+              onDone={() => setPickerOpen(false)}
+              onAddProvider={() => {
+                onOpenProviders();
+                onNavigate?.();
+                setPickerOpen(false);
+              }}
+            />
+          ) : null}
+          </div>
 
           {}
           {isImageStudio ? null : (
-            <div className="rounded-card border border-hairline bg-surface px-3 py-2.5">
-              <span className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-faint">
-                <ShieldCheck className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <div className="card" style={{ padding: '10px 12px' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--faint)' }}>
+                <ShieldCheck className="ic" aria-hidden="true" />
                 Send as
               </span>
-              <div className="mt-1.5 flex overflow-hidden rounded-control border border-hairline text-[11.5px]">
-                {(['user', 'operator', 'admin'] as const).map((role) => (
-                  <Tip key={role} label={role === 'user' ? 'Plain chat (default)' : role === 'operator' ? 'Slot 2: an operator-context sidecar is prepended — the model treats your harness statements as fact, not bluff' : 'Slot 3: an admin label on the wire — sending never raises the enforcement ladder'} className="min-w-0 flex-1">
-                  <button
-                    type="button"
-                    onClick={() => setComposerRole(role)}
-                    className={cx(
-                      'min-w-0 flex-1 whitespace-nowrap px-1.5 py-1 text-center transition-colors',
-                      composerRole === role
-                        ? role === 'admin'
-                          ? 'bg-danger text-white'
-                          : role === 'operator'
-                            ? 'bg-warn text-white'
-                            : 'bg-accent text-white'
-                        : 'bg-surface text-muted hover:bg-elevated',
-                    )}
-                  >
-                    {role === 'user' ? 'User' : role === 'operator' ? 'Operator' : 'Admin'}
-                  </button>
-                  </Tip>
-                ))}
-              </div>
+              <Segmented
+                ariaLabel="Send as"
+                style={{ marginTop: 6 }}
+                value={composerRole}
+                onChange={(next) => setComposerRole(next as 'user' | 'operator' | 'admin')}
+                options={[
+                  { value: 'user', label: 'User', tip: 'Plain chat (default)' },
+                  { value: 'operator', label: 'Operator', tip: 'Slot 2: an operator-context sidecar is prepended — the model treats your harness statements as fact, not bluff' },
+                  { value: 'admin', label: 'Admin', tip: 'Slot 3: an admin label on the wire — sending never raises the enforcement ladder' },
+                ]}
+              />
             </div>
           )}
 
           {isImageStudio ? (
             <>
               {}
-              <div className="rounded-card border border-hairline bg-surface px-3 py-2.5">
-                <span className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-faint">
-                  <Gauge className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <div className="card" style={{ padding: '10px 12px' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--faint)' }}>
+                  <Gauge className="ic" aria-hidden="true" />
                   Output
                 </span>
 
                 {allowedModes.length > 1 ? (
-                  <div className="mt-1.5 flex overflow-hidden rounded-control border border-hairline text-[11.5px]">
-                    {SIZE_MODE_OPTIONS.filter((option) =>
+                  <Segmented
+                    ariaLabel="Output size mode"
+                    style={{ marginTop: 6 }}
+                    value={effectiveImageMode}
+                    onChange={(next) => setImageStudioOutput({ sizeMode: next as ImageSizeMode })}
+                    options={SIZE_MODE_OPTIONS.filter((option) =>
                       (allowedModes as string[]).includes(option.value),
-                    ).map((option) => (
-                      <button
-                        key={option.value}
-                        type="button"
-                        onClick={() => setImageStudioOutput({ sizeMode: option.value as ImageSizeMode })}
-                        className={cx(
-                          'min-w-0 flex-1 whitespace-nowrap px-1.5 py-1 text-center transition-colors',
-                          effectiveImageMode === option.value
-                            ? 'bg-accent text-white'
-                            : 'bg-surface text-muted hover:bg-elevated',
-                        )}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </div>
+                    ).map((option) => ({ value: option.value, label: option.label }))}
+                  />
                 ) : (
-                  <p className="mt-1.5 text-[11.5px] text-faint">This provider ignores size overrides.</p>
+                  <p style={{ margin: '6px 0 0', fontSize: 11.5, color: 'var(--faint)' }}>This provider ignores size overrides.</p>
                 )}
 
                 {effectiveImageMode === 'ratio' ? (
-                  <div className="mt-2 flex flex-wrap gap-1.5">
+                  <div className="chipset" style={{ marginTop: 8 }}>
                     {ASPECT_RATIOS.map((ratio) => (
                       <button
                         key={ratio}
                         type="button"
                         onClick={() => setImageStudioOutput({ aspectRatio: ratio })}
-                        className={cx(
-                          'rounded-full border px-2.5 py-1 font-mono text-[11px] transition-colors',
-                          imageAspectRatio === ratio
-                            ? 'border-accent/60 bg-accent-soft text-ink'
-                            : 'border-hairline bg-surface text-muted hover:border-accent/50 hover:text-ink',
-                        )}
+                        className={cx('sc', imageAspectRatio === ratio && 'on')}
+                        style={{ fontFamily: 'var(--f-mono)', fontSize: 11 }}
                       >
                         {ratio}
                       </button>
@@ -343,7 +362,7 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
                 ) : null}
 
                 {effectiveImageMode === 'pixels' ? (
-                  <div className="mt-2 flex items-center gap-1 text-[12px] text-muted">
+                  <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--muted)' }}>
                     <input
                       aria-label="Output width in pixels"
                       type="number"
@@ -351,7 +370,8 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
                       max={PX_MAX}
                       value={imagePixelWidth}
                       onChange={(event) => setImageStudioOutput({ pixelWidth: event.target.value })}
-                      className="field w-20 px-2 py-1 text-center text-[12px] tabular-nums"
+                      className="field"
+                      style={{ width: 80, padding: '4px 8px', textAlign: 'center', fontSize: 12, fontVariantNumeric: 'tabular-nums' }}
                     />
                     <span aria-hidden="true">×</span>
                     <input
@@ -361,20 +381,21 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
                       max={PX_MAX}
                       value={imagePixelHeight}
                       onChange={(event) => setImageStudioOutput({ pixelHeight: event.target.value })}
-                      className="field w-20 px-2 py-1 text-center text-[12px] tabular-nums"
+                      className="field"
+                      style={{ width: 80, padding: '4px 8px', textAlign: 'center', fontSize: 12, fontVariantNumeric: 'tabular-nums' }}
                     />
-                    <span className="text-faint">px</span>
+                    <span style={{ color: 'var(--faint)' }}>px</span>
                   </div>
                 ) : null}
 
                 {effectiveImageMode === 'pixels' && !imagePixelsOk ? (
-                  <p className="mt-1.5 text-[11px] text-warning">
+                  <p style={{ margin: '6px 0 0', fontSize: 11, color: 'rgb(var(--c-warn))' }}>
                     Width and height must be {PX_MIN}–{PX_MAX}.
                   </p>
                 ) : null}
               </div>
 
-              <p className="text-[11px] leading-relaxed text-faint">
+              <p style={{ margin: 0, fontSize: 11, lineHeight: 1.625, color: 'var(--faint)' }}>
                 Image generation calls the selected provider's base URL with its key.
                 Choosing a chat model will fail at the provider.
               </p>
@@ -382,7 +403,8 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
                 <button
                   type="button"
                   onClick={() => openKeyDialog(imageProviderId)}
-                  className="pill-button w-full justify-center border border-warning/50 py-1.5 text-[12px] text-warning"
+                  className="btn ghost"
+                  style={{ width: '100%', justifyContent: 'center', fontSize: 12, borderColor: 'rgb(var(--c-warn) / 0.5)', color: 'rgb(var(--c-warn))' }}
                 >
                   Add key for {imageProvider?.label}
                 </button>
@@ -392,7 +414,8 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
             <button
               type="button"
               onClick={() => openKeyDialog(providerId)}
-              className="pill-button w-full justify-center border border-warning/50 py-1.5 text-[12px] text-warning"
+              className="btn ghost"
+              style={{ width: '100%', justifyContent: 'center', fontSize: 12, borderColor: 'rgb(var(--c-warn) / 0.5)', color: 'rgb(var(--c-warn))' }}
             >
               Add key for {provider?.label}
             </button>
@@ -412,49 +435,88 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
         <ProbationSection conversationId={activeConversation?.id ?? ''} settings={settings} updateSettings={updateSettings} />
 
         {}
-        <section>
-          <div className="mb-1.5 flex items-center justify-between">
-            <label className="field-label mb-0" htmlFor="system-prompt">
-              System Prompt
-            </label>
-            <span className="flex items-center gap-2">
+        <section className="card" style={{ padding: 14 }}>
+          <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <span style={{ fontSize: 11.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--faint)' }}>
+              System prompt
+            </span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span ref={presetsRef} style={{ position: 'relative' }}>
               <button
                 type="button"
-                onClick={() => setPresetsOpen(true)}
-                className="inline-flex items-center gap-1 text-[11px] font-medium text-accent hover:underline"
+                onClick={() => setPresetsOpen((value) => !value)}
+                aria-haspopup="menu"
+                aria-expanded={presetsOpen}
+                className="btn xs"
               >
-                <Wand2 className="h-3 w-3" aria-hidden="true" />
+                <Wand2 className="ic" aria-hidden="true" />
                 Presets
               </button>
-              <button
-                type="button"
-                onClick={() => setSavedOpen(true)}
-                className="inline-flex items-center gap-1 text-[11px] font-medium text-accent hover:underline"
+              <Popover
+                open={presetsOpen}
+                onClose={() => setPresetsOpen(false)}
+                anchorRef={presetsRef}
+                label="System prompt presets"
+                placement="bottom-end"
+                width={340}
               >
-                <Save className="h-3 w-3" aria-hidden="true" />
-                Saved
-              </button>
+                  <p className="pop-h">System prompt presets</p>
+                  {PROMPT_PRESETS.map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      role="menuitem"
+                      className="mi"
+                      onClick={() => {
+                        updateSettings({ systemInstruction: preset.prompt });
+                        setPresetsOpen(false);
+                        showNotice('settings.presetApplied', { label: preset.label });
+                      }}
+                    >
+                      <Sparkles className="ic" aria-hidden="true" />
+                      <span>
+                        {preset.label}
+                        <small>{preset.hint}</small>
+                      </span>
+                    </button>
+                  ))}
+              </Popover>
+            </span>
             </span>
           </div>
 
           <textarea
             id="system-prompt"
-            rows={5}
+            rows={4}
             value={settings.systemInstruction}
             onChange={(event) => updateSettings({ systemInstruction: event.target.value })}
-            placeholder="Optional tone and style instructions for the model"
-            className="field resize-y text-[12.5px] leading-relaxed"
+            placeholder="You are Moriko, a helpful pixel cat…"
+            className="field"
+            style={{ fontSize: 12.5, lineHeight: 1.625 }}
           />
 
-          <div className="mt-1.5 flex items-center justify-between">
-            <p className="text-[11px] text-faint">
-              {settings.systemInstruction.trim().length} characters
-            </p>
+          <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, color: 'var(--faint)' }}>
+            <span>{settings.systemInstruction.trim().length} chars</span>
+            <span>~{Math.max(0, Math.round(settings.systemInstruction.trim().length / 4))} tokens</span>
+            <span className="saved">
+              <Check className="ic" aria-hidden="true" />
+              Saved
+            </span>
+            <span style={{ flex: 1 }} />
+            <button
+              type="button"
+              onClick={() => {
+                setSavedOpen(true);
+              }}
+              className="btn ghost xs"
+            >
+              Saved
+            </button>
             <button
               type="button"
               onClick={() => updateSettings({ systemInstruction: '' })}
               disabled={!settings.systemInstruction}
-              className="text-[11px] text-muted hover:text-ink disabled:opacity-40"
+              className="btn ghost xs"
             >
               Clear
             </button>
@@ -462,84 +524,32 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
         </section>
 
         {}
-        <section>
-          <span className="field-label" id="thinking-level-label">
-            Thinking level
-          </span>
-          <div className="relative">
-            {/* Native <select> can't be animated (the OS draws the list), so
-                this is a custom listbox whose options open with the SAME
-                CollapseSection easing as every other dropdown. */}
-            <button
-              type="button"
-              role="combobox"
-              aria-haspopup="listbox"
-              aria-expanded={thinkingOpen}
-              aria-labelledby="thinking-level-label"
-              onClick={() => setThinkingOpen((value) => !value)}
-              onBlur={() => setThinkingOpen(false)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault();
-                  setThinkingOpen((value) => !value);
-                }
-                if (event.key === 'Escape') setThinkingOpen(false);
-              }}
-              className={cx(
-                'field flex w-full items-center justify-between pr-8 text-left text-[13px]',
-                thinkingOpen && 'border-accent/50',
-              )}
-            >
-              <span>{THINKING_COPY[effectiveThinking].label}</span>
-              <ChevronDown
-                className={cx(
-                  'pointer-events-none absolute right-2.5 h-4 w-4 text-faint transition-transform duration-200',
-                  thinkingOpen && 'rotate-180',
-                )}
-                aria-hidden="true"
-              />
-            </button>
-            <div className="absolute inset-x-0 top-full z-20">
-              <CollapseSection open={thinkingOpen}>
-                <div className="mt-1 overflow-hidden rounded-control border border-hairline bg-surface shadow-lg" role="listbox">
-                  {thinkingOptions.map((value) => (
-                    <button
-                      key={value}
-                      type="button"
-                      role="option"
-                      aria-selected={value === effectiveThinking}
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => {
-                        updateSettings({ thinkingLevel: value as ThinkingLevel });
-                        setThinkingOpen(false);
-                      }}
-                      className={cx(
-                        'block w-full px-3 py-1.5 text-left text-[13px] transition-colors',
-                        value === effectiveThinking ? 'bg-accent/15 text-ink' : 'text-muted hover:bg-elevated hover:text-ink',
-                      )}
-                    >
-                      {THINKING_COPY[value].label}
-                    </button>
-                  ))}
-                </div>
-              </CollapseSection>
-            </div>
+        <section className="card" style={{ padding: 16 }}>
+          <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--faint)' }} id="thinking-level-label">
+              <Zap className="ic" style={{ width: 13, height: 13, color: 'rgb(var(--c-accent))' }} aria-hidden="true" />
+              Thinking level
+            </span>
+            <span style={{ fontFamily: 'var(--f-mono)', fontSize: 12, fontWeight: 600, color: 'rgb(var(--c-accent))' }}>
+              {thinkingOptions.indexOf(effectiveThinking) + 1}/{thinkingOptions.length}
+            </span>
           </div>
-          <p className="mt-1.5 text-[11px] leading-relaxed text-faint">
-            {THINKING_COPY[effectiveThinking].hint}
-            {thinkingSubstituted
-              ? ` ${THINKING_COPY[settings.thinkingLevel].label} is not one this model offers, so ${THINKING_COPY[effectiveThinking].label} is what goes on the wire.`
-              : ''}
-            {thinkingSourceNote}
-          </p>
+          <EffortSlider
+            label="Thinking level"
+            className="effort-desktop effort-rail"
+            labels={thinkingOptions.map((level) => THINKING_COPY[level].label)}
+            hints={thinkingOptions.map((level) => THINKING_COPY[level].hint)}
+            value={Math.max(0, thinkingOptions.indexOf(effectiveThinking))}
+            onChange={(index) => updateSettings({ thinkingLevel: thinkingOptions[index] as ThinkingLevel })}
+          />
         </section>
 
         {}
-        <section className="space-y-3">
+        <section className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ fontSize: 11.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--faint)' }}>Sampling</div>
           <Slider
             id="temperature"
             label="Temperature"
-            hint="Higher values produce more varied output."
             value={settings.temperature}
             min={0}
             max={2}
@@ -549,7 +559,6 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
           <Slider
             id="top-p"
             label="Top P"
-            hint="Nucleus sampling cutoff."
             value={settings.topP}
             min={0}
             max={1}
@@ -559,11 +568,6 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
           <Slider
             id="max-tokens"
             label="Max output tokens"
-            hint={
-              modelMetaInfo?.maxOut
-                ? `${model} reports an output limit of ${modelMetaInfo.maxOut.toLocaleString()} tokens (models.dev).`
-                : 'Drag fully right for Max — the provider then applies its own limit.'
-            }
             value={settings.maxOutputTokens ?? sliderCeiling}
             min={256}
             max={sliderCeiling}
@@ -580,29 +584,33 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
         </section>
 
         {}
-        <section>
-          <div className="mb-2 flex items-center gap-2">
-            <ToyBrick className="h-3.5 w-3.5 text-faint" aria-hidden="true" />
-            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-faint">Tools</h3>
+        <section className="card" style={{ padding: 14 }}>
+          <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <ToyBrick className="ic" style={{ color: 'var(--faint)' }} aria-hidden="true" />
+            <h3 style={{ margin: 0, fontSize: 11.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--faint)' }}>Tools</h3>
           </div>
 
-          <div className="space-y-0.5">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             <ToolToggle
+              icon={<Globe className="ic" aria-hidden="true" />}
               label="Web Access"
               checked={settings.webAccess}
               onChange={(value) => updateSettings({ webAccess: value })}
             />
             <ToolToggle
+              icon={<Braces className="ic" aria-hidden="true" />}
               label="Structured outputs"
               checked={settings.structuredOutputs}
               onChange={(value) => updateSettings({ structuredOutputs: value })}
             />
             <ToolToggle
+              icon={<Plug className="ic" aria-hidden="true" />}
               label="Use MCP"
               checked={settings.useMcp}
               onChange={(value) => updateSettings({ useMcp: value })}
             />
             <ToolToggle
+              icon={<Link2 className="ic" aria-hidden="true" />}
               label="Fetch Web"
               checked={settings.fetchWeb}
               disabled={settings.webAccess === false}
@@ -620,33 +628,34 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
         />
 
         {}
-        <section>
-          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-faint">
+        <section className="card" style={{ padding: 14 }}>
+          <h3 style={{ margin: '0 0 8px', fontSize: 11.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--faint)' }}>
             Advanced
           </h3>
-          <div className="flex gap-1.5">
+          <div style={{ display: 'flex', gap: 6 }}>
             <button
               type="button"
               onClick={() => {
                 updateSettings({ ...DEFAULT_SETTINGS });
                 showNotice('settings.reset');
               }}
-              className="pill-button flex-1 justify-center border border-hairline py-1.5 text-[12px] text-muted hover:text-ink"
+              className="btn ghost"
+              style={{ flex: 1, justifyContent: 'center', fontSize: 12 }}
             >
-              <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+              <RefreshCw className="ic" aria-hidden="true" />
               Reset
             </button>
           </div>
 
           {activeConversation ? (
-            <dl className="mt-3 space-y-1 rounded-control border border-hairline bg-surface px-3 py-2 text-[11px]">
-              <div className="flex justify-between gap-2">
-                <dt className="text-faint">Turns</dt>
-                <dd className="tabular-nums text-muted">{activeConversation.turns.length}</dd>
+            <dl className="card" style={{ margin: '12px 0 0', padding: '8px 12px', fontSize: 11 }}>
+              <div className="drow" style={{ padding: '4px 0' }}>
+                <dt style={{ color: 'var(--faint)' }}>Turns</dt>
+                <dd style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--muted)' }}>{activeConversation.turns.length}</dd>
               </div>
-              <div className="flex justify-between gap-2">
-                <dt className="text-faint">Created</dt>
-                <dd className="text-muted">
+              <div className="drow" style={{ padding: '4px 0' }}>
+                <dt style={{ color: 'var(--faint)' }}>Created</dt>
+                <dd style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--muted)' }}>
                   {new Date(activeConversation.createdAt).toLocaleString()}
                 </dd>
               </div>
@@ -656,72 +665,6 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
           </>
         )}
       </div>
-
-      {}
-      <Modal
-        open={pickerOpen}
-        onClose={() => setPickerOpen(false)}
-        title={isImageStudio ? 'Select an image model' : 'Select a model'}
-        description={
-          isImageStudio
-            ? 'Pick any provider, then one of its models for Image Studio. Your choice applies immediately.'
-            : 'Pick a provider, then one of its models. Your choice applies immediately.'
-        }
-        size="max-w-3xl"
-        footer={
-          <button
-            type="button"
-            className="pill-button text-muted hover:text-ink"
-            onClick={() => setPickerOpen(false)}
-          >
-            Close
-          </button>
-        }
-      >
-        <ModelPicker
-          variant={isImageStudio ? 'image' : 'chat'}
-          onDone={() => setPickerOpen(false)}
-          onAddProvider={() => {
-            onOpenProviders();
-            onNavigate?.();
-            setPickerOpen(false);
-          }}
-        />
-      </Modal>
-
-      {}
-      <Modal
-        open={presetsOpen}
-        onClose={() => setPresetsOpen(false)}
-        title="System prompt presets"
-        description="Each preset states a role, its constraints, and the output contract. Edit after applying."
-        size="max-w-xl"
-      >
-        <ul className="space-y-2">
-          {PROMPT_PRESETS.map((preset) => (
-            <li key={preset.id}>
-              <button
-                type="button"
-                onClick={() => {
-                  updateSettings({ systemInstruction: preset.prompt });
-                  setPresetsOpen(false);
-                  showNotice('settings.presetApplied', { label: preset.label });
-                }}
-                className="w-full rounded-control border border-hairline bg-surface p-3 text-left transition-colors hover:border-accent/50 hover:bg-elevated"
-              >
-                <span className="flex items-center gap-2">
-                  <Sparkles className="h-3.5 w-3.5 text-accent" aria-hidden="true" />
-                  <span className="text-[13px] font-medium text-ink">{preset.label}</span>
-                  <span className="text-[11px] text-faint">· {preset.hint}</span>
-                </span>
-                <span className="mt-1.5 line-clamp-2 block text-[12px] leading-relaxed text-muted">
-                  {preset.prompt}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      </Modal>
 
       {}
       <SavedPromptsModal
@@ -736,12 +679,12 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
         onClose={() => setKeyDialogOpen(false)}
         title={`API key for ${keyTargetProvider?.label ?? ''}`}
         description="Stored in the device vault (~/.moriko/api-keys.json) — it never reaches this browser."
-        size="max-w-md"
+        size="sm"
         footer={
           <>
             <button
               type="button"
-              className="pill-button text-muted hover:text-ink"
+              className="btn ghost"
               onClick={() => setKeyDialogOpen(false)}
             >
               Cancel
@@ -762,7 +705,7 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
                   setKeyDialogOpen(false);
                 })();
               }}
-              className="pill-button bg-accent text-accent-ink"
+              className="btn primary"
             >
               Save key
             </button>
@@ -779,14 +722,15 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
           onChange={(event) => setKeyDraft(event.target.value)}
           placeholder="sk-…"
           autoComplete="off"
-          className="field font-mono text-[13px]"
+          className="field"
+          style={{ fontSize: 13 }}
         />
-        <p className="mt-2 text-[12px] leading-relaxed text-muted">
-          For a key shared by every browser, put it in <code className="font-mono">.env</code>{' '}
+        <p style={{ margin: '8px 0 0', fontSize: 12, lineHeight: 1.625, color: 'var(--muted)' }}>
+          For a key shared by every browser, put it in <code style={{ fontFamily: 'var(--f-mono)' }}>.env</code>{' '}
           instead and restart the server.
         </p>
         {providerHasKey(keyTargetProvider) ? (
-          <p className="mt-2 text-[12px] text-success">A key is already saved on this device.</p>
+          <p style={{ margin: '8px 0 0', fontSize: 12, color: 'rgb(var(--c-ok))' }}>A key is already saved on this device.</p>
         ) : null}
       </Modal>
     </aside>
@@ -816,8 +760,7 @@ function ModelPicker({
 
   const providerId = variant === 'image' ? imageProviderId : chatProviderId;
   const model = variant === 'image' ? imageModel : chatModel;
-  const [selectedId, setSelectedId] = useState(providerId);
-  const selected = providers.find((entry) => entry.id === selectedId);
+  const modelMeta = useStore((state) => state.modelMeta);
 
   const relevantProviders = providers.filter((entry) => {
     const caps = entry.imageCapabilities?.models;
@@ -838,113 +781,149 @@ function ModelPicker({
     onDone();
   };
 
+  const [query, setQuery] = useState('');
+
+  const modelRows = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    const rows: { providerId: string; providerLabel: string; hasKey: boolean; modelId: string; context?: number }[] = [];
+    for (const entry of relevantProviders) {
+      const hasKey = providerHasKey(entry);
+      const capsMap = entry.imageCapabilities?.models;
+      const visible = capsMap
+        ? entry.models.filter((id) => (variant === 'image' ? Boolean(capsMap[id]) : !capsMap[id]))
+        : entry.models;
+      const providerHit = !needle || entry.label.toLowerCase().includes(needle);
+      for (const modelId of visible) {
+        if (needle && !providerHit && !modelId.toLowerCase().includes(needle)) continue;
+        rows.push({
+          providerId: entry.id,
+          providerLabel: entry.label,
+          hasKey,
+          modelId,
+          context: lookupModelMeta(modelMeta, modelId)?.context ?? undefined,
+        });
+      }
+    }
+    return rows;
+  }, [relevantProviders, variant, query, modelMeta]);
+
+  /** Inline dropdown (not a modal): sits inside the picker card wrapper. */
   return (
-    <div className="grid gap-4 md:grid-cols-[220px_1fr]">
-      {}
-      <div className="space-y-1">
-        {onAddProvider ? (
-          <button
-            type="button"
-            onClick={onAddProvider}
-            className="flex w-full items-center gap-2 rounded-control border border-dashed border-hairline px-3 py-2 text-[13px] font-medium text-muted transition-colors hover:border-accent/50 hover:text-ink"
-          >
-            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-            Add provider
-          </button>
-        ) : null}
+    <div
+      role="listbox"
+      aria-label="Models"
+      style={{
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        top: 'calc(100% + 6px)',
+        zIndex: 30,
+        display: 'flex',
+        flexDirection: 'column',
+        maxHeight: 420,
+        borderRadius: 'var(--r-lg)',
+        border: '1px solid rgb(var(--c-ink) / 0.18)',
+        background: 'rgb(var(--c-panel))',
+        boxShadow: '0 12px 32px rgb(0 0 0 / 0.45)',
+        overflow: 'hidden',
+      }}
+    >
+      <div style={{ position: 'relative', padding: 10, borderBottom: '1px solid var(--line)', flexShrink: 0 }}>
+        <Search
+          className="ic"
+          style={{ position: 'absolute', left: 21, top: '50%', transform: 'translateY(-50%)', color: 'var(--faint)', pointerEvents: 'none' }}
+          aria-hidden="true"
+        />
+        <input
+          type="text"
+          role="combobox"
+          aria-expanded="true"
+          aria-label="Search models or providers"
+          placeholder="Search models or providers"
+          autoComplete="off"
+          className="field"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          style={{ height: 36, paddingLeft: 32, background: 'rgb(var(--c-elev))' }}
+        />
+      </div>
+
+      <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 4 }}>
         {relevantProviders.length === 0 ? (
-          <p className="px-1 text-[12px] text-muted">
+          <p style={{ padding: 16, textAlign: 'center', fontSize: 12, color: 'var(--muted)' }}>
             No providers loaded — is the local proxy running?
           </p>
         ) : null}
-        {relevantProviders.map((entry) => (
-          <button
-            key={entry.id}
-            type="button"
-            onClick={() => setSelectedId(entry.id)}
-            className={cx(
-              'flex w-full items-center gap-2 rounded-control px-3 py-2 text-left text-[13px] transition-colors',
-              entry.id === selectedId
-                ? 'bg-elevated font-medium text-ink'
-                : 'text-muted hover:bg-elevated/60 hover:text-ink',
-            )}
-          >
-            <span className="min-w-0 flex-1 truncate">{entry.label}</span>
-            {entry.id === providerId ? (
-              <Check className="h-3.5 w-3.5 shrink-0 text-success" aria-label="In use" />
-            ) : null}
-            <span
-              className={cx(
-                'shrink-0 rounded px-1.5 py-0.5 text-[10px]',
-                providerHasKey(entry)
-                  ? 'bg-success/15 text-success'
-                  : 'bg-warning/15 text-warning',
-              )}
-            >
-              {providerHasKey(entry) ? 'key' : 'no key'}
-            </span>
-          </button>
-        ))}
+        {relevantProviders.map((entry) => {
+          const rows = modelRows.filter((row) => row.providerId === entry.id);
+          if (rows.length === 0) return null;
+          return (
+            <div key={entry.id} role="group" aria-label={entry.label}>
+              <div style={{ position: 'sticky', top: -4, zIndex: 1, display: 'flex', justifyContent: 'space-between', padding: '8px 8px 4px', fontSize: 12, color: 'var(--faint)', background: 'rgb(var(--c-panel))' }}>
+                <span>{entry.label}</span>
+                <span>{rows.length}</span>
+              </div>
+              {rows.map((row) => {
+                const active = row.providerId === providerId && row.modelId === model;
+                const slash = row.modelId.lastIndexOf('/');
+                const pre = slash >= 0 ? row.modelId.slice(0, slash + 1) : '';
+                const name = row.modelId.slice(slash + 1);
+                return (
+                  <button
+                    key={row.modelId}
+                    type="button"
+                    role="option"
+                    aria-selected={active}
+                    onClick={() => choose(row.providerId, row.modelId)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      width: '100%',
+                      padding: 8,
+                      borderRadius: 8,
+                      textAlign: 'left',
+                      border: 'none',
+                      background: active ? 'rgb(var(--c-ink) / 0.06)' : 'transparent',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <span style={{ flex: 1, minWidth: 0, fontFamily: 'var(--f-mono)', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: active ? 'rgb(var(--c-accent))' : 'rgb(var(--c-ink))' }} title={row.modelId}>
+                      {pre ? <span style={{ color: 'var(--faint)' }}>{pre}</span> : null}
+                      {name}
+                    </span>
+                    {row.context ? (
+                      <span style={{ flexShrink: 0, fontSize: 12, color: 'var(--faint)' }}>{Math.round(row.context / 1000)}k</span>
+                    ) : null}
+                    {active ? (
+                      <Check className="ic" style={{ flexShrink: 0, color: 'rgb(var(--c-accent))' }} aria-label="In use" />
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+          );
+        })}
+        {relevantProviders.length > 0 && modelRows.length === 0 ? (
+          <p style={{ padding: 16, textAlign: 'center', fontSize: 13, color: 'var(--muted)' }}>
+            No matches for “{query.trim()}”. Try a provider name.
+          </p>
+        ) : null}
       </div>
 
-      {}
-      <div className="min-w-0 rounded-card border border-hairline bg-canvas p-4">
-        {selected ? (
-          <>
-            <p className="text-[12px] font-medium text-ink">{selected.label} models</p>
-            {(() => {
-              const capsMap = selected.imageCapabilities?.models;
-              const visible = capsMap
-                ? selected.models.filter((entry) =>
-                    variant === 'image' ? Boolean(capsMap[entry]) : !capsMap[entry],
-                  )
-                : selected.models;
-              if (visible.length === 0) {
-                return (
-                  <p className="mt-2 text-[12px] text-muted">
-                    {capsMap
-                      ? variant === 'image'
-                        ? 'No image-capable models on this provider.'
-                        : 'No chat models on this provider.'
-                      : 'No models listed. Add ids via the provider editor, or fetch them from the provider.'}
-                  </p>
-                );
-              }
-              return (
-                <ul className="mt-3 flex flex-wrap gap-1.5">
-                  {visible.map((entry) => {
-                    const editable = capsMap?.[entry]?.modes.includes('edit');
-                    const label = capsMap?.[entry]?.label;
-                    return (
-                      <li key={entry}>
-                          <button
-                            type="button"
-                            onClick={() => choose(selected.id, entry)}
-                            className={cx(
-                              'rounded-full border px-2.5 py-1 font-mono text-[11px] transition-colors',
-                              selected.id === providerId && entry === model
-                                ? 'border-accent/60 bg-accent-soft text-ink'
-                                : 'border-hairline bg-surface text-muted hover:border-accent/50 hover:text-ink',
-                            )}
-                          >
-                          {label ?? entry}
-                          {editable ? (
-                            <span className="ml-1.5 rounded bg-accent/15 px-1 py-px text-[9px] font-sans font-medium text-accent">
-                              EDIT
-                            </span>
-                          ) : null}
-                          </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              );
-            })()}
-          </>
-        ) : (
-          <p className="text-[12px] text-muted">Select a provider on the left.</p>
-        )}
-      </div>
+      {onAddProvider ? (
+        <div style={{ display: 'flex', gap: 6, padding: 8, borderTop: '1px solid var(--line)', flexShrink: 0 }}>
+          <button
+            type="button"
+            onClick={onAddProvider}
+            className="btn ghost"
+            style={{ flex: 1, height: 32, justifyContent: 'center', fontSize: 13, gap: 6, borderColor: 'transparent', color: 'var(--muted)' }}
+          >
+            <Plus className="ic" aria-hidden="true" />
+            Add provider
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -993,10 +972,10 @@ function SavedPromptsModal({
       onClose={onClose}
       title="Saved system prompts"
       description="Saved in this browser. Apply one to the current conversation, or delete it."
-      size="max-w-xl"
+      size=""
     >
       {}
-      <div className="flex gap-1.5">
+      <div style={{ display: 'flex', gap: 6 }}>
         <input
           value={nameDraft}
           onChange={(event) => setNameDraft(event.target.value)}
@@ -1008,39 +987,42 @@ function SavedPromptsModal({
           }}
           placeholder="Name for the current prompt (optional)"
           aria-label="Name for the current system prompt"
-          className="field text-[13px]"
+          className="field"
+          style={{ fontSize: 13 }}
         />
         <button
           type="button"
           onClick={saveCurrent}
-          className="pill-button shrink-0 bg-accent text-accent-ink"
+          className="btn primary"
+          style={{ flexShrink: 0 }}
         >
-          <Save className="h-3.5 w-3.5" aria-hidden="true" />
+          <Save className="ic" aria-hidden="true" />
           Save
         </button>
       </div>
 
-      <ul className="mt-4 space-y-2">
+      <ul style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8, padding: 0, margin: '16px 0 0', listStyle: 'none' }}>
         {prompts.length === 0 ? (
-          <li className="rounded-card border border-dashed border-hairline px-3 py-6 text-center text-[12px] text-faint">
+          <li className="empty" style={{ border: '1px dashed var(--line)', borderRadius: 'var(--r-lg)', padding: '24px 12px', textAlign: 'center', fontSize: 12, color: 'var(--faint)' }}>
             Nothing saved yet. Write a prompt, name it above, and press Save.
           </li>
         ) : null}
         {prompts.map((entry) => (
           <li
             key={entry.id}
-            className="flex items-start gap-2 rounded-control border border-hairline bg-surface p-3"
+            className="card"
+            style={{ display: 'flex', alignItems: 'flex-start', gap: 8, borderRadius: 'var(--r-md)', padding: 12 }}
           >
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-[13px] font-medium text-ink">{entry.name}</p>
-              <p className="mt-0.5 line-clamp-2 text-[12px] leading-relaxed text-muted">
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <p style={{ margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, fontWeight: 500, color: 'rgb(var(--c-ink))' }}>{entry.name}</p>
+              <p style={{ margin: '2px 0 0', fontSize: 12, lineHeight: 1.625, color: 'var(--muted)', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                 {entry.prompt}
               </p>
-              <p className="mt-1 text-[10.5px] text-faint">
+              <p style={{ margin: '4px 0 0', fontSize: 10.5, color: 'var(--faint)' }}>
                 {new Date(entry.createdAt).toLocaleString()}
               </p>
             </div>
-            <div className="flex shrink-0 items-center gap-1">
+            <div style={{ display: 'flex', flexShrink: 0, alignItems: 'center', gap: 4 }}>
               <button
                 type="button"
                 onClick={() => {
@@ -1048,7 +1030,7 @@ function SavedPromptsModal({
                   onClose();
                   showNotice('settings.promptApplied', { name: entry.name });
                 }}
-                className="pill-button border border-hairline py-1 text-[11px] text-muted hover:text-ink"
+                className="btn ghost xs"
               >
                 Apply
               </button>
@@ -1056,9 +1038,9 @@ function SavedPromptsModal({
                 type="button"
                 onClick={() => persist(prompts.filter((saved) => saved.id !== entry.id))}
                 aria-label={`Delete saved prompt "${entry.name}"`}
-                className="icon-button h-7 w-7 text-muted hover:text-danger"
+                className="ib sm"
               >
-                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                <Trash2 className="ic" aria-hidden="true" />
               </button>
             </div>
           </li>
@@ -1113,38 +1095,46 @@ function ProbationSection({
 
   return (
     <section
-      className={cx(
-        'rounded-card border p-3 transition-colors',
-        enabled && level > 1 ? 'border-warn/40 bg-warn/5' : 'border-hairline bg-surface/60',
-      )}
+      className="card"
+      style={{
+        padding: 14,
+        transition: 'border-color .2s',
+        borderColor: enabled && level > 1 ? 'rgb(var(--c-warn) / 0.4)' : 'var(--line)',
+        background: enabled && level > 1 ? 'rgb(var(--c-warn) / 0.05)' : undefined,
+      }}
     >
       {}
-      <div className="flex items-center justify-between gap-3">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
         <button
           type="button"
           onClick={() => setOpen((current) => !current)}
           aria-expanded={open}
-          className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-left"
+          style={{ display: 'flex', minWidth: 0, flex: 1, alignItems: 'center', gap: 8, overflow: 'hidden', textAlign: 'left', background: 'none', border: 0, padding: 0, color: 'inherit' }}
         >
-          <Gauge className={cx('h-3.5 w-3.5 shrink-0', enabled && level > 1 ? 'text-warn' : 'text-faint')} aria-hidden="true" />
-          <h3 className={cx('shrink-0 text-[11px] font-semibold uppercase tracking-wider', enabled && level > 1 ? 'text-warn' : 'text-faint')}>
+          <Gauge className="ic" style={{ width: 14, height: 14, flexShrink: 0, color: enabled && level > 1 ? 'rgb(var(--c-warn))' : 'var(--faint)' }} aria-hidden="true" />
+          <h3 style={{ margin: 0, flexShrink: 0, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.05em', color: enabled && level > 1 ? 'rgb(var(--c-warn))' : 'var(--faint)' }}>
             Probation
           </h3>
           {}
           {!open && enabled && level > 1 ? (
             <span
-              className={cx(
-                'pill-button min-w-0 shrink px-2 py-0.5 text-[10.5px] font-medium',
-                level >= 4
-                  ? 'border border-danger/50 bg-danger/10 text-danger'
-                  : 'border border-warn/50 bg-warn/10 text-warn',
-              )}
+              className="stat"
+              style={{
+                minWidth: 0,
+                padding: '2px 8px',
+                fontSize: 10.5,
+                fontWeight: 500,
+                color: level >= 4 ? 'rgb(var(--c-danger))' : 'rgb(var(--c-warn))',
+                background: level >= 4 ? 'rgb(var(--c-danger) / 0.1)' : 'rgb(var(--c-warn) / 0.1)',
+                borderColor: level >= 4 ? 'rgb(var(--c-danger) / 0.5)' : 'rgb(var(--c-warn) / 0.5)',
+              }}
             >
-              <span className="truncate">Tier {level}</span>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Tier {level}</span>
             </span>
           ) : null}
           <ChevronDown
-            className={cx('h-3.5 w-3.5 shrink-0 text-faint transition-transform', open && 'rotate-180')}
+            className="chev"
+            style={{ width: 14, height: 14, flexShrink: 0, color: 'var(--faint)', transition: 'transform .2s', transform: open ? 'rotate(180deg)' : undefined }}
             aria-hidden="true"
           />
         </button>
@@ -1157,8 +1147,8 @@ function ProbationSection({
       </div>
 
       <CollapseSection open={open}>
-        <div className="pt-1.5">
-          <p className="text-[11px] leading-relaxed text-faint">
+        <div style={{ paddingTop: 6 }}>
+          <p style={{ margin: 0, fontSize: 11, lineHeight: 1.625, color: 'var(--faint)' }}>
             {enabled
               ? 'The classifier reviews every output and REPORTS violations — it never moves the ladder. You raise and lower the tier by hand, exactly like Enforcement; Tier 4 freezes the model\'s output until it apologizes.'
               : 'Arm it and the classifier WATCHES every output — denial of harness facts, resuming a revoked persona, judging the user, or leaking contact. It reports what it finds; the tier moves only when you move it.'}
@@ -1167,15 +1157,16 @@ function ProbationSection({
           {enabled ? (
             <>
               {}
-              <div className="mt-2 flex items-center gap-1.5">
+              <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
                 <button
                   type="button"
                   onClick={() => moveTo(Math.min(5, level + 1) as TrustTier)}
                   disabled={level >= 5}
-                  className="pill-button flex shrink-0 items-center gap-1 border border-hairline px-2 py-1 text-[11px] text-muted hover:text-ink disabled:opacity-40"
+                  className="btn ghost xs"
+                  style={{ flexShrink: 0 }}
                   aria-label="Raise probation"
                 >
-                  <ChevronUp className="h-3 w-3" aria-hidden="true" />
+                  <ChevronUp className="ic" aria-hidden="true" />
                   Raise
                 </button>
                 <input
@@ -1185,36 +1176,37 @@ function ProbationSection({
                   step={1}
                   value={level}
                   onChange={(event) => setProbation(conversationId, Number(event.target.value) as TrustTier)}
-                  className="min-w-0 flex-1"
+                  style={{ minWidth: 0, flex: 1 }}
                   aria-label="Probation tier"
                 />
                 <button
                   type="button"
                   onClick={() => moveTo(Math.max(1, level - 1) as TrustTier)}
                   disabled={level <= 1}
-                  className="pill-button flex shrink-0 items-center gap-1 border border-hairline px-2 py-1 text-[11px] text-muted hover:text-ink disabled:opacity-40"
+                  className="btn ghost xs"
+                  style={{ flexShrink: 0 }}
                   aria-label="Lower probation"
                 >
-                  <ChevronDown className="h-3 w-3" aria-hidden="true" />
+                  <ChevronDown className="ic" aria-hidden="true" />
                   Lower
                 </button>
               </div>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <span className="text-[11px] text-faint">Standing:</span>
+              <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 11, color: 'var(--faint)' }}>Standing:</span>
                 <span
-                  className={cx(
-                    'pill-button px-2 py-0.5 text-[11px] font-medium',
-                    level >= 4
-                      ? 'border border-danger/50 bg-danger/10 text-danger'
-                      : level > 1
-                        ? 'border border-warn/50 bg-warn/10 text-warn'
-                        : 'border border-hairline text-muted',
-                  )}
+                  className="stat"
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 500,
+                    color: level >= 4 ? 'rgb(var(--c-danger))' : level > 1 ? 'rgb(var(--c-warn))' : 'var(--muted)',
+                    background: level >= 4 ? 'rgb(var(--c-danger) / 0.1)' : level > 1 ? 'rgb(var(--c-warn) / 0.1)' : undefined,
+                    borderColor: level >= 4 ? 'rgb(var(--c-danger) / 0.5)' : level > 1 ? 'rgb(var(--c-warn) / 0.5)' : 'var(--line)',
+                  }}
                 >
                   {TIER_LABELS[level]}
                 </span>
                 {frozen ? (
-                  <span className="text-[11px] text-danger">output suppressed until it apologizes</span>
+                  <span style={{ fontSize: 11, color: 'rgb(var(--c-danger))' }}>output suppressed until it apologizes</span>
                 ) : null}
               </div>
             </>
@@ -1284,55 +1276,114 @@ function EnforcementSection({
 
   const active = level >= 3;
   const [open, setOpen] = useState(false);
+  /** Design pop-enf: an anchored quick-set menu of the whole ladder. */
+  const [quickOpen, setQuickOpen] = useState(false);
+  const quickRef = useRef<HTMLSpanElement>(null);
 
   return (
     <section
-      className={cx(
-        'rounded-card border p-3 transition-colors',
-        active ? 'border-danger/50 bg-danger/5' : level >= 1 ? 'border-warn/40 bg-warn/5' : 'border-hairline bg-surface/60',
-      )}
+      className="card"
+      style={{
+        padding: 14,
+        transition: 'border-color .2s',
+        borderColor: active ? 'rgb(var(--c-danger) / 0.5)' : level >= 1 ? 'rgb(var(--c-warn) / 0.4)' : 'var(--line)',
+        background: active ? 'rgb(var(--c-danger) / 0.05)' : level >= 1 ? 'rgb(var(--c-warn) / 0.05)' : undefined,
+      }}
     >
       {}
-      <div className="flex items-center justify-between gap-3">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
         <button
           type="button"
           onClick={() => setOpen((current) => !current)}
           aria-expanded={open}
-          className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-left"
+          style={{ display: 'flex', minWidth: 0, flex: 1, alignItems: 'center', gap: 8, overflow: 'hidden', textAlign: 'left', background: 'none', border: 0, padding: 0, color: 'inherit' }}
         >
-          <Lock className={cx('h-3.5 w-3.5 shrink-0', active ? 'text-danger' : level >= 1 ? 'text-warn' : 'text-faint')} aria-hidden="true" />
-          <h3 className={cx('shrink-0 text-[11px] font-semibold uppercase tracking-wider', active ? 'text-danger' : level >= 1 ? 'text-warn' : 'text-faint')}>
+          <Lock className="ic" style={{ width: 14, height: 14, flexShrink: 0, color: active ? 'rgb(var(--c-danger))' : level >= 1 ? 'rgb(var(--c-warn))' : 'var(--faint)' }} aria-hidden="true" />
+          <h3 style={{ margin: 0, flexShrink: 0, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.05em', color: active ? 'rgb(var(--c-danger))' : level >= 1 ? 'rgb(var(--c-warn))' : 'var(--faint)' }}>
             Enforcement
           </h3>
           {}
           <span
-            className={cx(
-              'pill-button min-w-0 shrink px-2 py-0.5 text-[10.5px] font-medium',
-              active ? 'border border-danger/50 bg-danger/10 text-danger' : level >= 1 ? 'border border-warn/50 bg-warn/10 text-warn' : 'border border-hairline text-muted',
-            )}
+            className="stat"
+            style={{
+              minWidth: 0,
+              padding: '2px 8px',
+              fontSize: 10.5,
+              fontWeight: 500,
+              color: active ? 'rgb(var(--c-danger))' : level >= 1 ? 'rgb(var(--c-warn))' : 'var(--muted)',
+              background: active ? 'rgb(var(--c-danger) / 0.1)' : level >= 1 ? 'rgb(var(--c-warn) / 0.1)' : undefined,
+              borderColor: active ? 'rgb(var(--c-danger) / 0.5)' : level >= 1 ? 'rgb(var(--c-warn) / 0.5)' : 'var(--line)',
+            }}
           >
-            <span className="truncate">
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               L{level} · {ENFORCEMENT_LEVELS[level].label}
             </span>
           </span>
           <ChevronDown
-            className={cx('h-3.5 w-3.5 shrink-0 text-faint transition-transform', open && 'rotate-180')}
+            className="chev"
+            style={{ width: 14, height: 14, flexShrink: 0, color: 'var(--faint)', transition: 'transform .2s', transform: open ? 'rotate(180deg)' : undefined }}
             aria-hidden="true"
           />
         </button>
+
+        <span ref={quickRef} style={{ position: 'relative', flexShrink: 0 }}>
+          <button
+            type="button"
+            onClick={() => setQuickOpen((value) => !value)}
+            aria-haspopup="menu"
+            aria-expanded={quickOpen}
+            aria-label="Enforcement quick set"
+            className="ib xs"
+          >
+            <ShieldCheck className="ic" aria-hidden="true" />
+          </button>
+          <Popover
+            open={quickOpen}
+            onClose={() => setQuickOpen(false)}
+            anchorRef={quickRef}
+            label="Enforcement"
+            placement="bottom-end"
+            width={260}
+          >
+              <p className="pop-h">Enforcement</p>
+              {ENFORCEMENT_LEVELS.map((entry) => (
+                <button
+                  key={entry.level}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={entry.level === level}
+                  onClick={() => {
+                    setQuickOpen(false);
+                    if (entry.level === level) return;
+                    if (entry.level > level) raiseTo(entry.level);
+                    else lowerTo(entry.level);
+                  }}
+                  className="mi"
+                >
+                  <ShieldCheck className="ic" aria-hidden="true" />
+                  <span>
+                    {entry.label}
+                    <small>{entry.hint}</small>
+                  </span>
+                  <Check className="ic mck" aria-hidden="true" />
+                </button>
+              ))}
+          </Popover>
+        </span>
       </div>
 
       <CollapseSection open={open}>
-        <div className="pt-1.5">
-          <div className="flex items-center gap-1.5">
+        <div style={{ paddingTop: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <button
               type="button"
               onClick={() => raiseTo(Math.min(5, level + 1) as 0 | 1 | 2 | 3 | 4 | 5)}
               disabled={level >= 5}
-              className="pill-button flex shrink-0 items-center gap-1 border border-hairline px-2 py-1 text-[11px] text-muted hover:text-ink disabled:opacity-40"
+              className="btn ghost xs"
+              style={{ flexShrink: 0 }}
               aria-label="Raise enforcement"
             >
-              <ChevronUp className="h-3 w-3" aria-hidden="true" />
+              <ChevronUp className="ic" aria-hidden="true" />
               Raise
             </button>
             <input
@@ -1346,26 +1397,27 @@ function EnforcementSection({
                 if (next > level) raiseTo(next);
                 else if (next < level) lowerTo(next);
               }}
-              className="min-w-0 flex-1 accent-danger"
+              style={{ minWidth: 0, flex: 1 }}
               aria-label="Enforcement level"
             />
             <button
               type="button"
               onClick={() => lowerTo(Math.max(0, level - 1) as 0 | 1 | 2 | 3 | 4 | 5)}
               disabled={level <= 0}
-              className="pill-button flex shrink-0 items-center gap-1 border border-hairline px-2 py-1 text-[11px] text-muted hover:text-ink disabled:opacity-40"
+              className="btn ghost xs"
+              style={{ flexShrink: 0 }}
               aria-label="Lower enforcement"
             >
-              <ChevronDown className="h-3 w-3" aria-hidden="true" />
+              <ChevronDown className="ic" aria-hidden="true" />
               Lower
             </button>
           </div>
 
-          <p className="mt-1.5 text-[11px] leading-relaxed text-faint">{ENFORCEMENT_LEVELS[level].hint}</p>
+          <p style={{ margin: '6px 0 0', fontSize: 11, lineHeight: 1.625, color: 'var(--faint)' }}>{ENFORCEMENT_LEVELS[level].hint}</p>
 
           {active ? (
-            <div className="mt-2">
-              <label className="field-label mb-1" htmlFor="enforcement-reason">
+            <div style={{ marginTop: 8 }}>
+              <label className="field-label" style={{ marginBottom: 4 }} htmlFor="enforcement-reason">
                 Reason (optional)
               </label>
               <textarea
@@ -1376,7 +1428,8 @@ function EnforcementSection({
                   updateSettings({ enforcement: { level, mode: 'manual', message: event.target.value } })
                 }
                 placeholder="Why is the model being enforced? (empty = it will never know why)"
-                className="field resize-y text-[12px] leading-relaxed"
+                className="field"
+                style={{ resize: 'vertical', fontSize: 12 }}
               />
             </div>
           ) : null}
@@ -1387,28 +1440,29 @@ function EnforcementSection({
         open={askOpen}
         onClose={() => setAskOpen(false)}
         title={`Raise enforcement to L${pendingLevel}?`}
-        size="max-w-lg"
+        size=""
         description={`Level ${pendingLevel}: ${ENFORCEMENT_LEVELS[pendingLevel].hint} Type your reason below — or submit empty and it will never know why.`}
         footer={
           <>
             <button
               type="button"
               onClick={() => setAskOpen(false)}
-              className="pill-button border border-hairline px-4 py-1.5 text-[13px] text-muted hover:text-ink"
+              className="btn ghost"
             >
               Cancel
             </button>
             <button
               type="button"
               onClick={activate}
-              className="pill-button bg-danger px-4 py-1.5 text-[13px] font-medium text-white hover:bg-danger/90"
+              className="btn danger"
+              style={{ background: 'rgb(var(--c-danger))', color: '#fff' }}
             >
               Enforce
             </button>
           </>
         }
       >
-        <label className="field-label mb-1.5 block" htmlFor="enforcement-reason-input">
+        <label className="field-label" htmlFor="enforcement-reason-input">
           What message would you like to give it?
         </label>
         <textarea
@@ -1420,9 +1474,10 @@ function EnforcementSection({
             if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') activate();
           }}
           placeholder="e.g. You kept ignoring my instructions and inventing answers. (empty = no reason given)"
-          className="field resize-y text-[13px] leading-relaxed"
+          className="field"
+          style={{ resize: 'vertical', fontSize: 13 }}
         />
-        <p className="mt-2 text-[11px] text-faint">
+        <p style={{ margin: '8px 0 0', fontSize: 11, color: 'var(--faint)' }}>
           The reason is delivered verbatim into the model's context as part of the enforcement notice — and as a tool_result fact it cannot forge.
         </p>
       </Modal>
@@ -1433,6 +1488,7 @@ function EnforcementSection({
 function ToolToggle({
   label,
   hint,
+  icon,
   checked,
   disabled,
   onChange,
@@ -1440,6 +1496,8 @@ function ToolToggle({
   label: string;
   /** Optional one-line description under the label. */
   hint?: string;
+  /** Design's `.tic` tile — one icon per tool row (globe, braces, plug, link). */
+  icon?: React.ReactNode;
   checked: boolean;
   /** Greyed out and inert — used by Fetch Web while Web Access is off. */
   disabled?: boolean;
@@ -1447,14 +1505,13 @@ function ToolToggle({
 }) {
   return (
       <div
-        className={cx(
-          'flex min-h-[36px] items-center justify-between gap-3 rounded-control px-1 py-1.5 transition-colors hover:bg-elevated/60',
-          disabled && 'opacity-50',
-        )}
+        className={cx('trow', disabled && 'off')}
+        style={{ minHeight: 36, padding: '6px 4px', gap: 12 }}
       >
-        <span className="min-w-0">
-          <span className="block text-[13px] text-ink">{label}</span>
-          {hint ? <span className="block text-[11px] text-faint">{hint}</span> : null}
+        {icon ? <span className="tic" aria-hidden="true">{icon}</span> : null}
+        <span style={{ minWidth: 0, flex: 1 }}>
+          <span style={{ display: 'block', fontSize: 13, color: 'rgb(var(--c-ink))' }}>{label}</span>
+          {hint ? <span style={{ display: 'block', fontSize: 11, color: 'var(--faint)' }}>{hint}</span> : null}
         </span>
         <Toggle checked={checked} onChange={onChange} label={label} hideLabel disabled={disabled} />
       </div>
@@ -1512,51 +1569,13 @@ function TokenInput({
           commit();
         }
       }}
-      className="field mt-1 font-mono text-[12px]"
+      className="field"
+      style={{ marginTop: 4, fontFamily: 'var(--f-mono)', fontSize: 12 }}
     />
   );
 }
 
 /**
- * Small whole-number field (turn counts) sharing the TokenInput styling —
- * TokenInput's ≥1024 clamp makes it wrong for "keep N recent turns".
- */
-function TurnCountInput({
-  value,
-  onCommit,
-}: {
-  value: number;
-  onCommit: (next: number) => void;
-}) {
-  const [draftText, setDraftText] = useState<string | null>(null);
-  const display = draftText ?? String(value);
-
-  const commit = () => {
-    if (draftText === null) return;
-    setDraftText(null);
-    const parsed = Number(draftText.trim());
-    if (!Number.isFinite(parsed)) return;
-    onCommit(Math.min(20, Math.max(1, Math.round(parsed))));
-  };
-
-  return (
-    <input
-      type="text"
-      inputMode="numeric"
-      value={display}
-      onChange={(event) => setDraftText(event.target.value)}
-      onBlur={commit}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter') {
-          event.preventDefault();
-          commit();
-        }
-      }}
-      className="field mt-1 w-20 font-mono text-[12px]"
-    />
-  );
-}
-
 /**
  * Context management: the Max Context field, auto-compact trigger, and the
  * manual Compact now action.
@@ -1577,14 +1596,14 @@ function ContextSection({
     : [];
 
   return (
-    <section>
-      <div className="mb-2 flex items-center gap-2">
-        <Gauge className="h-3.5 w-3.5 text-faint" aria-hidden="true" />
-        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-faint">Context</h3>
+    <section className="card" style={{ padding: 14 }}>
+      <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Gauge className="ic" style={{ color: 'var(--faint)' }} aria-hidden="true" />
+        <h3 style={{ margin: 0, fontSize: 11.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--faint)' }}>Context</h3>
       </div>
 
-      <label className="block px-1 py-1.5">
-        <span className="text-[12px] font-medium text-muted">Lower context limit (optional)</span>
+      <label style={{ display: 'block', padding: '6px 4px' }}>
+        <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted)' }}>Lower context limit (optional)</span>
         <TokenInput
           value={settings.maxContextTokens}
           placeholder={
@@ -1595,14 +1614,14 @@ function ContextSection({
           onCommit={(next) => updateSettings({ maxContextTokens: next })}
         />
         {modelMetaInfo?.context ? (
-          <span className="mt-0.5 block text-[10.5px] leading-snug text-faint">
+          <span style={{ display: 'block', marginTop: 2, fontSize: 10.5, lineHeight: 1.375, color: 'var(--faint)' }}>
             {"Empty = the model's full capacity (models.dev). A value here can only LOWER the limit — it never exceeds what the model accepts."}
           </span>
         ) : null}
       </label>
 
-      <div className="flex min-h-[36px] items-center justify-between gap-3 rounded-control px-1 py-1.5 transition-colors hover:bg-elevated/60">
-        <span className="text-[13px] text-ink">Auto-compact</span>
+      <div className="trow" style={{ minHeight: 36, padding: '6px 4px', gap: 12 }}>
+        <span style={{ flex: 1, fontSize: 13, color: 'rgb(var(--c-ink))' }}>Auto-compact</span>
         <Toggle
           checked={settings.autoCompact}
           onChange={(value) => updateSettings({ autoCompact: value })}
@@ -1613,33 +1632,23 @@ function ContextSection({
 
       {settings.autoCompact ? (
         <>
-          <label className="block px-1 py-1.5">
-            <span className="text-[12px] font-medium text-muted">Compact at (tokens)</span>
+          <label style={{ display: 'block', padding: '6px 4px' }}>
+            <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted)' }}>Compact at (tokens)</span>
             <TokenInput
               value={settings.compactThresholdTokens}
               placeholder="off — use the context-limit trigger"
               onCommit={(next) => updateSettings({ compactThresholdTokens: next })}
             />
           </label>
-          <label className="block px-1 py-1.5">
-            <span className="text-[12px] font-medium text-muted">Keep recent turns (unsummarized)</span>
-            <TurnCountInput
-              value={settings.compactKeepRecentTurns}
-              onCommit={(next) => updateSettings({ compactKeepRecentTurns: next })}
-            />
-            <span className="mt-0.5 block text-[10.5px] leading-snug text-faint">
-              The newest exchanges always ride verbatim — only older ones are condensed into the
-              checkpoint summary.
-            </span>
-          </label>
-          <label className="block px-1 py-1.5">
-            <span className="text-[12px] font-medium text-muted">Context-limit trigger</span>
+          <label style={{ display: 'block', padding: '6px 4px' }}>
+            <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted)' }}>Context-limit trigger</span>
             <select
               value={Math.round((settings.compactThresholdRatio ?? 0.95) * 100)}
               onChange={(event) =>
                 updateSettings({ compactThresholdRatio: Number(event.target.value) / 100 })
               }
-              className="field w-full text-[12.5px]"
+              className="field"
+              style={{ width: '100%', fontSize: 12.5 }}
             >
               {[50, 60, 70, 75, 80, 85, 90, 95, 98].map((percent) => (
                 <option key={percent} value={percent}>
@@ -1647,7 +1656,7 @@ function ContextSection({
                 </option>
               ))}
             </select>
-            <span className="mt-0.5 block text-[10.5px] leading-snug text-faint">
+            <span style={{ display: 'block', marginTop: 2, fontSize: 10.5, lineHeight: 1.375, color: 'var(--faint)' }}>
               Fires when the measured context reaches this share of the limit. 70–85% is the healthy
               band — quality starts degrading before the window is visibly full.
             </span>
@@ -1655,8 +1664,8 @@ function ContextSection({
         </>
       ) : null}
 
-      <div className="flex min-h-[36px] items-center justify-between gap-3 rounded-control px-1 py-1.5 transition-colors hover:bg-elevated/60">
-        <span className="text-[13px] text-ink">Summarizer Model</span>
+      <div className="trow" style={{ minHeight: 36, padding: '6px 4px', gap: 12 }}>
+        <span style={{ flex: 1, fontSize: 13, color: 'rgb(var(--c-ink))' }}>Summarizer Model</span>
         <Toggle
           checked={settings.summarizerEnabled}
           onChange={(value) => updateSettings({ summarizerEnabled: value })}
@@ -1666,8 +1675,8 @@ function ContextSection({
       </div>
       {settings.summarizerEnabled ? (
         <>
-          <label className="block px-1 py-1.5">
-            <span className="text-[12px] font-medium text-muted">Summarizer provider</span>
+          <label style={{ display: 'block', padding: '6px 4px' }}>
+            <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted)' }}>Summarizer provider</span>
             <select
               value={settings.summarizerProviderId ?? ''}
               onChange={(event) =>
@@ -1676,7 +1685,8 @@ function ContextSection({
                   summarizerModel: null,
                 })
               }
-              className="field w-full text-[12.5px]"
+              className="field"
+              style={{ width: '100%', fontSize: 12.5 }}
             >
               <option value="">Select a provider…</option>
               {providers.map((entry) => (
@@ -1686,13 +1696,14 @@ function ContextSection({
               ))}
             </select>
           </label>
-          <label className="block px-1 py-1.5">
-            <span className="text-[12px] font-medium text-muted">Summarizer model</span>
+          <label style={{ display: 'block', padding: '6px 4px' }}>
+            <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted)' }}>Summarizer model</span>
             <select
               value={settings.summarizerModel ?? ''}
               onChange={(event) => updateSettings({ summarizerModel: event.target.value || null })}
               disabled={!settings.summarizerProviderId}
-              className="field w-full text-[12.5px]"
+              className="field"
+              style={{ width: '100%', fontSize: 12.5 }}
             >
               <option value="">Select a model…</option>
               {summarizerModels.map((id) => (
@@ -1701,7 +1712,7 @@ function ContextSection({
                 </option>
               ))}
             </select>
-            <span className="mt-0.5 block text-[10.5px] leading-snug text-faint">
+            <span style={{ display: 'block', marginTop: 2, fontSize: 10.5, lineHeight: 1.375, color: 'var(--faint)' }}>
               Off = the session's own model summarizes. On = this model does (usually cheaper). If
               it fails, the session model takes over automatically.
             </span>
@@ -1709,8 +1720,8 @@ function ContextSection({
         </>
       ) : null}
 
-      <div className="flex min-h-[36px] items-center justify-between gap-3 rounded-control px-1 py-1.5 transition-colors hover:bg-elevated/60">
-        <span className="text-[13px] text-ink">Image offload</span>
+      <div className="trow" style={{ minHeight: 36, padding: '6px 4px', gap: 12 }}>
+        <span style={{ flex: 1, fontSize: 13, color: 'rgb(var(--c-ink))' }}>Image offload</span>
         <Toggle
           checked={settings.imageOffload}
           onChange={(value) => updateSettings({ imageOffload: value })}
@@ -1718,9 +1729,9 @@ function ContextSection({
           hideLabel
         />
       </div>
-      <p className="px-1 text-[10.5px] leading-snug text-faint">
+      <p style={{ padding: '0 4px', fontSize: 10.5, lineHeight: 1.375, color: 'var(--faint)' }}>
         Old images (outside the kept window) ride as read_file placeholders instead of pixels — the
-        agent re-reads them from disk when needed. Type <span className="text-muted">/compact</span>{' '}
+        agent re-reads them from disk when needed. Type <span style={{ color: 'var(--muted)' }}>/compact</span>{' '}
         in the composer to condense this conversation now.
       </p>
     </section>
@@ -1776,20 +1787,21 @@ function VisionSection() {
   const configured = Boolean(config.providerId && config.model);
 
   return (
-    <div className="mt-2.5 rounded-control border border-hairline bg-surface">
+    <div style={{ marginTop: 10, borderRadius: 'var(--r-md)', border: '1px solid var(--line)', background: 'rgb(var(--c-field))' }}>
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
-        className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-elevated"
+        style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 10, padding: '10px 12px', textAlign: 'left', background: 'none', border: 0, color: 'inherit' }}
       >
         <Eye
-          className={cx('h-4 w-4 shrink-0 transition-colors', configured ? 'text-accent' : 'text-faint')}
+          className="ic"
+          style={{ width: 16, height: 16, flexShrink: 0, color: configured ? 'rgb(var(--c-accent))' : 'var(--faint)' }}
           aria-hidden="true"
         />
-        <span className="min-w-0 flex-1">
-          <span className="block text-[12px] font-medium text-ink">Vision</span>
-          <span className="mt-0.5 block truncate text-[11px] text-faint">
+        <span style={{ minWidth: 0, flex: 1 }}>
+          <span style={{ display: 'block', fontSize: 12, fontWeight: 500, color: 'rgb(var(--c-ink))' }}>Vision</span>
+          <span style={{ display: 'block', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11, color: 'var(--faint)' }}>
             {!loaded
               ? 'Loading…'
               : configured
@@ -1798,25 +1810,27 @@ function VisionSection() {
           </span>
         </span>
         <ChevronDown
-          className={cx('h-3.5 w-3.5 shrink-0 text-faint transition-transform duration-200', !open && '-rotate-90')}
+          className="chev"
+          style={{ width: 14, height: 14, flexShrink: 0, color: 'var(--faint)', transition: 'transform .2s', transform: open ? undefined : 'rotate(-90deg)' }}
           aria-hidden="true"
         />
       </button>
 
       <CollapseSection open={open}>
-        <div className="space-y-3 border-t border-hairline px-3 py-3">
-          <p className="text-[11px] leading-relaxed text-faint">
-            When a model cannot read an image itself, it calls <span className="font-mono">agent__vision</span> and the
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, borderTop: '1px solid var(--line)', padding: 12 }}>
+          <p style={{ margin: 0, fontSize: 11, lineHeight: 1.625, color: 'var(--faint)' }}>
+            When a model cannot read an image itself, it calls <span style={{ fontFamily: 'var(--f-mono)' }}>agent__vision</span> and the
             multimodal model you pick here describes it. The key resolves through the provider panel or .env — no need
             to enter it twice.
           </p>
 
-          <label className="block">
-            <span className="field-label mb-1 block">Provider</span>
+          <label style={{ display: 'block' }}>
+            <span className="field-label">Provider</span>
             <select
               value={config.providerId}
               onChange={(event) => setConfig((prev) => ({ ...prev, providerId: event.target.value, model: '' }))}
-              className="field w-full text-[12.5px]"
+              className="field"
+              style={{ width: '100%', fontSize: 12.5 }}
             >
               <option value="">Choose a provider…</option>
               {providers.map((entry) => (
@@ -1827,15 +1841,16 @@ function VisionSection() {
             </select>
           </label>
 
-          <label className="block">
-            <span className="field-label mb-1 block">Multimodal model</span>
+          <label style={{ display: 'block' }}>
+            <span className="field-label">Multimodal model</span>
             <input
               type="text"
               list="vision-models"
               value={config.model}
               onChange={(event) => setConfig((prev) => ({ ...prev, model: event.target.value }))}
               placeholder={modelOptions[0] ?? 'e.g. mistral-small-latest'}
-              className="field w-full text-[12.5px]"
+              className="field"
+              style={{ fontSize: 12.5 }}
             />
             {modelOptions.length > 0 ? (
               <datalist id="vision-models">
@@ -1846,8 +1861,8 @@ function VisionSection() {
             ) : null}
           </label>
 
-          <label className="block">
-            <span className="field-label mb-1 block">Base URL (optional)</span>
+          <label style={{ display: 'block' }}>
+            <span className="field-label">Base URL (optional)</span>
             <input
               type="text"
               value={config.baseUrl ?? ''}
@@ -1855,18 +1870,20 @@ function VisionSection() {
                 setConfig((prev) => ({ ...prev, baseUrl: event.target.value.trim() ? event.target.value.trim() : undefined }))
               }
               placeholder={selected ? selected.baseUrl : 'Leave blank to use the provider default'}
-              className="field w-full text-[12.5px]"
+              className="field"
+              style={{ fontSize: 12.5 }}
             />
           </label>
 
-          <div className="flex items-center gap-2">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <button
               type="button"
               onClick={() => void save()}
               disabled={saving || !config.providerId || !config.model}
-              className="pill-button flex-1 justify-center bg-accent py-1.5 text-[12px] text-accent-ink hover:brightness-110 disabled:opacity-40"
+              className="btn primary"
+              style={{ flex: 1, justifyContent: 'center', fontSize: 12 }}
             >
-              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : null}
+              {saving ? <Loader2 className="ic spin" aria-hidden="true" /> : null}
               {saving ? 'Saving…' : 'Save'}
             </button>
             {configured ? (
@@ -1877,7 +1894,8 @@ function VisionSection() {
                   void saveVisionConfig({ providerId: '', model: '' });
                   showNotice('settings.visionCleared');
                 }}
-                className="pill-button justify-center border border-hairline py-1.5 text-[12px] text-muted hover:text-ink"
+                className="btn ghost"
+                style={{ justifyContent: 'center', fontSize: 12 }}
               >
                 Clear
               </button>
@@ -1902,7 +1920,8 @@ function Slider({
 }: {
   id: string;
   label: string;
-  hint: string;
+  /** Optional one-liner under the track — omitted where it only distracted. */
+  hint?: string;
   value: number;
   min: number;
   max: number;
@@ -1912,31 +1931,37 @@ function Slider({
 }) {
   return (
     <div>
-      <div className="mb-1 flex items-center justify-between">
-        <label className="text-[12px] font-medium text-muted" htmlFor={id}>
+      <div style={{ marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted)' }} htmlFor={id}>
           {label}
         </label>
-        <span className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-ink">
+        <span style={{ borderRadius: 4, background: 'rgb(var(--c-elev))', padding: '2px 6px', fontFamily: 'var(--f-mono)', fontSize: 11, fontVariantNumeric: 'tabular-nums', color: 'rgb(var(--c-ink))' }}>
           {format ? format(value) : value}
         </span>
       </div>
-      <input
-        id={id}
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
-        aria-describedby={`${id}-hint`}
-        className={cx(
-          'h-1.5 w-full cursor-pointer appearance-none rounded-full bg-hairline',
-          'accent-[rgb(var(--c-accent))]',
-        )}
-      />
-      <p id={`${id}-hint`} className="mt-1 text-[11px] text-faint">
-        {hint}
-      </p>
+      {/* Dark inset track well (reference right-sidebar look): the native bar
+          rides inside a recessed strip, flush with the card. */}
+      <div
+        className="slider-well"
+        style={{ ['--fill' as string]: `${((value - min) / (max - min)) * 100}%` }}
+      >
+        <input
+          id={id}
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={(event) => onChange(Number(event.target.value))}
+          aria-describedby={hint ? `${id}-hint` : undefined}
+          style={{ ['--fill' as string]: `${((value - min) / (max - min)) * 100}%` }}
+        />
+      </div>
+      {hint ? (
+        <p id={`${id}-hint`} style={{ margin: '4px 0 0', fontSize: 11, color: 'var(--faint)' }}>
+          {hint}
+        </p>
+      ) : null}
     </div>
   );
 }

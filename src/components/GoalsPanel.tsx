@@ -24,10 +24,10 @@ interface GoalsPanelProps {
   onClose: () => void;
 }
 
-const STATUS_STYLE: Record<Goal['status'], string> = {
-  running: 'border-accent/40 bg-accent-soft text-accent',
-  paused: 'border-warning/40 bg-warning/10 text-warning',
-  done: 'border-hairline bg-elevated text-faint',
+const STATUS_STYLE: Record<Goal['status'], { border: string; background: string; color: string }> = {
+  running: { border: 'rgb(var(--c-accent) / 0.4)', background: 'var(--c-accent-soft)', color: 'rgb(var(--c-accent))' },
+  paused: { border: 'rgb(var(--c-warn) / 0.4)', background: 'rgb(var(--c-warn) / 0.1)', color: 'rgb(var(--c-warn))' },
+  done: { border: 'var(--line)', background: 'rgb(var(--c-elev))', color: 'var(--faint)' },
 };
 
 /**
@@ -128,41 +128,61 @@ export function GoalsPanel({ open, onClose }: GoalsPanelProps) {
   return (
     <aside
       aria-label="Goals and plans"
-      className="animate-scale-in fixed right-3 top-3 z-40 flex h-[calc(100vh-1.5rem)] w-[360px] max-w-[calc(100vw-1.5rem)] flex-col overflow-hidden rounded-card border border-hairline bg-canvas shadow-popover"
+      style={{
+        position: 'fixed',
+        right: 12,
+        top: 12,
+        zIndex: 40,
+        display: 'flex',
+        height: 'calc(100vh - 1.5rem)',
+        width: 360,
+        maxWidth: 'calc(100vw - 1.5rem)',
+        flexDirection: 'column',
+        overflow: 'hidden',
+        borderRadius: 'var(--r-lg)',
+        border: '1px solid var(--line)',
+        background: 'rgb(var(--c-canvas))',
+        boxShadow: 'var(--sh2)',
+        animation: 'mIn .25s var(--ease)',
+      }}
     >
-      <header className="flex items-center gap-2.5 border-b border-hairline px-4 py-3">
-        <Target className="h-4 w-4 text-accent" aria-hidden="true" />
-        <h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-ink">Goals &amp; plans</h2>
-        {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin text-faint" aria-hidden="true" /> : null}
-        <button type="button" className="icon-button" aria-label="Close goals panel" onClick={onClose}>
-          <X className="h-4 w-4" aria-hidden="true" />
+      <header style={{ display: 'flex', alignItems: 'center', gap: 10, borderBottom: '1px solid var(--line)', padding: '12px 16px' }}>
+        <Target className="ic" style={{ color: 'rgb(var(--c-accent))' }} aria-hidden="true" />
+        <h2 style={{ margin: 0, minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 14, fontWeight: 600, color: 'rgb(var(--c-ink))' }}>Goals &amp; plans</h2>
+        {loading ? <Loader2 className="ic spin" style={{ color: 'var(--faint)' }} aria-hidden="true" /> : null}
+        <button type="button" className="ib" aria-label="Close goals panel" onClick={onClose}>
+          <X className="ic" aria-hidden="true" />
         </button>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+      <div style={{ minHeight: 0, flex: 1, overflowY: 'auto', padding: 12 }}>
         {}
         {sessionId && reminders.length > 0 ? (
-          <section className="mb-3 rounded-card border border-hairline bg-elevated/40 p-2.5">
-            <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-faint">
-              <Bell className="h-3 w-3" aria-hidden="true" /> Reminders
+          <section className="card" style={{ marginBottom: 12, padding: 10, background: 'rgb(var(--c-elev) / 0.4)' }}>
+            <p style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--faint)' }}>
+              <Bell className="ic" style={{ width: 12, height: 12 }} aria-hidden="true" /> Reminders
             </p>
-            <ul className="mt-1.5 space-y-1">
+            <ul style={{ margin: '6px 0 0', padding: 0, display: 'flex', flexDirection: 'column', gap: 4, listStyle: 'none' }}>
               {reminders.map((reminder) => {
                 const due = reminder.fireAt <= Date.now();
                 return (
-                  <li key={reminder.id} className="flex items-start gap-2 rounded-control border border-hairline px-2 py-1.5">
+                  <li key={reminder.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, borderRadius: 'var(--r-md)', border: '1px solid var(--line)', padding: '6px 8px' }}>
                     <span
-                      className={cx(
-                        'mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full',
-                        due ? 'bg-warning' : reminder.deliveredAt ? 'bg-faint/40' : 'bg-accent',
-                      )}
+                      style={{
+                        marginTop: 2,
+                        width: 6,
+                        height: 6,
+                        flexShrink: 0,
+                        borderRadius: '50%',
+                        background: due ? 'rgb(var(--c-warn))' : reminder.deliveredAt ? 'rgb(var(--c-faint) / 0.4)' : 'rgb(var(--c-accent))',
+                      }}
                       aria-hidden="true"
                     />
-                    <span className="min-w-0 flex-1">
-                      <span className={cx('block break-words text-[12px]', reminder.deliveredAt ? 'text-faint' : 'text-ink')}>
+                    <span style={{ minWidth: 0, flex: 1 }}>
+                      <span style={{ display: 'block', overflowWrap: 'break-word', fontSize: 12, color: reminder.deliveredAt ? 'var(--faint)' : 'rgb(var(--c-ink))' }}>
                         {reminder.label}
                       </span>
-                      <span className="text-[10.5px] tabular-nums text-faint">
+                      <span style={{ fontSize: 10.5, fontVariantNumeric: 'tabular-nums', color: 'var(--faint)' }}>
                         {due ? (reminder.deliveredAt ? 'delivered' : 'due now') : new Date(reminder.fireAt).toLocaleString()}
                       </span>
                     </span>
@@ -170,7 +190,7 @@ export function GoalsPanel({ open, onClose }: GoalsPanelProps) {
                       <button
                         type="button"
                         aria-label="Cancel reminder"
-                        className="icon-button h-6 w-6 text-faint hover:text-ink"
+                        className="ib xs"
                         onClick={async () => {
                           if (!sessionId) return;
                           try {
@@ -181,7 +201,7 @@ export function GoalsPanel({ open, onClose }: GoalsPanelProps) {
                           }
                         }}
                       >
-                        <X className="h-3 w-3" aria-hidden="true" />
+                        <X className="ic" style={{ width: 12, height: 12 }} aria-hidden="true" />
                       </button>
                     ) : null}
                   </li>
@@ -192,68 +212,75 @@ export function GoalsPanel({ open, onClose }: GoalsPanelProps) {
         ) : null}
 
         {!sessionId ? (
-          <p className="px-1 text-[12.5px] text-faint">Open or start a chat first — goals belong to a conversation.</p>
+          <p style={{ padding: '0 4px', fontSize: 12.5, color: 'var(--faint)' }}>Open or start a chat first — goals belong to a conversation.</p>
         ) : goals.length === 0 ? (
-          <p className="px-1 text-[12.5px] leading-relaxed text-faint">
+          <p style={{ padding: '0 4px', fontSize: 12.5, lineHeight: 1.625, color: 'var(--faint)' }}>
             No goals yet. In Agent mode, ask the agent to plan something — it creates goals with
-            <span className="font-mono"> goal_create</span>, works through the checklist, and this panel tracks it live.
+            <span style={{ fontFamily: 'var(--f-mono)' }}> goal_create</span>, works through the checklist, and this panel tracks it live.
           </p>
         ) : (
-          <ul className="space-y-2.5">
+          <ul style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 0, margin: 0, listStyle: 'none' }}>
             {goals.map((goal) => {
               const expanded = expandedId === goal.id;
               const doneCount = goal.todos.filter((todo) => todo.done).length;
               return (
-                <li key={goal.id} className="rounded-card border border-hairline bg-elevated/40">
+                <li key={goal.id} className="card" style={{ padding: 0, background: 'rgb(var(--c-elev) / 0.4)' }}>
                   {editingId === goal.id ? (
-                    <div className="space-y-2 p-3">
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12 }}>
                       <input
                         value={draftTitle}
                         onChange={(event) => setDraftTitle(event.target.value)}
                         aria-label="Goal title"
-                        className="w-full rounded-control border border-hairline bg-canvas px-2.5 py-1.5 text-[13px] text-ink focus:border-accent/50 focus:outline-none"
+                        className="field"
+                        style={{ fontSize: 13 }}
                       />
                       <textarea
                         value={draftPlan}
                         onChange={(event) => setDraftPlan(event.target.value)}
                         aria-label="Goal plan"
                         rows={5}
-                        className="w-full resize-y rounded-control border border-hairline bg-canvas px-2.5 py-1.5 text-[12.5px] text-ink focus:border-accent/50 focus:outline-none"
+                        className="field"
+                        style={{ fontSize: 12.5, resize: 'vertical' }}
                       />
-                      <div className="flex justify-end gap-1.5">
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
                         <button
                           type="button"
-                          className="pill-button border border-hairline text-muted hover:text-ink"
+                          className="btn ghost sm"
                           onClick={() => setEditingId(null)}
                         >
                           Cancel
                         </button>
                         <button
                           type="button"
-                          className="pill-button bg-accent text-accent-ink hover:brightness-110"
+                          className="btn primary sm"
                           onClick={() => void saveEdit(goal.id)}
                         >
-                          <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                          <Check className="ic" aria-hidden="true" />
                           Save
                         </button>
                       </div>
                     </div>
                   ) : (
                     <>
-                      <div className="flex items-center gap-2 px-3 pt-2.5">
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px 0' }}>
                         <span
-                          className={cx(
-                            'shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
-                            STATUS_STYLE[goal.status],
-                            goal.status === 'running' && 'animate-pulse',
-                          )}
+                          className="cap"
+                          style={{
+                            flexShrink: 0,
+                            fontSize: 10,
+                            fontWeight: 600,
+                            textTransform: 'uppercase',
+                            letterSpacing: '.05em',
+                            ...STATUS_STYLE[goal.status],
+                            animation: goal.status === 'running' ? 'breathe 2s ease-in-out infinite' : undefined,
+                          }}
                         >
                           {goal.status}
                         </span>
-                        <h3 className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">
+                        <h3 style={{ margin: 0, minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, fontWeight: 500, color: 'rgb(var(--c-ink))' }}>
                           <Tip label={goal.title} align="start">{goal.title}</Tip>
                         </h3>
-                        <span className="shrink-0 text-[10.5px] tabular-nums text-faint">
+                        <span style={{ flexShrink: 0, fontSize: 10.5, fontVariantNumeric: 'tabular-nums', color: 'var(--faint)' }}>
                           {doneCount}/{goal.todos.length}
                         </span>
                       </div>
@@ -263,28 +290,30 @@ export function GoalsPanel({ open, onClose }: GoalsPanelProps) {
                           type="button"
                           onClick={() => setExpandedId(expanded ? null : goal.id)}
                           aria-expanded={expanded}
-                          className="mt-1 flex w-full items-center gap-1.5 px-3 text-left text-[11.5px] text-muted hover:text-ink"
+                          className="nav"
+                          style={{ marginTop: 4, height: 'auto', padding: '4px 12px', fontSize: 11.5, justifyContent: 'flex-start' }}
                         >
-                          <ListTodo className="h-3 w-3 shrink-0" aria-hidden="true" />
-                          <span className="min-w-0 flex-1 truncate">{expanded ? 'Plan' : goal.plan}</span>
+                          <ListTodo className="ic" style={{ width: 12, height: 12 }} aria-hidden="true" />
+                          <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{expanded ? 'Plan' : goal.plan}</span>
                           <ChevronDown
-                            className={cx('h-3 w-3 shrink-0 transition-transform', !expanded && '-rotate-90')}
+                            className="chev"
+                            style={{ width: 12, height: 12, transform: expanded ? undefined : 'rotate(-90deg)' }}
                             aria-hidden="true"
                           />
                         </button>
                       ) : null}
 
                       {expanded && goal.plan ? (
-                        <p className="mx-3 mt-1.5 whitespace-pre-wrap rounded-control border border-hairline bg-canvas px-2.5 py-2 text-[11.5px] leading-relaxed text-muted">
+                        <p style={{ margin: '6px 12px 0', whiteSpace: 'pre-wrap', borderRadius: 'var(--r-md)', border: '1px solid var(--line)', background: 'rgb(var(--c-canvas))', padding: '8px 10px', fontSize: 11.5, lineHeight: 1.625, color: 'var(--muted)' }}>
                           {goal.plan}
                         </p>
                       ) : null}
 
                       {goal.todos.length > 0 ? (
-                        <ul className="mt-1.5 space-y-0.5 px-2.5">
+                        <ul style={{ margin: '6px 0 0', padding: '0 10px', display: 'flex', flexDirection: 'column', gap: 2, listStyle: 'none' }}>
                           {goal.todos.map((todo) => (
                             <li key={todo.id}>
-                              <label className="flex cursor-pointer items-start gap-2 rounded-control px-0.5 py-1 text-[12.5px] hover:bg-elevated">
+                              <label style={{ display: 'flex', cursor: 'pointer', alignItems: 'flex-start', gap: 8, borderRadius: 'var(--r-sm)', padding: '4px 2px', fontSize: 12.5 }}>
                                 <input
                                   type="checkbox"
                                   checked={todo.done}
@@ -293,17 +322,17 @@ export function GoalsPanel({ open, onClose }: GoalsPanelProps) {
                                       todos: [{ id: todo.id, done: event.target.checked }],
                                     })
                                   }
-                                  className="mt-0.5 accent-[var(--accent)]"
+                                  style={{ marginTop: 2, accentColor: 'rgb(var(--c-accent))' }}
                                 />
-                                <span className={cx('min-w-0 break-words', todo.done ? 'text-faint line-through' : 'text-muted')}>
+                                <span style={{ minWidth: 0, overflowWrap: 'break-word', color: todo.done ? 'var(--faint)' : 'var(--muted)', textDecoration: todo.done ? 'line-through' : undefined }}>
                                   {todo.text}
                                 </span>
                               </label>
                               {todo.subtasks?.length ? (
-                                <ul className="ml-6 space-y-0.5 border-l border-hairline pl-2">
+                                <ul style={{ marginLeft: 24, display: 'flex', flexDirection: 'column', gap: 2, borderLeft: '1px solid var(--line)', paddingLeft: 8 }}>
                                   {todo.subtasks.map((sub) => (
                                     <li key={sub.id}>
-                                      <label className="flex cursor-pointer items-start gap-1.5 rounded-control px-0.5 py-0.5 text-[11.5px] hover:bg-elevated">
+                                      <label style={{ display: 'flex', cursor: 'pointer', alignItems: 'flex-start', gap: 6, borderRadius: 'var(--r-sm)', padding: '2px', fontSize: 11.5 }}>
                                         <input
                                           type="checkbox"
                                           checked={sub.done}
@@ -312,9 +341,9 @@ export function GoalsPanel({ open, onClose }: GoalsPanelProps) {
                                               setSubtask: [{ id: sub.id, done: event.target.checked }],
                                             })
                                           }
-                                          className="mt-0.5 accent-[var(--accent)]"
+                                          style={{ marginTop: 2, accentColor: 'rgb(var(--c-accent))' }}
                                         />
-                                        <span className={cx('min-w-0 break-words', sub.done ? 'text-faint line-through' : 'text-muted')}>
+                                        <span style={{ minWidth: 0, overflowWrap: 'break-word', color: sub.done ? 'var(--faint)' : 'var(--muted)', textDecoration: sub.done ? 'line-through' : undefined }}>
                                           {sub.text}
                                         </span>
                                       </label>
@@ -327,61 +356,59 @@ export function GoalsPanel({ open, onClose }: GoalsPanelProps) {
                         </ul>
                       ) : null}
 
-                      <div className="mt-1.5 flex items-center gap-0.5 border-t border-hairline/60 px-2 py-1.5">
+                      <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 2, borderTop: '1px solid rgb(var(--c-line) / 0.6)', padding: '6px 8px' }}>
                         {goal.status === 'running' ? (
                           <Tip label="Pause this goal">
                           <button
                             type="button"
-                            className="icon-button h-7 w-7"
+                            className="ib sm"
                             aria-label="Pause goal"
                             onClick={() => void applyPatch(goal.id, { status: 'paused' })}
                           >
-                            <Pause className="h-3.5 w-3.5" aria-hidden="true" />
+                            <Pause className="ic" aria-hidden="true" />
                           </button>
                           </Tip>
                         ) : goal.status === 'paused' ? (
                           <Tip label="Resume this goal (status only — send the next message to continue the work)">
                           <button
                             type="button"
-                            className="icon-button h-7 w-7 text-accent"
+                            className="ib sm on"
                             aria-label="Resume goal"
                             onClick={() => void applyPatch(goal.id, { status: 'running' })}
                           >
-                            <Play className="h-3.5 w-3.5" aria-hidden="true" />
+                            <Play className="ic" aria-hidden="true" />
                           </button>
                           </Tip>
                         ) : (
                           <Tip label="Goal is done">
-                          <span className="icon-button flex h-7 w-7 items-center justify-center">
-                            <CircleSlash className="h-3.5 w-3.5 text-faint" aria-hidden="true" />
+                          <span className="ib sm" style={{ opacity: 0.5 }}>
+                            <CircleSlash className="ic" style={{ color: 'var(--faint)' }} aria-hidden="true" />
                           </span>
                           </Tip>
                         )}
                         <button
                           type="button"
-                          className="icon-button h-7 w-7"
+                          className="ib sm"
                           aria-label="Edit goal"
                           onClick={() => startEdit(goal)}
                         >
-                          <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                          <Pencil className="ic" aria-hidden="true" />
                         </button>
-                        <span className="flex-1" />
+                        <span style={{ flex: 1 }} />
                         <Tip label="Delete this goal">
                         <button
                           type="button"
                           aria-label="Delete goal"
-                          className={cx(
-                            'icon-button h-7 w-7',
-                            confirmDeleteId === goal.id ? 'bg-danger/10 text-danger' : 'text-faint hover:text-ink',
-                          )}
+                          className={cx('ib sm', confirmDeleteId === goal.id ? 'danger' : undefined)}
+                          style={confirmDeleteId === goal.id ? { background: 'rgb(var(--c-danger) / 0.1)', color: 'rgb(var(--c-danger))' } : undefined}
                           onClick={() => void remove(goal.id)}
                         >
-                          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                          <Trash2 className="ic" aria-hidden="true" />
                         </button>
                         </Tip>
                       </div>
                       {confirmDeleteId === goal.id ? (
-                        <p className="px-3 pb-2 text-[10.5px] text-warning">Click the trash again to confirm.</p>
+                        <p style={{ padding: '0 12px 8px', margin: 0, fontSize: 10.5, color: 'rgb(var(--c-warn))' }}>Click the trash again to confirm.</p>
                       ) : null}
                     </>
                   )}

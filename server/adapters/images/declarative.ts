@@ -163,7 +163,6 @@ export function createDeclarativeAdapter(config: DeclarativeImageConfig): ImageA
       resultFormat: 'both',
       maxImages: Math.max(1, Math.floor(config.maxImages ?? 1)),
       supportsNegativePrompt: false,
-      // No reference-field mapping in the declarative config → cannot carry.
       maxReferences: 0,
     },
 

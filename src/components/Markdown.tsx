@@ -93,7 +93,7 @@ export const Markdown = memo(function Markdown({ content, breakLines, className 
   }, [needsMath, chain, katex]);
   if (chain === null) {
     return (
-      <div className={`md-body${className ? ` ${className}` : ''} whitespace-pre-wrap break-words`}>{rendered}</div>
+      <div className={`md-body${className ? ` ${className}` : ''} whitespace-pre-wrap break-words`} style={{ whiteSpace: 'pre-wrap' }}>{rendered}</div>
     );
   }
   const { default: ReactMarkdown, remarkGfm, remarkMath } = chain;
@@ -117,12 +117,46 @@ export const Markdown = memo(function Markdown({ content, breakLines, className 
   );
 });
 
-/** Wraps fenced code with a copy affordance. */
+/** DESIGN-1 canvas render: tokenizer ringan — komentar/string/tag/angka/keyword
+ *  → span .tk-c/.tk-s/.tk-t/.tk-n/.tk-k (palet sudah ada di index.css). */
+const HL_KEYWORDS = 'const|let|var|function|return|if|else|for|while|class|new|import|from|export|async|await|true|false|null|undefined|def|this';
+const HL_RE = new RegExp(
+  '(\\/\\*[\\s\\S]*?\\*\\/|\\/\\/[^\\n]*)' +
+    '|("(?:[^"\\\\\\n]|\\\\.)*"|\'(?:[^\'\\\\\\n]|\\\\.)*\'|`[^`]*`)' +
+    '|(<\\/?[a-zA-Z][\\w-]*)' +
+    '|(\\b\\d+(?:\\.\\d+)?(?:px|ms|s|%|deg|em|rem)?\\b)' +
+    '|(\\b(?:' + HL_KEYWORDS + ')\\b)',
+  'g',
+);
+
+function highlightCode(code: string): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  let last = 0;
+  let key = 0;
+  let m: RegExpExecArray | null;
+  HL_RE.lastIndex = 0;
+  while ((m = HL_RE.exec(code)) !== null) {
+    if (m.index > last) nodes.push(code.slice(last, m.index));
+    const cls = m[1] ? 'tk-c' : m[2] ? 'tk-s' : m[3] ? 'tk-t' : m[4] ? 'tk-n' : 'tk-k';
+    nodes.push(<span key={key++} className={cls}>{m[0]}</span>);
+    last = m.index + m[0].length;
+  }
+  if (last < code.length) nodes.push(code.slice(last));
+  return nodes;
+}
+
+/** Kartu blok kode ala design: header bahasa + Copy + highlighted body. */
 function CodeBlock({ children }: { children: React.ReactNode }) {
   const [copied, setCopied] = useState(false);
 
+  const codeEl = (Array.isArray(children) ? children[0] : children) as
+    | { props?: { className?: string } }
+    | undefined;
+  const codeClass = codeEl?.props?.className ?? '';
+  const lang = /^language-([\w+-]+)/.exec(codeClass)?.[1] ?? '';
+  const text = extractText(children).replace(/\n$/, '');
+
   const copy = async () => {
-    const text = extractText(children);
     try {
       await navigator.clipboard.writeText(text);
       setCopied(true);
@@ -132,20 +166,26 @@ function CodeBlock({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <div className="group relative">
-      <button
-        type="button"
-        onClick={copy}
-        aria-label={copied ? 'Code copied' : 'Copy code'}
-        className="icon-button absolute right-2 top-2 h-7 w-7 bg-elevated opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
-      >
-        {copied ? (
-          <Check className="h-3.5 w-3.5 text-success" aria-hidden="true" />
-        ) : (
-          <Copy className="h-3.5 w-3.5" aria-hidden="true" />
-        )}
-      </button>
-      <pre>{children}</pre>
+    <div className="md-cb cb">
+      <div className="cb-h">
+        <span>{lang || 'text'}</span>
+        <button
+          type="button"
+          onClick={copy}
+          aria-label={copied ? 'Code copied' : 'Copy code'}
+          className="btn xs ghost"
+        >
+          {copied ? (
+            <Check className="ic" style={{ color: 'rgb(var(--c-ok))' }} aria-hidden="true" />
+          ) : (
+            <Copy className="ic" aria-hidden="true" />
+          )}
+          <span>{copied ? 'Copied' : 'Copy'}</span>
+        </button>
+      </div>
+      <pre>
+        <code className={codeClass}>{highlightCode(text)}</code>
+      </pre>
     </div>
   );
 }

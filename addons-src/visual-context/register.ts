@@ -42,7 +42,6 @@ export function register(on, $) {
       .replace(/'/g, '&#39;');
   }
 
-  // ── type coercion helpers (the pipeline schema validator is depth-bounded) ──
   function asString(v, fallback = '') {
     return typeof v === 'string' ? v : typeof v === 'number' || typeof v === 'boolean' ? String(v) : fallback;
   }
@@ -58,7 +57,6 @@ export function register(on, $) {
     return Array.isArray(v) ? v : [];
   }
 
-  // ── section builders (return HTML strings; all text goes through esc) ──
 
   function renderTiles(tiles) {
     const items = asArray(tiles).slice(0, SPEC_LIMITS.tiles.max);
@@ -149,7 +147,6 @@ export function register(on, $) {
     return `<div class="glossary">${rows.join('')}</div>`;
   }
 
-  // ── document template (inline CSS only - the iframe CSP blocks everything else) ──
 
   function buildDocument(spec) {
     const accent = pick(asString(spec.accent, 'blue'));
@@ -219,7 +216,6 @@ ${sections.join('\n')}
 </html>`;
   }
 
-  // ── the tool ──
 
   $.tool.register({
     name: 'visual_context',
@@ -277,7 +273,6 @@ ${sections.join('\n')}
         (title ? `<div class="vc-title">${esc(title)}</div>` : '') +
         (note ? `<div class="vc-note">${esc(note)}</div>` : '');
 
-      // Inject the header inside <body>, before the first section.
       const doc = html.replace('<body>', `<body>\n${header}`);
 
       const size = Buffer.byteLength(doc, 'utf8');
@@ -309,7 +304,6 @@ ${sections.join('\n')}
     },
   });
 
-  // ── teach every session the DSL exists (addon context provider) ──
 
   $.context.provide('Visual Context addon', [
     '- agent__visual-context_visual_context: render OpenGhost-style visuals inline in chat.',
@@ -319,7 +313,6 @@ ${sections.join('\n')}
     '  Use it when an answer is mostly structured: nutrition, schedules, routes, vocab, KPIs, plans.',
   ]);
 
-  // ── live re-broadcast over the addon bus (other browsers update via SSE) ──
 
   on(
     'tool.result',

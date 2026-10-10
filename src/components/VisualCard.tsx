@@ -93,12 +93,12 @@ const clampVisualHeight = (value: number): number =>
  *  bottom corners (both). Top handles are deliberately absent — the card
  *  lives in document flow, so growing "upward" would shove everything above
  *  it; the windowed metaphor applies where it makes sense. */
-const RESIZE_HANDLES: Array<{ dir: string; cls: string }> = [
-  { dir: 's', cls: 'inset-x-2 bottom-0 h-1.5 cursor-s-resize' },
-  { dir: 'e', cls: 'inset-y-1 right-0 w-1.5 cursor-e-resize' },
-  { dir: 'w', cls: 'inset-y-1 left-0 w-1.5 cursor-w-resize' },
-  { dir: 'se', cls: 'bottom-0 right-0 h-3.5 w-3.5 cursor-se-resize' },
-  { dir: 'sw', cls: 'bottom-0 left-0 h-3.5 w-3.5 cursor-sw-resize' },
+const RESIZE_HANDLES: Array<{ dir: string; style: React.CSSProperties }> = [
+  { dir: 's', style: { left: 8, right: 8, bottom: 0, height: 6, cursor: 's-resize' } },
+  { dir: 'e', style: { top: 4, bottom: 4, right: 0, width: 6, cursor: 'e-resize' } },
+  { dir: 'w', style: { top: 4, bottom: 4, left: 0, width: 6, cursor: 'w-resize' } },
+  { dir: 'se', style: { bottom: 0, right: 0, height: 14, width: 14, cursor: 'se-resize' } },
+  { dir: 'sw', style: { bottom: 0, left: 0, height: 14, width: 14, cursor: 'sw-resize' } },
 ];
 
 /**
@@ -160,6 +160,45 @@ export interface VisualSpec {
  * inline card AND the fullscreen view.
  */
 const visualHtmlCache = new Map<string, Promise<string>>();
+
+/**
+ * F5.1 — vendor lib bundles: fetched ONCE per lib per session from the
+ * harness origin (in-memory cache only; never persisted to the chat), then
+ * injected as an inline <script> at the top of <head> before the srcDoc is
+ * set. The iframe itself stays sandboxed with CSP default-src 'none' +
+ * script-src 'unsafe-inline' — the bundle text rides the srcDoc.
+ */
+const vendorCache = new Map<string, Promise<string>>();
+
+function loadVendorBundle(lib: string): Promise<string> {
+  let cached = vendorCache.get(lib);
+  if (!cached) {
+    cached = fetch(`/api/agent/visual-vendor/${encodeURIComponent(lib)}`).then((response) => {
+      if (!response.ok) throw new Error(`vendor bundle ${lib}: ${response.status}`);
+      return response.text();
+    });
+    cached.catch(() => vendorCache.delete(lib));
+    vendorCache.set(lib, cached);
+  }
+  return cached;
+}
+
+/** Resolves a visual's lib list (payload-provided, best-effort). */
+function visualLibs(visual: VisualSpec): string[] {
+  const libs = (visual as VisualSpec & { libs?: string[] }).libs;
+  return Array.isArray(libs) ? libs.filter((l) => typeof l === 'string' && /^[a-z0-9-]+$/.test(l)) : [];
+}
+
+/** Injects the vendor bundles at the top of <head> (or before the document). */
+async function injectVendorLibs(html: string, libs: string[]): Promise<string> {
+  if (libs.length === 0) return html;
+  const parts = await Promise.all(
+    libs.map((lib) => loadVendorBundle(lib).then((code) => `<script>${code}</script>`).catch(() => `<!-- vendor ${lib} unavailable -->`)),
+  );
+  const blob = parts.join('\n');
+  if (/<head[^>]*>/i.test(html)) return html.replace(/<head[^>]*>/i, (match) => `${match}\n${blob}`);
+  return `${blob}\n${html}`;
+}
 
 function loadVisualHtml(visual: VisualSpec): Promise<string> {
   if (visual.html !== undefined) return Promise.resolve(visual.html);
@@ -223,8 +262,7 @@ function VisualFrame({
       {...cspAttr}
       srcDoc={srcDoc}
       referrerPolicy="no-referrer"
-      className="w-full border-0 bg-white"
-      style={fill ? { height: '100%', display: 'block' } : { height, display: 'block' }}
+      style={fill ? { width: '100%', height: '100%', display: 'block', border: 0, background: '#fff' } : { width: '100%', height, display: 'block', border: 0, background: '#fff' }}
     />
   );
 }
@@ -270,34 +308,40 @@ function VariantFrame({
   const html = useVariantHtml(variant);
   return (
     <div
-      className={cx(
-        'relative min-w-0 flex-1 overflow-hidden rounded-card border bg-surface',
-        picked ? 'border-accent' : 'border-hairline',
-      )}
+      className="card"
+      style={{
+        position: 'relative',
+        minWidth: 0,
+        flex: 1,
+        overflow: 'hidden',
+        margin: 0,
+        padding: 0,
+        borderColor: picked ? 'rgb(var(--c-accent))' : 'var(--line)',
+      }}
     >
-      <div className="flex items-center gap-1.5 border-b border-hairline bg-elevated px-2.5 py-1.5">
-        <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium text-ink">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, borderBottom: '1px solid var(--line)', background: 'rgb(var(--c-elev))', padding: '6px 10px' }}>
+        <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11.5, fontWeight: 500, color: 'rgb(var(--c-ink))' }}>
           {index + 1}. {variant.title}
         </span>
         {picked ? (
-          <span className="inline-flex items-center gap-1 rounded-full bg-accent/15 px-2 py-0.5 text-[10.5px] font-medium text-accent">
-            <Check className="h-3 w-3" aria-hidden="true" />
+          <span className="cap a" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <Check className="ic" style={{ width: 12, height: 12 }} aria-hidden="true" />
             chosen
           </span>
         ) : (
           <Tip label="Pick this frontend">
             <button
               type="button"
-              className="icon-button h-6 w-6 shrink-0"
+              className="ib xs"
               onClick={() => onPick(variant.id)}
               aria-label={`Pick ${variant.title}`}
             >
-              <Check className="h-3.5 w-3.5" aria-hidden="true" />
+              <Check className="ic" aria-hidden="true" />
             </button>
           </Tip>
         )}
       </div>
-      <div className="bg-white">
+      <div style={{ background: '#fff' }}>
         {html !== undefined ? (
           <iframe
             title={variant.title || `Variant ${index + 1}`}
@@ -305,11 +349,10 @@ function VariantFrame({
             {...CSP_ATTR}
             srcDoc={injectVisualRuntime(enforceCsp(html), variant.id)}
             referrerPolicy="no-referrer"
-            className="w-full border-0 bg-white"
-            style={{ height: clampVisualHeight(variant.height || 420), display: 'block' }}
+            style={{ width: '100%', height: clampVisualHeight(variant.height || 420), display: 'block', border: 0, background: '#fff' }}
           />
         ) : (
-          <div className="flex items-center justify-center text-[11.5px] text-faint" style={{ height: 240 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 240, fontSize: 11.5, color: 'var(--faint)' }}>
             Loading…
           </div>
         )}
@@ -373,11 +416,10 @@ export function VisualCard({
   const [resolvedHtml, setResolvedHtml] = useState<string | undefined>(visual.html);
   useEffect(() => {
     let cancelled = false;
-    if (visual.html !== undefined) {
-      setResolvedHtml(visual.html);
-      return;
-    }
-    loadVisualHtml(visual)
+    const base = visual.html !== undefined ? Promise.resolve(visual.html) : loadVisualHtml(visual);
+    const libs = visualLibs(visual);
+    base
+      .then((html) => (libs.length > 0 ? injectVendorLibs(html, libs) : html))
       .then((html) => {
         if (!cancelled) setResolvedHtml(html);
       })
@@ -489,17 +531,16 @@ export function VisualCard({
   const [bodyOpen, setBodyOpen] = useState(true);
 
   const srcDoc = useMemo(
-    // VISUAL v2: the live token participates so an SSE re-bind swaps the doc.
     () => (resolvedHtml === undefined ? '' : injectVisualRuntime(enforceCsp(resolvedHtml), visual.id)),
     [resolvedHtml, visual.id, liveToken],
   );
   if (resolvedHtml === undefined) {
     return (
       <div
-        className="relative mt-1 flex max-w-full items-center justify-center overflow-hidden rounded-card border border-hairline bg-surface shadow-card"
-        style={{ width: width ?? '100%', height }}
+        className="card"
+        style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', width: width ?? '100%', height, margin: '4px 0 0', padding: 0 }}
       >
-        <span className="text-[11.5px] text-faint">Loading visual…</span>
+        <span style={{ fontSize: 11.5, color: 'var(--faint)' }}>Loading visual…</span>
       </div>
     );
   }
@@ -527,29 +568,29 @@ export function VisualCard({
     return (
       <div
         ref={rootRef}
-        className="relative mt-1 max-w-full overflow-hidden rounded-card border border-hairline bg-surface shadow-card"
-        style={{ width: width ?? '100%' }}
+        className="card"
+        style={{ position: 'relative', marginTop: 4, maxWidth: '100%', overflow: 'hidden', padding: 0, width: width ?? '100%' }}
       >
-        <div className="flex items-center gap-2 border-b border-hairline bg-elevated px-3 py-1.5">
-          <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-success" aria-hidden="true" />
-          <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-ink">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid var(--line)', background: 'rgb(var(--c-elev))', padding: '6px 12px' }}>
+          <ShieldCheck className="ic" style={{ color: 'rgb(var(--c-ok))' }} aria-hidden="true" />
+          <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12, fontWeight: 500, color: 'rgb(var(--c-ink))' }}>
             {visual.title}
           </span>
-          <span className="hidden shrink-0 text-[10.5px] text-faint sm:inline">
+          <span className="show-sm" style={{ flexShrink: 0, fontSize: 10.5, color: 'var(--faint)' }}>
             {pickedVariant ? 'pick locked' : `${variants.length} candidates — pick one`}
           </span>
           <Tip label="Open fullscreen">
             <button
               type="button"
-              className="icon-button h-6 w-6 shrink-0"
+              className="ib xs"
               onClick={() => onFullscreen(pickedVariant ?? visual)}
               aria-label="Open fullscreen"
             >
-              <Maximize2 className="h-3.5 w-3.5" aria-hidden="true" />
+              <Maximize2 className="ic" aria-hidden="true" />
             </button>
           </Tip>
         </div>
-        <div className="flex flex-col gap-2 p-2 md:flex-row">
+        <div className="var-row">
           {variants.map((variant, index) => (
             <VariantFrame
               key={variant.id}
@@ -567,30 +608,31 @@ export function VisualCard({
   return (
     <div
       ref={rootRef}
-      className="relative mt-1 max-w-full overflow-hidden rounded-card border border-hairline bg-surface shadow-card"
-      style={{ width: width ?? '100%' }}
+      className="card"
+      style={{ position: 'relative', marginTop: 4, maxWidth: '100%', overflow: 'hidden', padding: 0, width: width ?? '100%' }}
     >
       {/** The title bar; VISUAL v2 shows the edit-in-place badge. */}
-      <div className="flex items-center gap-2 border-b border-hairline bg-elevated px-3 py-1.5">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid var(--line)', background: 'rgb(var(--c-elev))', padding: '6px 12px' }}>
         <button
           type="button"
           onClick={() => setBodyOpen((value) => !value)}
           aria-expanded={bodyOpen}
           aria-label={bodyOpen ? 'Collapse visual panel' : 'Expand visual panel'}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          style={{ display: 'flex', minWidth: 0, flex: 1, alignItems: 'center', gap: 8, textAlign: 'left', color: 'inherit' }}
         >
           <ChevronDown
-            className={cx('h-3.5 w-3.5 shrink-0 text-faint transition-transform duration-200', !bodyOpen && '-rotate-90')}
+            className="chev"
+            style={{ color: 'var(--faint)', transition: 'transform .2s', transform: bodyOpen ? undefined : 'rotate(-90deg)' }}
             aria-hidden="true"
           />
-          <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-success" aria-hidden="true" />
-          <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-ink">
+          <ShieldCheck className="ic" style={{ color: 'rgb(var(--c-ok))' }} aria-hidden="true" />
+          <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12, fontWeight: 500, color: 'rgb(var(--c-ink))' }}>
             {visual.title}
           </span>
         </button>
         {visual.replaces ? (
           <Tip label="The agent updated this card in place — earlier frames stay in history above.">
-            <span className="hidden shrink-0 rounded-full bg-accent/15 px-2 py-0.5 text-[10.5px] font-medium text-accent sm:inline">
+            <span className="cap a show-sm">
               edited in place
             </span>
           </Tip>
@@ -598,41 +640,41 @@ export function VisualCard({
         <Tip label={autoFit ? 'Auto-fit is on — height follows the content' : 'Fit content (auto-height)'}>
           <button
             type="button"
-            className={cx('icon-button h-6 w-6 shrink-0', autoFit && 'text-accent')}
+            className={cx('ib xs', autoFit && 'on')}
             onClick={fitContent}
             aria-label="Fit content"
           >
-            <UnfoldVertical className="h-3.5 w-3.5" aria-hidden="true" />
+            <UnfoldVertical className="ic" aria-hidden="true" />
           </button>
         </Tip>
         <Tip label="Shorter (manual height, disables auto-fit)">
           <button
             type="button"
-            className="icon-button h-6 w-6 shrink-0"
+            className="ib xs"
             onClick={() => takeManualHeight(height - 180)}
             aria-label="Decrease height"
           >
-            <ChevronsDownUp className="h-3.5 w-3.5" aria-hidden="true" />
+            <ChevronsDownUp className="ic" aria-hidden="true" />
           </button>
         </Tip>
         <Tip label="Taller (manual height, disables auto-fit)">
           <button
             type="button"
-            className="icon-button h-6 w-6 shrink-0"
+            className="ib xs"
             onClick={() => takeManualHeight(height + 180)}
             aria-label="Increase height"
           >
-            <ChevronsUpDown className="h-3.5 w-3.5" aria-hidden="true" />
+            <ChevronsUpDown className="ic" aria-hidden="true" />
           </button>
         </Tip>
         <Tip label="Open fullscreen">
           <button
             type="button"
-            className="icon-button h-6 w-6 shrink-0"
+            className="ib xs"
             onClick={() => onFullscreen(visual)}
             aria-label="Open fullscreen"
           >
-            <Maximize2 className="h-3.5 w-3.5" aria-hidden="true" />
+            <Maximize2 className="ic" aria-hidden="true" />
           </button>
         </Tip>
       </div>
@@ -640,13 +682,9 @@ export function VisualCard({
           COLLAPSE: grid-rows 0fr↔1fr (pola CollapsePanel) — tinggi kartu
           dianimasikan mulus dua arah; resize handles ikut hilang saat
           tertutup (separator tanpa konten membingungkan). */}
-      <div
-        className="grid transition-[grid-template-rows] duration-300 ease-in-out"
-        style={{ gridTemplateRows: bodyOpen ? '1fr' : '0fr' }}
-        aria-hidden={!bodyOpen}
-      >
-        <div className="min-h-0 overflow-hidden">
-          <div className="bg-white">
+      <div className={cx('col', !bodyOpen && 'shut')} aria-hidden={!bodyOpen}>
+        <div className="col-in">
+          <div style={{ background: '#fff' }}>
             <VisualFrame visual={visual} height={height} frameRef={frameRef} srcDoc={srcDoc ?? ''} />
           </div>
           {/** Windowed resize handles (see RESIZE_HANDLES). */}
@@ -655,7 +693,8 @@ export function VisualCard({
               <div
                 key={handle.dir}
                 role="separator"
-                className={cx('absolute z-20 touch-none transition-colors hover:bg-accent/30', handle.cls)}
+                className="rz-h"
+                style={{ position: 'absolute', zIndex: 20, touchAction: 'none', ...handle.style }}
                 onPointerDown={startResize(handle.dir)}
                 onPointerMove={onResizeMove}
                 onPointerUp={endResize}
@@ -707,11 +746,10 @@ export function VisualFullscreen({ visual, onClose }: { visual: VisualSpec; onCl
   const [srcDoc, setSrcDoc] = useState<string | null>(visual.html !== undefined ? injectVisualRuntime(enforceCsp(visual.html), visual.id) : null);
   useEffect(() => {
     let cancelled = false;
-    if (visual.html !== undefined) {
-      setSrcDoc(injectVisualRuntime(enforceCsp(visual.html), visual.id));
-      return;
-    }
-    loadVisualHtml(visual)
+    const base = visual.html !== undefined ? Promise.resolve(visual.html) : loadVisualHtml(visual);
+    const libs = visualLibs(visual);
+    base
+      .then((html) => (libs.length > 0 ? injectVendorLibs(html, libs) : html))
       .then((html) => {
         if (!cancelled) setSrcDoc(injectVisualRuntime(enforceCsp(html), visual.id));
       })
@@ -724,7 +762,7 @@ export function VisualFullscreen({ visual, onClose }: { visual: VisualSpec; onCl
 
   return (
     <div
-      className="fixed inset-0 z-50 flex flex-col bg-black/85 backdrop-blur-sm"
+      style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', flexDirection: 'column', background: 'rgb(var(--c-shadow) / 0.85)', backdropFilter: 'blur(4px)' }}
       role="dialog"
       aria-modal="true"
       aria-label={visual.title || 'Agent visual'}
@@ -732,17 +770,21 @@ export function VisualFullscreen({ visual, onClose }: { visual: VisualSpec; onCl
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div className="flex items-center gap-2 px-4 py-3">
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-white/90">{visual.title}</span>
-        <div className="flex items-center gap-1 rounded-control bg-white/10 p-0.5">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px' }}>
+        <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, fontWeight: 500, color: 'rgb(var(--c-paper) / 0.9)' }}>{visual.title}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, borderRadius: 'var(--r-md)', background: 'rgb(var(--c-paper) / 0.1)', padding: 3 }}>
           {FULLSCREEN_WIDTHS.map((mode) => (
             <button
               key={mode.id}
               type="button"
-              className={cx(
-                'rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors',
-                widthMode === mode.width ? 'bg-white text-black' : 'text-white/70 hover:text-white',
-              )}
+              style={{
+                borderRadius: 999,
+                padding: '4px 10px',
+                fontSize: 11,
+                fontWeight: 500,
+                color: widthMode === mode.width ? '#000' : 'rgb(var(--c-paper) / 0.7)',
+                background: widthMode === mode.width ? 'rgb(var(--c-paper))' : 'transparent',
+              }}
               onClick={() => setWidthMode(mode.width)}
               aria-pressed={widthMode === mode.width}
             >
@@ -750,39 +792,42 @@ export function VisualFullscreen({ visual, onClose }: { visual: VisualSpec; onCl
             </button>
           ))}
         </div>
-        <span className="hidden text-[11px] text-white/50 sm:inline">sandboxed · no network</span>
+        <span className="show-sm" style={{ fontSize: 11, color: 'rgb(var(--c-paper) / 0.5)' }}>sandboxed · no network</span>
         <button
           type="button"
-          className="rounded-control p-1.5 text-white/70 transition-colors hover:text-white"
+          style={{ display: 'grid', placeItems: 'center', borderRadius: 'var(--r-md)', padding: 6, color: 'rgb(var(--c-paper) / 0.7)' }}
           onClick={onClose}
           aria-label="Close fullscreen"
         >
-          <X className="h-5 w-5" aria-hidden="true" />
+          <X className="ic" style={{ width: 20, height: 20 }} aria-hidden="true" />
         </button>
       </div>
-      <div ref={stageRef} className="relative min-h-0 flex-1 p-4">
+      <div ref={stageRef} style={{ position: 'relative', minHeight: 0, flex: 1, padding: 16 }}>
         {srcDoc !== null && widthMode === 0 ? (
-          <div className="h-full">
+          <div style={{ height: '100%' }}>
             <VisualFrame visual={visual} height={0} fill srcDoc={srcDoc} />
           </div>
         ) : null}
         {srcDoc !== null && widthMode > 0 ? (() => {
           // Responsive preview: the iframe keeps its TRUE device width (the
-          // document lays out at 1280/768/390) and the host scales it to fit
-          // the stage. Height = stageHeight / scale so the scaled frame still
-          // fills the overlay vertically; the document scrolls inside.
           const scale = stageWidth > 0 ? Math.min(1, stageWidth / widthMode) : 1;
           const stageHeight = stageRef.current?.clientHeight ?? 0;
           return (
-            <div className="h-full overflow-hidden">
+            <div style={{ height: '100%', overflow: 'hidden' }}>
               <iframe
                 title={visual.title || 'Agent visual'}
                 sandbox={VISUAL_SANDBOX}
                 {...CSP_ATTR}
                 srcDoc={srcDoc}
                 referrerPolicy="no-referrer"
-                className="absolute top-0 left-1/2 origin-top-left border-0 bg-white shadow-2xl"
                 style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: '50%',
+                  transformOrigin: 'top left',
+                  border: 0,
+                  background: '#fff',
+                  boxShadow: '0 25px 50px -12px rgb(0 0 0 / 0.5)',
                   width: widthMode,
                   height: stageHeight > 0 ? Math.round(stageHeight / scale) : '100%',
                   transform: `translateX(-${(widthMode * scale) / 2}px) scale(${scale})`,
@@ -792,7 +837,7 @@ export function VisualFullscreen({ visual, onClose }: { visual: VisualSpec; onCl
           );
         })() : null}
         {srcDoc === null ? (
-          <div className="flex h-full items-center justify-center text-[12px] text-white/60">Loading…</div>
+          <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', fontSize: 12, color: 'rgb(var(--c-paper) / 0.6)' }}>Loading…</div>
         ) : null}
       </div>
     </div>

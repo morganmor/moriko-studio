@@ -1,6 +1,6 @@
 import type { ChatMessage } from '../contracts.js';
 import { parseDataUrl } from '../contracts.js';
-import { anthropicThinkingBudget, createThinkingScrubState, flushThinkingScrub, scrubInlineThinkingFragment, ALL_THINK_TAGS } from '../reasoning.js';
+import { anthropicThinkingBudget, anthropicMaxOutput, createThinkingScrubState, flushThinkingScrub, scrubInlineThinkingFragment, ALL_THINK_TAGS } from '../reasoning.js';
 import { coerceText } from '../textUtil.js';
 import { assertOk, iterateSse, type StreamHandler, type StreamParams } from '../sse.js';
 import { resolveSteerPartRefs } from '../attachmentStore.js';
@@ -212,7 +212,7 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
     const body: Record<string, unknown> = {
       model,
       stream: true,
-      max_tokens: settings.maxOutputTokens ?? 32768,
+      max_tokens: settings.maxOutputTokens ?? anthropicMaxOutput(model),
       messages: convo,
       ...(prepared.defs && useTools
         ? {
@@ -230,7 +230,7 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
     if (thinking) {
       body.thinking = thinking;
       body.max_tokens = Math.max(
-        settings.maxOutputTokens ?? 32768,
+        settings.maxOutputTokens ?? anthropicMaxOutput(model),
         thinking.budget_tokens + 1024,
       );
     } else {
@@ -282,7 +282,6 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
 
       switch (event.type) {
         case 'message_start': {
-          // Cache-read counts arrive HERE (message.usage), not in message_delta.
           const startUsage = event.message?.usage;
           if (startUsage) usage = { ...usage, ...startUsage };
           break;
@@ -326,8 +325,6 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
           break;
         }
         case 'message_delta': {
-          // Merge: message_start carries the cache fields, message_delta the
-          // final counts — neither alone is the whole picture.
           if (event.usage) usage = { ...usage, ...event.usage };
           if (event.delta?.stop_reason) stopReason = event.delta.stop_reason;
           break;
@@ -354,20 +351,12 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
       sawAnyUsage = true;
       const cacheRead = usage.cache_read_input_tokens ?? 0;
       const cacheWrite = usage.cache_creation_input_tokens ?? 0;
-      // Anthropic reports input_tokens EXCLUDING cache — the full prompt is
-      // input + cache read + cache write (deepseek token-meter disjoint
-      // buckets). Reporting the bare input as promptTokens made any cache
       // ratio computed against it exceed 100% (the "281% cache" bug).
       if (usage.input_tokens !== undefined) {
-        // Full prompt (uncached + read + write), accumulated per round so it
-        // shares sumCacheReadTokens' population — a last-round prompt over a
-        // summed read is what pushed the ratio past 1 ("100% cache").
         sumPromptTokens += usage.input_tokens + cacheRead + cacheWrite;
       }
       sumCompletionTokens += usage.output_tokens ?? 0;
       sumBilledTokens += (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
-      // cache_creation is a cache WRITE (billed 1.25x), not a hit — a write
-      // must never inflate the cache-hit rate.
       sumCacheReadTokens += cacheRead;
     }
 
@@ -478,11 +467,6 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
 
     const steered = drainSteers(params.sessionId);
     for (const entry of steered) onEvent({ type: 'steer', id: entry.id, text: steerTextOf(entry), parts: entry.parts });
-    // DSH-STYLE STEER: drained steers ride as an ORDINARY user message (the
-    // generic parts go through the same toAnthropicContent mapping as any user
-    // input — images become base64 blocks, no harness framing).
-    // Wire refs resolve at this seam — the steer buffer bypasses /api/chat's
-    // resolveWireRefs, so the provider would otherwise receive a dead URL.
     const steerParts = steersToUserParts(steered);
     resolveSteerPartRefs(steerParts);
     if (steered.length > 0) {

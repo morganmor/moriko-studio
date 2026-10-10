@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { Bell, Check, ChevronDown, PanelRightClose, X } from './icons';
+import { Check, ChevronDown, PanelRightClose, SlidersHorizontal, X } from './icons';
 
 import { type MessageTone } from '../lib/messageCatalog';
 import { Component } from 'react';
 import { RefreshCw } from './icons';
 import { useStore } from '../store/useStore';
+import { Popover } from './Popover';
 
 /** Utility for conditional class strings. Keeps JSX readable without a dep. */
 export function cx(...values: Array<string | false | null | undefined>): string {
@@ -37,15 +38,11 @@ export class LazyViewBoundary extends Component<{ label: string; children: React
   render() {
     if (this.state.error) {
       return (
-        <div className="mx-auto w-full max-w-xl px-6 py-16 text-center" role="alert">
-          <p className="text-sm font-medium text-ink">{this.props.label} failed to load.</p>
-          <p className="mt-2 break-words text-[12px] leading-relaxed text-faint">{this.state.error.message}</p>
-          <button
-            type="button"
-            className="pill-button mx-auto mt-4 flex items-center gap-1.5 border border-hairline px-3 py-1.5 text-[12px] text-muted hover:text-ink"
-            onClick={() => window.location.reload()}
-          >
-            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+        <div style={{ margin: '0 auto', width: '100%', maxWidth: '576px', padding: '64px 24px', textAlign: 'center' }} role="alert">
+          <p style={{ fontSize: 14, fontWeight: 500, color: 'rgb(var(--c-ink))' }}>{this.props.label} failed to load.</p>
+          <p style={{ marginTop: 8, overflowWrap: 'break-word', fontSize: 12, lineHeight: 1.625, color: 'var(--faint)' }}>{this.state.error.message}</p>
+          <button type="button" className="btn xs" style={{ margin: '16px auto 0' }} onClick={() => window.location.reload()}>
+            <RefreshCw className="ic" aria-hidden="true" />
             Reload
           </button>
         </div>
@@ -58,8 +55,8 @@ export class LazyViewBoundary extends Component<{ label: string; children: React
 /** Visible pending state for lazy views — never a silent blank again. */
 export function LazyViewFallback({ label }: { label: string }) {
   return (
-    <div className="flex items-center justify-center gap-2 py-16 text-[12.5px] text-faint" role="status">
-      <span className="h-3 w-3 animate-pulse rounded-full bg-accent/60" aria-hidden="true" />
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '64px 0', fontSize: 12.5, color: 'var(--faint)' }} role="status">
+      <span className="spin" aria-hidden="true" />
       Loading {label}…
     </div>
   );
@@ -94,7 +91,6 @@ export function RightDockSlot({
   const anchorRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
-  // Close on outside pointerdown / Escape while the menu is open.
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: PointerEvent) => {
@@ -117,12 +113,13 @@ export function RightDockSlot({
     if (!open) {
       const box = anchorRef.current?.getBoundingClientRect();
       if (box) {
-        // Flip upward when the viewport cannot fit the menu below the slot.
         const flip = box.bottom + 170 > window.innerHeight;
+        // Clamp horizontally: a 170px-wide menu must stay on screen on phones.
+        const left = Math.max(8, Math.min(box.left, window.innerWidth - 186));
         setPos(
           flip
-            ? { bottom: window.innerHeight - box.top + 6, left: box.left }
-            : { top: box.bottom + 6, left: box.left },
+            ? { bottom: window.innerHeight - box.top + 6, left }
+            : { top: box.bottom + 6, left },
         );
       }
     }
@@ -130,18 +127,22 @@ export function RightDockSlot({
   };
 
   return (
-    <div className="relative shrink-0">
+    <div style={{ position: 'relative', flexShrink: 0 }}>
       <button
         ref={anchorRef}
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={toggle}
-        className="flex items-center gap-1.5 rounded-control border border-hairline bg-surface px-2 py-1 text-[13px] font-semibold text-ink transition-colors hover:border-accent/40"
+        className="rd-slot dswitch"
       >
-        {activeLabel}
+        <span className="icw" aria-hidden="true">
+          <SlidersHorizontal className="ic" />
+        </span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{activeLabel}</span>
         <ChevronDown
-          className={cx('h-3 w-3 shrink-0 text-faint transition-transform', open && 'rotate-180')}
+          className="chev"
+          style={{ color: 'var(--faint)', transform: open ? 'rotate(180deg)' : undefined }}
           aria-hidden="true"
         />
       </button>
@@ -151,8 +152,8 @@ export function RightDockSlot({
               ref={menuRef}
               role="menu"
               aria-label="Right sidebar"
-              style={{ position: 'fixed', top: pos.top, bottom: pos.bottom, left: pos.left }}
-              className="z-50 min-w-[170px] overflow-y-auto rounded-control border border-hairline bg-elevated py-1 shadow-popover"
+              style={{ position: 'fixed', top: pos.top, bottom: pos.bottom, left: pos.left, minWidth: 170 }}
+              className="pop open"
             >
               {items.map((item) => (
                 <button
@@ -164,15 +165,10 @@ export function RightDockSlot({
                     onChange(item.key);
                     setOpen(false);
                   }}
-                  className={cx(
-                    'flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] transition-colors',
-                    item.key === mode ? 'text-ink' : 'text-muted hover:bg-accent/10 hover:text-ink',
-                  )}
+                  className="mi"
+                  style={{ minHeight: 32, fontSize: 12.5 }}
                 >
-                  <Check
-                    className={cx('h-3 w-3 shrink-0', item.key === mode ? 'text-accent' : 'invisible')}
-                    aria-hidden="true"
-                  />
+                  <Check className="ic mck" aria-hidden="true" />
                   {item.label}
                 </button>
               ))}
@@ -212,14 +208,95 @@ export function CollapseSection({
   }, [open]);
 
   return (
-    <div
-      className={cx('grid transition-[grid-template-rows] duration-300 ease-in-out', className)}
-      style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
-      aria-hidden={!open}
-    >
-      <div className={cx('min-h-0 overflow-hidden', contentClassName)}>
+    <div className={cx('col', !open && 'shut', className)} aria-hidden={!open}>
+      <div className={cx('col-in', contentClassName)}>
         {contentMounted ? children : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Segmented control (right-dock design): a row of radio buttons with a
+ * sliding indicator pill that springs between options. Indicator geometry is
+ * measured from the checked button (offsetLeft/offsetWidth) and re-measured
+ * on value change + window resize; the first paint renders without the pill
+ * so it never sits at 0,0 mid-flight.
+ */
+export function Segmented({
+  value,
+  options,
+  onChange,
+  ariaLabel,
+  small,
+  className,
+  style,
+}: {
+  value: string;
+  options: Array<{ value: string; label: string; tip?: string }>;
+  onChange: (value: string) => void;
+  ariaLabel: string;
+  /** Design's `.seg.sm` — 26px rows, 12px type. */
+  small?: boolean;
+  className?: string;
+  style?: React.CSSProperties;
+}) {
+  const segRef = useRef<HTMLDivElement>(null);
+  const [indicator, setIndicator] = useState<{ x: number; w: number } | null>(null);
+
+  const measure = useCallback(() => {
+    const seg = segRef.current;
+    if (!seg) return;
+    const checked = seg.querySelector<HTMLButtonElement>(`button[data-v="${CSS.escape(value)}"]`);
+    if (!checked || !checked.offsetWidth) return;
+    // A Tip (.seg-opt) wrapper is position:relative, so the button's offsetLeft
+    // is relative to THAT span — accumulate offsets up to the .seg root or the
+    // pill would pin to the first option forever (Operator/Admin looked dead).
+    let x = checked.offsetLeft;
+    let node = checked.offsetParent as HTMLElement | null;
+    while (node && node !== seg) {
+      x += node.offsetLeft;
+      node = node.offsetParent as HTMLElement | null;
+    }
+    setIndicator({ x, w: checked.offsetWidth });
+  }, [value]);
+
+  useLayoutEffect(measure, [measure]);
+  useEffect(() => {
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [measure]);
+
+  return (
+    <div
+      ref={segRef}
+      role="radiogroup"
+      aria-label={ariaLabel}
+      className={cx('seg', small && 'sm', className)}
+      style={{ ...style, ['--x' as string]: `${indicator?.x ?? 0}px`, ['--w' as string]: `${indicator?.w ?? 0}px` }}
+    >
+      {indicator ? <span className="ind" aria-hidden="true" /> : null}
+      {options.map((option) => {
+        const button = (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            data-v={option.value}
+            aria-checked={option.value === value}
+            onClick={() => onChange(option.value)}
+          >
+            {option.label}
+          </button>
+        );
+        return option.tip ? (
+          <Tip key={option.value} label={option.tip} className="seg-opt">
+            {button}
+          </Tip>
+        ) : (
+          button
+        );
+      })}
     </div>
   );
 }
@@ -235,11 +312,11 @@ export function RightDockCloseButton({ label = 'Close right sidebar' }: { label?
   return (
     <button
       type="button"
-      className="icon-button bg-elevated text-ink"
+      className="ib"
       onClick={toggleSettings}
       aria-label={label}
     >
-      <PanelRightClose className="h-4 w-4" aria-hidden="true" />
+      <PanelRightClose className="ic" aria-hidden="true" />
     </button>
   );
 }
@@ -272,8 +349,6 @@ export function Tip({
   const [hover, setHover] = useState(false);
   const [rect, setRect] = useState<{ top: number; bottom: number; left: number; right: number } | null>(null);
 
-  // Measure on hover; a scroll/resize under the cursor re-measures, a close
-  // clears the position so the fade-out doesn't visibly jump.
   useEffect(() => {
     if (!hover) {
       setRect(null);
@@ -299,16 +374,13 @@ export function Tip({
   const alignShift =
     align === 'center' ? 'translateX(-50%)' : align === 'end' ? 'translateX(-100%)' : 'translateX(0)';
   const sideShift = side === 'bottom' ? 'translateY(8px)' : 'translateY(calc(-100% - 8px))';
-  // INNERMOST-WINS: nested Tips (the tokens Tip wraps the cache Tip) must
-  // never open two portal bubbles at once. pointerover BUBBLES, so every
-  // ancestor Tip is asked whether it is still the closest anchor to the
-  // pointer — the outer bubble closes itself the moment a nested one opens.
   const isInnermost = (target: EventTarget | null): boolean =>
     target instanceof Element && target.closest('[data-tip-anchor]') === anchorRef.current;
   return (
     <span
       ref={anchorRef}
-      className={cx('relative inline-flex group/tip', className)}
+      className={className}
+      style={{ position: 'relative', display: 'inline-flex' }}
       data-tip-anchor=""
       onPointerOver={(event) => setHover(isInnermost(event.target))}
       onPointerLeave={() => setHover(false)}
@@ -326,8 +398,9 @@ export function Tip({
                 left,
                 transform: `${alignShift} ${sideShift}`,
                 opacity: hover ? 1 : 0,
+                maxWidth: 340,
               }}
-              className="pointer-events-none z-[80] w-max max-w-[340px] rounded-control border border-hairline bg-elevated px-3 py-2 text-[12.5px] leading-snug text-ink shadow-popover transition-opacity duration-150"
+              className="tip show"
             >
               {label}
             </span>,
@@ -346,7 +419,7 @@ interface ModalProps {
   description?: string;
   children: ReactNode;
   footer?: ReactNode;
-  /** Tailwind max-width class for the panel. */
+  /** Extra width class for the panel (design: .mpanel / .mpanel.sm). */
   size?: string;
   /** Extra header controls rendered LEFT of the close ✕ (e.g. reload). */
   headerExtra?: ReactNode;
@@ -363,7 +436,7 @@ export function Modal({
   description,
   children,
   footer,
-  size = 'max-w-2xl',
+  size = '',
   headerExtra,
 }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -397,14 +470,9 @@ export function Modal({
 
   if (!open) return null;
 
-  // PORTAL to document.body — a Modal rendered inside an ancestor with a CSS
-  // transform (dock wrapper, drawer, #root's zoom scale) becomes trapped by
-  // that ancestor's containing block: `fixed inset-0` covers the ANCESTOR's
-  // box, not the viewport, and the "Select a model" picker shrinks into the
-  // dock corner. Body-level portals escape every transform.
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-black/60 p-4 backdrop-blur-sm"
+      className="modal open modal-shell"
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
@@ -415,29 +483,38 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className={cx(
-          'animate-scale-in flex max-h-[calc(100vh-2rem)] w-full flex-col rounded-card border border-hairline bg-surface shadow-popover',
-          size,
-        )}
+        className={cx('mpanel modal-panel', size)}
       >
-        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-hairline px-5 py-4">
-          <div>
-            <h2 className="text-base font-semibold text-ink">{title}</h2>
-            {description ? <p className="mt-1 text-sm text-muted">{description}</p> : null}
+        <header className="mh">
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: 'rgb(var(--c-ink))' }}>{title}</h3>
+            {description ? (
+              <p style={{ margin: '4px 0 0', fontSize: 12.5, color: 'var(--muted)' }}>{description}</p>
+            ) : null}
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div style={{ display: 'flex', flexShrink: 0, alignItems: 'center', gap: 8 }}>
             {headerExtra}
-            <button type="button" className="icon-button" onClick={onClose} aria-label="Close dialog">
-              <X className="h-4 w-4" aria-hidden="true" />
+            <button type="button" className="ib" onClick={onClose} aria-label="Close dialog">
+              <X className="ic" aria-hidden="true" />
             </button>
           </div>
         </header>
 
         {}
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-4">{children}</div>
+        <div className="mb" style={{ display: 'flex', minHeight: 0, flex: 1, flexDirection: 'column' }}>{children}</div>
 
         {footer ? (
-          <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-hairline px-5 py-4">
+          <footer
+            style={{
+              display: 'flex',
+              flexShrink: 0,
+              alignItems: 'center',
+              justifyContent: 'flex-end',
+              gap: 8,
+              borderTop: '1px solid var(--line)',
+              padding: '14px 18px',
+            }}
+          >
             {footer}
           </footer>
         ) : null}
@@ -464,14 +541,18 @@ interface ToggleProps {
 export function Toggle({ checked, onChange, label, hideLabel, disabled }: ToggleProps) {
   return (
     <label
-      className={cx(
-        'relative inline-flex items-center gap-2',
-        disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
-      )}
+      style={{
+        position: 'relative',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 8,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+      }}
     >
       <input
         type="checkbox"
-        className="peer sr-only"
+        className="sr-only"
         checked={checked}
         disabled={disabled}
         onChange={(event) => onChange(event.target.checked)}
@@ -479,16 +560,10 @@ export function Toggle({ checked, onChange, label, hideLabel, disabled }: Toggle
       />
       <span
         aria-hidden="true"
-        className={cx(
-          'relative h-5 w-9 shrink-0 rounded-full transition-colors duration-200',
-          'after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full',
-          'after:bg-white after:shadow-sm after:transition-transform after:duration-200',
-          'peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2',
-          'peer-focus-visible:outline-accent',
-          checked ? 'bg-accent after:translate-x-4' : 'bg-hairline',
-        )}
+        className="sw"
+        aria-checked={checked}
       />
-      {hideLabel ? null : <span className="text-sm text-ink">{label}</span>}
+      {hideLabel ? null : <span style={{ fontSize: 14, color: 'rgb(var(--c-ink))' }}>{label}</span>}
     </label>
   );
 }
@@ -498,12 +573,12 @@ export function Toggle({ checked, onChange, label, hideLabel, disabled }: Toggle
 /** Tone → color classes. EVERY card is OPAQUE: a solid surface background,
  *  a real border and a popover shadow — the old translucent pops (bg-warn/10,
  *  bg-danger/10) let the streaming thread bleed through the text. */
-const NOTICE_TONE: Record<MessageTone, { card: string; text: string; dot: string }> = {
-  info: { card: 'border-hairline bg-elevated', text: 'text-ink', dot: 'bg-ink/40' },
-  success: { card: 'border-success/60 bg-elevated', text: 'text-ink', dot: 'bg-success' },
-  warn: { card: 'border-warn/70 bg-elevated', text: 'text-ink', dot: 'bg-warn' },
-  danger: { card: 'border-danger/70 bg-elevated', text: 'text-ink', dot: 'bg-danger' },
-  error: { card: 'border-danger/70 bg-elevated', text: 'text-danger', dot: 'bg-danger' },
+const NOTICE_TONE: Record<MessageTone, { border: string; text: string; dot: string }> = {
+  info: { border: 'var(--line)', text: 'rgb(var(--c-ink))', dot: 'rgb(var(--c-ink) / 0.4)' },
+  success: { border: 'rgb(var(--c-ok) / 0.6)', text: 'rgb(var(--c-ink))', dot: 'rgb(var(--c-ok))' },
+  warn: { border: 'rgb(var(--c-warn) / 0.7)', text: 'rgb(var(--c-ink))', dot: 'rgb(var(--c-warn))' },
+  danger: { border: 'rgb(var(--c-danger) / 0.7)', text: 'rgb(var(--c-ink))', dot: 'rgb(var(--c-danger))' },
+  error: { border: 'rgb(var(--c-danger) / 0.7)', text: 'rgb(var(--c-danger))', dot: 'rgb(var(--c-danger))' },
 };
 
 /** One catalog-born notice card. The lifetime timer is per-card so a stacked
@@ -523,26 +598,39 @@ function NoticeCard({ entry, onDismiss }: { entry: NoticeEntryView; onDismiss: (
     <div
       role="status"
       aria-live="polite"
-      className={cx(
-        'animate-fade-up pointer-events-auto w-fit min-w-[200px] max-w-[min(460px,calc(100vw-2rem))] rounded-card border px-3.5 py-2.5 shadow-popover',
-        tone.card,
-      )}
+      className="toast"
+      style={{
+        maxWidth: 'min(460px, calc(100vw - 2rem))',
+        minWidth: 200,
+        borderColor: tone.border,
+        animation: 'tIn .35s var(--spring)',
+      }}
     >
-      <div className="flex items-start gap-2">
-        <span aria-hidden="true" className={cx('mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full', tone.dot)} />
-        <div className="min-w-0 flex-1">
-          <p className={cx('text-[12.5px] leading-relaxed break-words', tone.text)}>{entry.text}</p>
+      {/* flex:1 + minWidth:0 → inner mengisi lebar kartu (min-width:200), sehingga
+          tombol X terdorong ke pojok kanan, bukan nempel setelah teks. */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, flex: 1, minWidth: 0 }}>
+        <span
+          aria-hidden="true"
+          style={{ marginTop: 7, width: 6, height: 6, flexShrink: 0, borderRadius: '50%', background: tone.dot }}
+        />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.625, overflowWrap: 'break-word', color: tone.text }}>
+            {entry.text}
+          </p>
           {entry.detail ? (
-            <p className="mt-1 text-[11px] leading-snug text-faint break-words">{entry.detail}</p>
+            <p style={{ margin: '4px 0 0', fontSize: 11, lineHeight: 1.375, overflowWrap: 'break-word', color: 'var(--faint)' }}>
+              {entry.detail}
+            </p>
           ) : null}
         </div>
         <button
           type="button"
-          className="icon-button -m-1 shrink-0"
+          className="ib xs"
+          style={{ marginTop: -1, flexShrink: 0 }}
           onClick={() => onDismiss(entry.key)}
           aria-label="Dismiss notice"
         >
-          <X className="h-3.5 w-3.5" aria-hidden="true" />
+          <X className="ic" style={{ width: 14, height: 14 }} aria-hidden="true" />
         </button>
       </div>
     </div>
@@ -556,21 +644,32 @@ export interface NoticeEntryView {
   detail?: string;
   tone: MessageTone;
   ttl: number;
+  /** When it fired — the notices popover's "Today · 14:30" stamp. */
+  createdAt: number;
+}
+
+/** Design notices row stamp: "Today · 14:30" or "6 Oct · 14:30". */
+function noticeStamp(at: number): string {
+  const date = new Date(at);
+  const now = new Date();
+  const hm = `${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`;
+  if (date.toDateString() === now.toDateString()) return `Today · ${hm}`;
+  return `${date.toLocaleDateString([], { day: 'numeric', month: 'short' })} · ${hm}`;
 }
 
 /**
- * The Notice Center: harness + UI messages surface here, stacked UNDER THE
- * SESSION TITLE — measured from the session-title BAR (the #moriko-session-bar
- * header inside the main card), not from the viewport's left edge. The fixed
- * left-3 placement covered the sidebar instead of the title bar, so the
- * anchor is now the bar's bounding rect. Still portaled to document.body
- * (fixed positioning must escape transformed ancestors) and z-60 (above the
- * z-50 modals). A history trail keeps every notice of this session.
+ * The Notice Center: transient cards + the design's Notices popover
+ * (pop-notices). BOTH anchor on the bell (anchorRef from TopBar): the stack
+ * hangs right under it and the popover opens bottom-end of it, so the position
+ * can never drift from the trigger again. Popover content follows the design:
+ * "Notices" header with a Clear action over a scrollable .nt list — colored
+ * dot, bold message, "Today · 14:30" stamp.
  */
 export function NoticeCenter({
   entries,
   history,
   expanded,
+  anchorRef,
   onToggleExpanded,
   onDismiss,
   onClearHistory,
@@ -578,91 +677,91 @@ export function NoticeCenter({
   entries: NoticeEntryView[];
   history: NoticeEntryView[];
   expanded: boolean;
+  /** The bell button — the transient stack and the popover anchor on it. */
+  anchorRef: RefObject<HTMLElement | null>;
   onToggleExpanded: () => void;
   onDismiss: (key: string) => void;
   onClearHistory: () => void;
 }) {
-  // Anchor: the session-title bar. Falls back to the fixed 3.5rem offset when
-  // the bar is not in the DOM yet (SSR/first paint).
-  const [anchor, setAnchor] = useState({ left: 12, top: 62 });
+  /** Transient cards hug the bell: right-aligned, directly beneath it. */
+  const [stackPos, setStackPos] = useState({ right: 12, top: 62 });
   useEffect(() => {
     const update = () => {
-      const bar = document.getElementById('moriko-session-bar');
-      if (!bar) return;
-      const rect = bar.getBoundingClientRect();
-      setAnchor({ left: Math.max(12, Math.round(rect.left) + 12), top: Math.round(rect.bottom) + 6 });
+      const rect = anchorRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setStackPos({
+        right: Math.max(8, Math.round(window.innerWidth - rect.right)),
+        top: Math.round(rect.bottom) + 6,
+      });
     };
     update();
     window.addEventListener('resize', update);
-    // Sidebar collapse / panel toggles shift the bar horizontally.
-    const observer = new ResizeObserver(update);
-    if (document.getElementById('moriko-session-bar')) {
-      observer.observe(document.getElementById('moriko-session-bar') as Element);
-    }
-    return () => {
-      window.removeEventListener('resize', update);
-      observer.disconnect();
-    };
-  }, []);
+    return () => window.removeEventListener('resize', update);
+  }, [anchorRef, entries.length]);
 
-  if (entries.length === 0 && history.length === 0) return null;
+  const stack =
+    entries.length > 0 ? (
+      <div
+        className="notice-stack"
+        style={{
+          position: 'fixed',
+          zIndex: 90,
+          display: 'flex',
+          width: 'fit-content',
+          maxWidth: 'min(460px, calc(100vw - 1.5rem))',
+          flexDirection: 'column',
+          alignItems: 'flex-end',
+          gap: 8,
+          pointerEvents: 'none',
+          right: stackPos.right,
+          top: stackPos.top,
+        }}
+      >
+        {entries.map((entry) => (
+          <NoticeCard key={entry.key} entry={entry} onDismiss={onDismiss} />
+        ))}
+      </div>
+    ) : null;
 
-  // ONE portaled stack: history panel (when expanded) first, then the live
-  // notices, then the history toggle — all under the session title.
-  const stack = (
-    <div
-      className="pointer-events-none fixed z-[60] flex w-fit max-w-[min(460px,calc(100vw-1.5rem))] flex-col items-start gap-2"
-      style={{ left: anchor.left, top: anchor.top }}
-    >
-      {expanded && history.length > 0 ? (
-        <div className="pointer-events-auto flex max-h-[40vh] w-fit min-w-[280px] max-w-full flex-col overflow-hidden rounded-card border border-hairline bg-elevated shadow-popover">
-          <div className="flex items-center justify-between border-b border-hairline px-3 py-2">
-            <span className="text-[11px] font-medium text-muted">Notice history ({history.length})</span>
-            <button
-              type="button"
-              className="text-[11px] text-faint transition-colors hover:text-ink"
-              onClick={onClearHistory}
-            >
-              Clear
-            </button>
-          </div>
-          <div className="max-h-[calc(40vh-2.5rem)] overflow-y-auto px-2 py-2">
+  return (
+    <>
+      {stack && typeof document !== 'undefined' ? createPortal(stack, document.body) : null}
+      <Popover
+        open={expanded}
+        onClose={onToggleExpanded}
+        anchorRef={anchorRef}
+        label="Notices"
+        role="dialog"
+        placement="bottom-end"
+        width={340}
+        className="wide"
+      >
+        <div className="pop-h">
+          <span>Notices</span>
+          <button type="button" className="btn xs ghost" onClick={onClearHistory}>
+            Clear
+          </button>
+        </div>
+        {history.length === 0 ? (
+          <p className="pop-empty">No notices yet.</p>
+        ) : (
+          <div className="nt-list">
             {history.map((entry) => (
-              <div key={entry.key} className="flex items-start gap-2 rounded-control px-1.5 py-1.5">
-                <span aria-hidden="true" className={cx('mt-1.5 h-1 w-1 shrink-0 rounded-full', NOTICE_TONE[entry.tone].dot)} />
-                <p className={cx('min-w-0 flex-1 text-[11.5px] leading-snug', NOTICE_TONE[entry.tone].text)}>
-                  {entry.text}
-                  {entry.detail ? <span className="text-faint"> — {entry.detail}</span> : null}
-                </p>
+              <div key={entry.key} className="nt">
+                <span className="nd" style={{ background: NOTICE_TONE[entry.tone].dot }} aria-hidden="true" />
+                <div className="min0">
+                  <b>{entry.text}</b>
+                  <span>{noticeStamp(entry.createdAt)}</span>
+                  {entry.detail ? <span>{entry.detail}</span> : null}
+                </div>
               </div>
             ))}
           </div>
-        </div>
-      ) : null}
-
-      {entries.map((entry) => (
-        <NoticeCard key={entry.key} entry={entry} onDismiss={onDismiss} />
-      ))}
-
-      {history.length > 0 ? (
-        <button
-          type="button"
-          className="pointer-events-auto flex items-center gap-1.5 rounded-control border border-hairline bg-elevated px-2.5 py-1 text-[11px] text-muted shadow-popover transition-colors hover:text-ink"
-          onClick={onToggleExpanded}
-          aria-expanded={expanded}
-        >
-          <Bell className="h-3 w-3" aria-hidden="true" />
-          {expanded ? 'Hide history' : `History (${history.length})`}
-          <ChevronDown className={cx('h-3 w-3 transition-transform', expanded && 'rotate-180')} aria-hidden="true" />
-        </button>
-      ) : null}
-    </div>
+        )}
+      </Popover>
+    </>
   );
-
-  if (typeof document === 'undefined') return stack;
-  return createPortal(stack, document.body);
 }
-
 
 export function Field({
   label,
@@ -681,7 +780,7 @@ export function Field({
         {label}
       </label>
       {children}
-      {hint ? <p className="mt-1.5 text-xs text-faint">{hint}</p> : null}
+      {hint ? <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--faint)' }}>{hint}</p> : null}
     </div>
   );
 }
@@ -698,13 +797,11 @@ export function EmptyState({
   action?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
-      <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full border border-hairline bg-surface text-muted">
-        {icon}
-      </div>
-      <h3 className="text-sm font-semibold text-ink">{title}</h3>
-      <p className="mt-1.5 max-w-sm text-sm text-muted">{description}</p>
-      {action ? <div className="mt-5">{action}</div> : null}
+    <div className="empty">
+      <div className="eic">{icon}</div>
+      <b>{title}</b>
+      <p>{description}</p>
+      {action ? <div>{action}</div> : null}
     </div>
   );
 }

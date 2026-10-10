@@ -218,6 +218,49 @@ export function agentRouter(): Router {
     res.json({ ok: true, steerText: resolved.steerText });
   });
 
+  /**
+   * F5.1 — VISUAL VENDOR BUNDLES: serves the locally-built IIFE bundles from
+   * the MORIKO home cache (scripts/build-visual-vendor.mjs). Same-origin so
+   * the client can fetch the text and inject it into the sandboxed iframe;
+   * the iframe itself keeps CSP default-src 'none'.
+   *
+   *   GET /api/agent/visual-vendor/:lib
+   */
+  router.get('/visual-vendor/:lib', (req, res) => {
+    const allowed = new Set(['three', 'three-addons-orbit', 'pixi', 'matter', 'moriko-gl']);
+    const lib = String(req.params.lib ?? '');
+    if (!allowed.has(lib)) {
+      throw new HttpError(404, `Unknown vendor lib "${lib}".`);
+    }
+    let content: string | null = null;
+    try {
+      const { readFileSync } = require('node:fs') as typeof import('node:fs');
+      const os = require('node:os') as typeof import('node:os');
+      const path = require('node:path') as typeof import('node:path');
+      const candidates = [
+        path.join(os.homedir(), '.moriko-studio', 'visual-vendor', `${lib}.js`),
+      ];
+      // repo-local fallback for moriko-gl (kept in-tree)
+      if (lib === 'moriko-gl') {
+        candidates.unshift(path.join(process.cwd(), 'server', 'agents', 'vendor', 'moriko-gl.js'));
+      }
+      for (const candidate of candidates) {
+        try {
+          content = readFileSync(candidate, 'utf8');
+          break;
+        } catch { /* try next */ }
+      }
+    } catch {
+      content = null;
+    }
+    if (content === null) {
+      throw new HttpError(404, `Vendor bundle "${lib}" not built yet — run: node scripts/build-visual-vendor.mjs`);
+    }
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    res.send(content);
+  });
+
   router.post(
     '/workspaces',
     asyncRoute(async (req, res) => {
@@ -469,8 +512,6 @@ export function agentRouter(): Router {
       const callSessionId =
         typeof body?.sessionId === 'string' && body.sessionId.trim() ? body.sessionId.trim() : undefined;
       // No-workspace agent mode: the debug call route no longer hard-requires
-      // a workspace — workspace-attached tools answer with their own readable
-      // error when no root exists (same contract as the live loop).
       const wireName = body.tool.startsWith('agent__') ? body.tool : `agent__${body.tool}`;
       if (!listAgentToolDefs().some((def) => def.wireName === wireName)) {
         throw new HttpError(400, `Unknown agent tool "${wireName}".`);

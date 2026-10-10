@@ -77,7 +77,6 @@ export function collectFileChanges(turns: Turn[]): FileChangeRow[] {
         return;
       }
       if (summary.startsWith('Deleted ')) {
-        // Delete carries no diff — parse the path out of the result text.
         const rest = summary.slice('Deleted '.length).split(/ Previous version| NOT vaulted/)[0];
         const path = rest.replace(/ \(directory, recursive\)\.$/, '').replace(/\.$/, '').trim();
         if (path) {
@@ -93,7 +92,6 @@ export function collectFileChanges(turns: Turn[]): FileChangeRow[] {
         }
         return;
       }
-      // Diff-less edit fallback (older server builds): counts only.
       const stat = segment.diffstat ?? (segment.diff ? diffStat(segment.diff) : null);
       if (!stat) return;
       const match = /--- a\/(.+)$/m.exec(segment.diff ?? '');
@@ -113,9 +111,9 @@ export function collectFileChanges(turns: Turn[]): FileChangeRow[] {
 }
 
 const STATUS_DOT: Record<FileStatus, string> = {
-  created: 'bg-success',
-  edited: 'bg-accent',
-  deleted: 'bg-danger',
+  created: 'rgb(var(--c-ok))',
+  edited: 'rgb(var(--c-accent))',
+  deleted: 'rgb(var(--c-danger))',
 };
 const STATUS_LABEL: Record<FileStatus, string> = {
   created: 'created',
@@ -138,7 +136,6 @@ export function DiffPanel({ width: _width }: { width?: number }) {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [restorePath, setRestorePath] = useState<string | null>(null);
 
-  // Badge click sets the store scope → mirror it into the local selector.
   useEffect(() => {
     if (diffPanelTurnId) setScope(diffPanelTurnId);
   }, [diffPanelTurnId]);
@@ -147,14 +144,14 @@ export function DiffPanel({ width: _width }: { width?: number }) {
   const selected = scopedRows.find((row) => row.key === selectedKey) ?? scopedRows[0] ?? null;
 
   return (
-    <div className="flex h-full min-w-0 flex-col">
-      <div className="flex items-center justify-between border-b border-line px-4 py-3">
+    <div className="dock-card" style={{ display: 'flex', height: '100%', minWidth: 0, flexDirection: 'column' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', columnGap: 8, rowGap: 6, borderBottom: '1px solid var(--line)', padding: '10px 12px' }}>
         <RightDockSlot mode={rightPanelMode} onChange={setRightPanelMode} />
         <RightDockCloseButton />
       </div>
 
-      {/* Scope: which turn */}
-      <div className="flex items-center gap-2 px-3 pt-3">
+      {}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 12px 0' }}>
         <select
           value={scope}
           onChange={(event) => {
@@ -162,7 +159,8 @@ export function DiffPanel({ width: _width }: { width?: number }) {
             setDiffPanelTurnId(event.target.value === 'all' ? null : event.target.value);
             setSelectedKey(null);
           }}
-          className="field w-full text-[12px]"
+          className="field"
+          style={{ width: '100%', fontSize: 12 }}
           aria-label="Diff scope"
         >
           <option value="all">All turns · {changes.length} change{changes.length === 1 ? '' : 's'}</option>
@@ -180,35 +178,44 @@ export function DiffPanel({ width: _width }: { width?: number }) {
         </select>
       </div>
 
-      {/* File list */}
-      <div className="max-h-52 shrink-0 overflow-y-auto px-3 py-2">
+      {}
+      <div style={{ maxHeight: 208, flexShrink: 0, overflowY: 'auto', padding: '8px 12px' }}>
         {scopedRows.length === 0 ? (
-          <p className="px-1 py-2 text-[11.5px] leading-snug text-faint">
+          <p style={{ margin: 0, padding: '8px 4px', fontSize: 11.5, lineHeight: 1.375, color: 'var(--faint)' }}>
             No file changes recorded for this scope yet.
           </p>
         ) : (
-          <ul className="space-y-0.5">
+          <ul style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: 0, margin: 0, listStyle: 'none' }}>
             {scopedRows.map((row) => (
               <li key={row.key}>
                 <button
                   type="button"
                   onClick={() => setSelectedKey(row.key)}
-                  className={cx(
-                    'flex w-full items-center gap-2 rounded-control px-1.5 py-1 text-left transition-colors',
-                    selected?.key === row.key ? 'bg-elevated text-ink' : 'text-muted hover:bg-elevated/60 hover:text-ink',
-                  )}
+                  className={cx(selected?.key === row.key && 'on')}
+                  style={{
+                    display: 'flex',
+                    width: '100%',
+                    alignItems: 'center',
+                    gap: 8,
+                    borderRadius: 'var(--r-sm)',
+                    padding: '4px 6px',
+                    textAlign: 'left',
+                    fontSize: 11.5,
+                    color: selected?.key === row.key ? 'rgb(var(--c-ink))' : 'var(--muted)',
+                    background: selected?.key === row.key ? 'rgb(var(--c-elev))' : undefined,
+                  }}
                 >
                   <span
-                    className={cx('h-1.5 w-1.5 shrink-0 rounded-full', STATUS_DOT[row.status])}
+                    style={{ width: 6, height: 6, flexShrink: 0, borderRadius: '50%', background: STATUS_DOT[row.status] }}
                     aria-hidden="true"
                   />
-                  <span className="min-w-0 flex-1 truncate font-mono text-[11px]">
+                  <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--f-mono)', fontSize: 11 }}>
                     {row.path}
                   </span>
-                  <span className="shrink-0 text-[10px] text-faint">{STATUS_LABEL[row.status]}</span>
-                  <span className="shrink-0 text-[10px] font-medium tabular-nums">
-                    <span className="text-success">+{row.added}</span>{' '}
-                    <span className="text-danger">−{row.removed}</span>
+                  <span style={{ flexShrink: 0, fontSize: 10, color: 'var(--faint)' }}>{STATUS_LABEL[row.status]}</span>
+                  <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>
+                    <span style={{ color: 'rgb(var(--c-ok))' }}>+{row.added}</span>{' '}
+                    <span style={{ color: 'rgb(var(--c-danger))' }}>−{row.removed}</span>
                   </span>
                 </button>
               </li>
@@ -217,29 +224,29 @@ export function DiffPanel({ width: _width }: { width?: number }) {
         )}
       </div>
 
-      {/* Detail */}
+      {}
       {selected ? (
-        <div className="flex min-h-0 flex-1 flex-col border-t border-line">
-          <div className="flex items-center gap-2 px-3 py-2">
-            <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-ink">
+        <div style={{ display: 'flex', minHeight: 0, flex: 1, flexDirection: 'column', borderTop: '1px solid var(--line)' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', columnGap: 8, rowGap: 4, padding: '8px 12px' }}>
+            <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--f-mono)', fontSize: 11, color: 'rgb(var(--c-ink))' }}>
               {selected.path}
             </span>
               <button
                 type="button"
                 onClick={() => setRestorePath(selected.path)}
-                className="pill-button border border-hairline px-2 py-1 text-[11px] text-muted transition-colors hover:border-accent/50 hover:text-ink"
+                className="btn ghost xs"
               >
-                <RotateCcw className="h-3 w-3" aria-hidden="true" />
+                <RotateCcw className="ic" aria-hidden="true" />
                 Restore file…
               </button>
           </div>
-          <div className="inner-scroll min-h-0 flex-1 overflow-auto">
+          <div className="inner-scroll sd-scroll" style={{ minHeight: 0, flex: 1, overflow: 'auto' }}>
             <SplitDiff diff={selected.diff} onlyPath={selected.path} />
           </div>
         </div>
       ) : (
-        <div className="flex min-h-0 flex-1 items-center justify-center px-6">
-          <p className="text-center text-[11.5px] leading-snug text-faint">
+        <div style={{ display: 'flex', minHeight: 0, flex: 1, alignItems: 'center', justifyContent: 'center', padding: '0 24px' }}>
+          <p style={{ margin: 0, textAlign: 'center', fontSize: 11.5, lineHeight: 1.375, color: 'var(--faint)' }}>
             Select a file above to inspect its changes line by line.
           </p>
         </div>

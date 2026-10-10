@@ -7,7 +7,6 @@
 
 import type { HarnessToolResult } from '../agents/tools/shared.js';
 
-// ─── Manifest ───────────────────────────────────────────────────────────────
 
 export interface AddonManifest {
   id: string;
@@ -25,7 +24,6 @@ export interface LoadedAddon {
   loadError: string | null;
 }
 
-// ─── Event system ───────────────────────────────────────────────────────────
 
 export type AddonEvent =
   | 'tool.call'
@@ -120,7 +118,6 @@ export type AddonEventRegistrar = (
   handler?: AddonHook,
 ) => AddonRegistration;
 
-// ─── API surface ($ / AddonApi) ─────────────────────────────────────────────
 
 export interface AddonToolRegistration {
   name: string;
@@ -196,7 +193,6 @@ export interface AddonApi {
   };
 }
 
-// ─── Render sites & elements ────────────────────────────────────────────────
 
 export type RenderSite = 'thread-sidebar' | 'composer-band' | 'right-dock' | 'floating' | 'tool-row' | 'spinner';
 
@@ -218,7 +214,6 @@ export type AddonElement =
   | { type: 'markdown'; text: string }
   | null;
 
-// ─── Client-facing descriptor ───────────────────────────────────────────────
 
 export interface AddonClientEntry {
   id: string;
@@ -234,14 +229,12 @@ export interface AddonClientEntry {
   commands: Array<{ name: string; description: string; argumentHint?: string }>;
 }
 
-// ─── Register entry point signature ─────────────────────────────────────────
 
 export type AddonRegisterFn = (
   on: AddonEventRegistrar,
   api: AddonApi,
 ) => void | Promise<void>;
 
-// ─── Backward-compat: handler type for static tool defs ──────────────────────
 
 export type AddonToolHandler = (
   args: Record<string, unknown>,

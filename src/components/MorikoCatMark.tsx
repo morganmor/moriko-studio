@@ -5,7 +5,7 @@ import { brandCatSvgUrl } from '../lib/brandAssets';
  * standalone SVG file instead of inlined JSX.
  *
  * The artwork is whatever `src/lib/brandAssets.ts` points at. Swapping the
- * pointed-to SVG (e.g. `public/svg/moriko-landing.svg` → `public/svg/moriko-miau.svg`)
+ * pointed-to SVG (e.g. `src/assets/svg/moriko-landing.svg` → `src/assets/svg/moriko-miau.svg`)
  * swaps the logo and its animation without touching this component.
  *
  * Rendered as an `<img>` so the SVG runs in its own document: its SMIL or

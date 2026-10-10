@@ -263,8 +263,6 @@ export function migrateLegacyLayout(): void {
   const report: string[] = [];
 
   // NOTE: the storage-location flow is copy-free by design — a custom
-  // MORIKO_HOME starts EMPTY and the previous home is never touched. There is
-  // deliberately NO cross-home migration at boot.
 
   if (existsSync(LEGACY_DIR)) {
     for (const [from, to] of [

@@ -61,7 +61,7 @@ function autoTitleFor(firstUserMessage: string): string {
 }
 
 /**
- * Summarizes every turn except the newest `compactKeepRecentTurns` and stores
+ * Summarizes every turn except the newest protected window and stores
  * the result as the conversation's compaction. The primary call replays the
  * wire prefix (KV-cache-friendly) on the session model — or the dedicated
  * Summarizer Model when configured — with one degraded elided-transcript
@@ -128,11 +128,9 @@ async function runCompactionInner(input: {
   const state = useStore.getState();
   const conversation = state.conversations.find((entry) => entry.id === input.conversationId);
   if (!conversation) return null;
-  const candidate = compactCandidate(conversation, input.trigger !== 'manual');
+  const candidate = compactCandidate(conversation);
   if (!candidate) return null;
 
-  // MODEL-FREE PRE-PASS (auto triggers only): a pruned wire alone may fit
-  // under the trigger — then no summarizer call is needed at all.
   if (input.trigger !== 'manual') {
     const prePassMeta = input.model
       ? lookupModelMeta(useStore.getState().modelMeta, input.model)
@@ -158,11 +156,6 @@ async function runCompactionInner(input: {
   let committed = false;
   try {
     const coveredIds = candidate.turns.map((turn) => turn.id);
-    // CACHE-FRIENDLY PRIMARY (DSH summarizer.ts): replay the exact wire
-    // prefix the live request carried, with the directive as the FINAL user
-    // message — the system prompt, tool schemas, and covered messages stay
-    // byte-identical in front, so the provider's KV cache is reused instead
-    // of re-billed.
     const plan = contextPlan(conversation, { prune: input.prune });
     const directive = [
       COMPACT_INSTRUCTION,
@@ -177,10 +170,6 @@ async function runCompactionInner(input: {
       ...summarizationReplay(plan, coveredIds),
       { role: 'user', content: directive },
     ];
-    // LEGACY FALLBACK (DSH maxOverflowRetries: one degraded retry): the
-    // elided transcript under the system-prompt framing — the safety net for
-    // a replay the provider rejects, an empty checkpoint, or a model that
-    // reached for a tool instead of summarizing.
     const legacyMessages: ChatMessage[] = [
       {
         role: 'user',
@@ -193,9 +182,6 @@ async function runCompactionInner(input: {
       },
     ];
 
-    // SUMMARIZER ROUTE: the dedicated model when the sidebar toggle is on,
-    // else the session's own. A failing dedicated route falls back to the
-    // session model — a picker mistake must not kill compaction.
     const dedicated =
       input.settings.summarizerEnabled === true &&
       Boolean(input.settings.summarizerProviderId) &&
@@ -251,8 +237,6 @@ async function runCompactionInner(input: {
             ...(attempt.systemInstruction
               ? { systemInstruction: attempt.systemInstruction }
               : {}),
-            // Generation params only — the system prompt and tool schemas
-            // stay byte-identical so the KV cache prefix hits.
             thinkingLevel: 'off',
             temperature: 0.2,
             topP: 0.9,
@@ -273,10 +257,6 @@ async function runCompactionInner(input: {
           } else if (event.type === 'error') {
             return { error: event.message ?? 'The summarization request failed.' };
           } else if (event.type === 'tool_call' || event.type === 'tool_result') {
-            // SAFETY BELT: the cache-friendly call carries live tool schemas
-            // (prefix alignment). A model that disobeys the directive and
-            // reaches for a tool must not be summarized from — the tool-less
-            // legacy call takes over.
             return { toolViolation: true };
           }
         }
@@ -322,8 +302,6 @@ async function runCompactionInner(input: {
           'The model did not return a structured checkpoint (required sections missing — it likely replayed the transcript instead of condensing it). Nothing was replaced; compact again or switch models.',
       };
     }
-    // SHRINK VALIDATION (DSH): a checkpoint that does not shrink its source
-    // has replaced nothing — reject it and keep the context untouched.
     const summaryTokens = estimateTokens(summary);
     if (summaryTokens >= candidate.replacedTokens) {
       return {
@@ -671,7 +649,7 @@ function requestMidRunCompaction(
     return;
   }
   const current = useStore.getState().conversations.find((entry) => entry.id === conversationId);
-  if (!current || !compactCandidate(current, trigger !== 'manual')) {
+  if (!current || !compactCandidate(current)) {
     if (trigger === 'manual') {
       useStore.getState().showNotice('compact.nothing');
     }
@@ -1272,12 +1250,6 @@ export function useChatController() {
       const controller = new AbortController();
       abortsRef.current.set(conversationId, controller);
       useStore.getState().setGenRunning(conversationId, true);
-      // RESPONSE TIMER: capture the run start from the STORE stamp, not a
-      // fresh Date.now(). setGenRunning(true) now PRESERVES an existing stamp
-      // (a mid-run flap must not restart the clock), and a RESUME re-attaches
-      // to a run that started before the reload — so the frozen duration must
-      // be measured from that same epoch. A brand-new run got its stamp from
-      // the call on the line above.
       const runStartEpoch = useStore.getState().genStartedAt[conversationId] ?? Date.now();
       ensureLivePolling();
       resetReattachBookkeeping(conversationId);
@@ -1288,14 +1260,7 @@ export function useChatController() {
       }
       attachedConversations.add(conversationId);
 
-      // ATTACHMENT SELF-HEAL: attachments picked while the OLD upload route
-      // still required a workspace (it answered 404 without one) were stored
-      // with their FULL textContent but NO path — and wireUserContent then
-      // inlines that full text into EVERY subsequent request. Re-upload the
-      // text to the per-conversation attachment store now, write the path
       // back into the record, and the wire shrinks to the bounded preview +
-      // read_file pointer. Idempotent: attachments that already carry a path
-      // are skipped, and the re-upload dedupes by content hash server-side.
       if (!continueOnly && !resume) {
         const healTargets = (conversation.turns ?? [])
           .flatMap((turn) => (turn.attachments ?? []).map((attachment) => ({ turn, attachment })))
@@ -1313,7 +1278,6 @@ export function useChatController() {
               });
             }
           } catch {
-            // A failed heal keeps the old (full-inline) shape — never blocks the send.
           }
         }
       }
@@ -1333,9 +1297,6 @@ export function useChatController() {
       if (busyElsewhere) {
         useStore.getState().showNotice('compact.skippedBusy');
       }
-      // MODEL-FREE PRE-PASS: before summarizing, a pruned wire (tighter tool
-      // digests, images offloaded) may fit under the trigger — then the
-      // reduced wire alone carries the conversation and no summary is made.
       if (trigger && !pruneArmed) {
         if (pruneRelieves(conversation, modelMeta, incomingTokens)) {
           wirePruneArmed.add(conversationId);
@@ -1345,7 +1306,6 @@ export function useChatController() {
           wirePruneArmed.add(conversationId);
         }
       }
-      // Disarm the pruned wire once the FULL wire fits again.
       if (!resume && !continueOnly && wirePruneArmed.has(conversationId)) {
         const full = shouldAutoCompact(conversation, modelMeta, incomingTokens, false);
         if (!full) wirePruneArmed.delete(conversationId);
@@ -1525,8 +1485,6 @@ export function useChatController() {
 
       if (controller.signal.aborted) {
         useStore.getState().setGenRunning(conversationId, false);
-        // RESPONSE TIMER: a user-stopped run still shows its elapsed time —
-        // the work happened, only the stop came first.
         stampProcessingTime(conversationId, assistantTurn.id, runStartEpoch);
         abortsRef.current.delete(conversationId);
         if (!continueOnly && !resume) {
@@ -1625,10 +1583,6 @@ export function useChatController() {
         outputBlocked = (liveTrust?.outputFrozen === true) || liveTrust?.level === 5;
         tier5Terminate = liveTrust?.level === 5;
 
-        // Pressure sampler: `usage` events only arrive at round boundaries, so a
-        // long reasoning stretch with no tool rounds never re-checks the limit.
-        // Sample the reconstructed context on an interval and arm the SAME
-        // mid-run compaction the usage trigger uses.
         pressureTimer = window.setInterval(() => {
           const live = useStore.getState().conversations.find((entry) => entry.id === conversationId);
           if (!live) return;
@@ -1735,6 +1689,16 @@ export function useChatController() {
                   openBrowserPanelOnce(event.panelUrl);
                 }
                 if (event.ok === false) failedTool = true;
+                // agent__image optimism: the tool's result text always lists
+                // the local URLs ("- /api/images/local/..."). Push them into
+                // the Gallery store NOW — the count and grid update instantly,
+                // no SSE round-trip, no browser refresh.
+                if (event.toolName === 'image' && event.ok !== false && typeof event.summary === 'string') {
+                  const urls = [...event.summary.matchAll(/\/api\/images\/local\/[a-zA-Z0-9_-]+\.(?:png|jpe?g|webp)/g)].map(
+                    (match) => match[0],
+                  );
+                  if (urls.length > 0) useStore.getState().pushGalleryUrls(urls);
+                }
                 // NOTE: the event's toolName is UNPREFIXED (server strips the
                 if (event.toolName === 'harness_choice') {
                   let choice: 'apologize' | 'continue' = 'continue';
@@ -1752,6 +1716,10 @@ export function useChatController() {
               break;
             }
             case 'tool_progress': {
+              // Live progress rides the DEDICATED `progress` field — writing
+              // `summary` here used to make the later tool_result SKIP this
+              // segment (its pairing loop skips segments with a summary), so
+              // results and toolImages never landed (frozen "Waiting…" cards).
               for (let i = segments.length - 1; i >= 0; i -= 1) {
                 const segment = segments[i];
                 if (
@@ -1761,7 +1729,7 @@ export function useChatController() {
                 ) {
                   segments[i] = {
                     ...segment,
-                    summary: (coerceDelta(event.message) ?? '').slice(0, 120),
+                    progress: (coerceDelta(event.message) ?? '').slice(0, 200),
                   };
                   break;
                 }
@@ -1893,15 +1861,15 @@ export function useChatController() {
               } else {
                 failure = event.message ?? 'The provider reported an error.';
               }
-              // The provider refused the request because the context is FULL:
-              // rescue it — arm a mid-run compaction instead of leaving the run
-              // dead with a "compact the thread" hint the user must act on.
               if (/model_context_window_exceeded|context[_ ]?(window|length)/i.test(failure)) {
                 requestMidRunCompaction(conversationId, 'context-limit');
               }
               break;
             case 'done':
-              forcedFinish = event.finishReason;
+              // A later bare `done` must never clobber a real cut reason
+              // (the route's finally-done used to send one — turns that hit
+              // max_tokens then ended silently).
+              forcedFinish = event.finishReason ?? forcedFinish;
               break;
             default:
               break;
@@ -1989,8 +1957,6 @@ export function useChatController() {
       }
 
       // STOP MARK (stop-bug): a user-stopped turn is marked on the wire (see
-      // appendWireTurnStop) so the next send cannot read as "continue your
-      // interrupted work" — the model answers the NEW message instead.
       if (controller.signal.aborted && !failure) {
         updateTurn(conversationId, assistantTurn.id, { finishReason: 'user_stop' });
       }
@@ -2108,17 +2074,11 @@ export function useChatController() {
               if (!stillThere || useStore.getState().genRunning[conversationId]) {
                 return;
               }
-              // RESTORE the ORIGINAL run epoch: `setGenRunning(false)` above
-              // deleted it, so without this every retry re-stamped fresh and
-              // the duration restarted at 00.00.00 instead of accruing (as
-              // the comment below promises).
               const started = { ...useStore.getState().genStartedAt, [conversationId]: runStartEpoch };
               storage.saveGenStartedAt(started);
               useStore.setState({ genStartedAt: started });
               void sendRef.current('', conversationId, undefined, { continueOnly: true });
             }, delayMs);
-            // RETRY ladder: the run continues on the SAME turn after the delay
-            // — the timer stays live (no stamp), duration keeps accruing.
             return;
           }
           providerRetries.current.delete(conversationId);
@@ -2174,11 +2134,6 @@ export function useChatController() {
         }
       }
 
-      // RESPONSE TIMER: stamp on EVERY settle — done, error, abort, even a
-      // lost connection. The old `!connectionLost` gate left crashed runs
-      // with processingMs = undefined → that turn showed NO timer at all.
-      // stampProcessingTime is monotonic, so a later short resume stamp can
-      // never shrink what the run already earned.
       stampProcessingTime(conversationId, assistantTurn.id, runStartEpoch);
 
       const fallbackTitle = autoTitleFor(effectiveText);
@@ -2399,11 +2354,6 @@ export function useChatController() {
             continue;
           }
           if (resumeInFlight.has(conversationId)) continue;
-          // THE PILL-CLOSE FIX: a conversation this page is ALREADY streaming
-          // (attached by the App instance's send) must not be re-attached by
-          // a freshly mounted controller instance — the duplicate resume
-          // replay reset the trailing turn (segments emptied → the activity
-          // pill unmounted → its open state was lost) and repainted it.
           if (attachedConversations.has(conversationId)) continue;
           resumeInFlight.add(conversationId);
           void sendRef

@@ -53,7 +53,6 @@ export async function startForPanel(panel: PanelSubscriber): Promise<void> {
     return;
   }
   active = { panel, page };
-  // 12 s watchdog — if no offer, surface error instead of hanging.
   clearWatchdog = () => {
     if (watchdog) clearTimeout(watchdog);
     watchdog = null;

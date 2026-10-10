@@ -1,21 +1,24 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Check,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   Crop,
   Download,
   ImagePlus,
   Maximize,
-  Maximize2,
   Minimize,
-  SquarePen,
+  Minus,
+  PanelRight,
+  Plus,
+  RotateCcw,
+  Save,
   X,
-  ZoomIn,
-  ZoomOut,
 } from './icons';
 
-import { Tip } from './ui';
+import { cx } from './ui';
 
 /** Creation metadata saved beside downloaded images by the proxy. */
 interface CreationMeta {
@@ -31,28 +34,34 @@ interface CreationMeta {
   aspectRatio?: string | null;
 }
 
+/** Design zoom range: 100%–600%. */
 const MIN_SCALE = 1;
-const MAX_SCALE = 8;
+const MAX_SCALE = 6;
 /** Double-click jumps to this magnification (and back to fit). */
 const DBL_CLICK_SCALE = 2.5;
+/** Keyboard / dock zoom step (design: ×1.3 per press). */
+const ZOOM_STEP = 1.3;
+const fmtDate = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
 /**
- * Full-size image preview with zoom, over a dark backdrop.
+ * Image viewer — a React port of design/image-viewer.html (.vr dialog).
  *
- * Zooming works like a standard lightbox: mouse wheel zooms toward the cursor,
- * dragging pans while magnified, PINCH zooms and pans with two fingers on
- * touch screens, double-click (or the ⤢ button) toggles between fit and
- * magnified, and the −/%/+ pills or the +/−/0 keys give fine control.
- * Click the backdrop or press Escape to close; the Download button saves the
- * file (same-origin local images download directly) and the Fullscreen button
- * next to it expands the preview to the whole screen (element Fullscreen API,
- * with a CSS-expansion fallback for browsers without it, like iPhone Safari).
+ * Anatomy (design): ambient blur + scrim, a stage (viewport → frame → image),
+ * a top bar with the glass meta pill (title + counter) and the glass actions
+ * (favorite, download, details, fullscreen, close), round prev/next buttons, a
+ * bottom dock with the thumbnail strip + zoom controls, an aria-live toast,
+ * and a right side panel (prompt + details + shortcuts + Download / Reuse
+ * prompt CTAs).
  *
- * For images saved locally, the creation metadata — the prompt that produced
- * the image, its model and provider — is fetched from the proxy and shown
- * under the image, with "Copy prompt" and (in Image Studio) "Use this prompt".
- * CDN links and images downloaded before this feature have no metadata and
- * simply render without the panel.
+ * Mechanism (design): wheel zooms toward the cursor (100–600%), drag pans
+ * while magnified, pinch zooms, double-click toggles 250%, swipe left/right
+ * navigates when not zoomed, tapping outside the image closes. Keys: arrows
+ * browse, +/−/0 zoom, I details, F fullscreen, C copy prompt, Esc close; Tab
+ * is trapped inside the dialog. Chrome auto-hides after 2.5s idle while
+ * fullscreen (CSS focus-mode fallback where the Fullscreen API is missing).
+ *
+ * Theme: the chrome keeps the design's scoped dark tokens (.vr defines them);
+ * the accent follows the active moriko accent (--c-accent).
  */
 export function ImageLightbox({
   url,
@@ -60,6 +69,12 @@ export function ImageLightbox({
   onUsePrompt,
   onUseReference,
   onEditImage,
+  urls,
+  onNavigate,
+  saved,
+  onToggleSave,
+  title,
+  prompt,
 }: {
   url: string;
   onClose: () => void;
@@ -68,116 +83,260 @@ export function ImageLightbox({
   onUseReference?: () => void;
   /** Opens the client-side editor (crop / rotate / resize) for this image. */
   onEditImage?: () => void;
+  /** Design prev/next mechanism: the full list this image belongs to. */
+  urls?: string[];
+  /** Moves the preview to another member of `urls`. */
+  onNavigate?: (url: string) => void;
+  /** Design save icon: whether this image is saved to the Gallery… */
+  saved?: boolean;
+  /** …and its toggle (save when unsaved, remove when saved). */
+  onToggleSave?: () => void;
+  /** Design title (bar + panel header); falls back to the prompt's first line. */
+  title?: string;
+  /** Prompt text for the panel when no proxy metadata exists (CDN images). */
+  prompt?: string;
 }) {
   const [meta, setMeta] = useState<CreationMeta | null>(null);
   const [copied, setCopied] = useState(false);
-  /** 1 = fit the stage; above that the image is magnified and pannable. */
+  /** 1 = fit the frame; above that the image is magnified and pannable. */
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
-  /** Whole-preview expansion: element fullscreen, or a CSS fallback. */
-  const [expanded, setExpanded] = useState(false);
+  /** A pointer is down on the viewport (grabbing / no transition). */
+  const [live, setLive] = useState(false);
+  /** Side panel visibility (design: open when the window is wider than 860). */
+  const [panelOpen, setPanelOpen] = useState(() => window.innerWidth > 860);
+  /** Fullscreen (element API), or the CSS focus-mode fallback. */
+  const [focusMode, setFocusMode] = useState(false);
+  const [idle, setIdle] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  /** Navigation direction of the last step: frame slides in from it. */
+  const [navDir, setNavDir] = useState(0);
 
   const rootRef = useRef<HTMLDivElement>(null);
-  const stageRef = useRef<HTMLDivElement>(null);
+  const vpRef = useRef<HTMLDivElement>(null);
+  const frameRef = useRef<HTMLDivElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
+  const sideRef = useRef<HTMLElement>(null);
+  const promptRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
   const scaleRef = useRef(1);
   const offsetRef = useRef({ x: 0, y: 0 });
-  const dragRef = useRef<{
-    pointerId: number;
-    startX: number;
-    startY: number;
-    baseX: number;
-    baseY: number;
-  } | null>(null);
-  /** Every active finger, for pinch detection. */
   const pointersRef = useRef(new Map<number, { x: number; y: number }>());
-  const pinchRef = useRef<{
-    baseDist: number;
-    baseScale: number;
-    baseMid: { x: number; y: number };
-    baseOffset: { x: number; y: number };
+  const startRef = useRef<{
+    x: number;
+    y: number;
+    tx: number;
+    ty: number;
+    target: EventTarget | null;
   } | null>(null);
-  /** Set once a drag actually moved; the backdrop click then must not close. */
-  const draggedRef = useRef(false);
+  const pinchRef = useRef<{ d: number; sc: number } | null>(null);
+  const idleTRef = useRef<number | null>(null);
+  const toastTRef = useRef<number | null>(null);
+  const copiedTRef = useRef<number | null>(null);
+  const panelOpenRef = useRef(panelOpen);
+  const focusRef = useRef(focusMode);
+  panelOpenRef.current = panelOpen;
+  focusRef.current = focusMode;
 
-  /** Keeps the translated image from flying away: it may only move as far as
-      its magnified overflow allows, and springs back to centered otherwise. */
-  const clampOffset = useCallback((nextScale: number, next: { x: number; y: number }) => {
-    const stage = stageRef.current;
-    if (!stage) return next;
-    const maxX = Math.max(0, ((nextScale - 1) * stage.clientWidth) / 2);
-    const maxY = Math.max(0, ((nextScale - 1) * stage.clientHeight) / 2);
-    return {
-      x: Math.min(maxX, Math.max(-maxX, next.x)),
-      y: Math.min(maxY, Math.max(-maxY, next.y)),
-    };
+  /* ── zoom / pan engine (design settle / zoomAt / rel) ─────────────── */
+
+  /** Snaps back to fit at ≤100%, else clamps the pan to the magnified
+      overflow of the image inside the viewport (design settle()). */
+  const settle = useCallback(() => {
+    let nextScale = scaleRef.current;
+    let nextOffset = { ...offsetRef.current };
+    if (nextScale <= 1.001) {
+      nextScale = 1;
+      nextOffset = { x: 0, y: 0 };
+    } else {
+      const img = imgRef.current;
+      const vp = vpRef.current;
+      if (img && vp) {
+        const mx = Math.max(0, (img.offsetWidth * nextScale - vp.clientWidth) / 2);
+        const my = Math.max(0, (img.offsetHeight * nextScale - vp.clientHeight) / 2);
+        nextOffset = {
+          x: Math.min(mx, Math.max(-mx, nextOffset.x)),
+          y: Math.min(my, Math.max(-my, nextOffset.y)),
+        };
+      }
+    }
+    scaleRef.current = nextScale;
+    offsetRef.current = nextOffset;
+    setScale(nextScale);
+    setOffset(nextOffset);
   }, []);
 
-  /** Zooms keeping the point under the cursor pinned in place. */
+  /** Cursor point relative to the frame centre (design rel()). */
+  const rel = useCallback((clientX: number, clientY: number): [number, number] => {
+    const box = (frameRef.current ?? vpRef.current)?.getBoundingClientRect();
+    if (!box) return [0, 0];
+    return [clientX - box.left - box.width / 2, clientY - box.top - box.height / 2];
+  }, []);
+
+  /** Zooms keeping the point under the cursor pinned in place (design zoomAt). */
   const zoomAt = useCallback(
-    (clientX: number, clientY: number, nextScale: number) => {
-      const stage = stageRef.current;
-      const prev = scaleRef.current;
-      const clamped = Math.min(MAX_SCALE, Math.max(MIN_SCALE, nextScale));
-      if (!stage || clamped === prev) return;
-      const rect = stage.getBoundingClientRect();
-      const px = clientX - rect.left - rect.width / 2;
-      const py = clientY - rect.top - rect.height / 2;
-      const k = clamped / prev;
-      const next = clampOffset(clamped, {
-        x: px - (px - offsetRef.current.x) * k,
-        y: py - (py - offsetRef.current.y) * k,
-      });
+    (next: number, cx = 0, cy = 0) => {
+      const clamped = Math.min(MAX_SCALE, Math.max(MIN_SCALE, next));
+      const k = clamped / scaleRef.current;
+      offsetRef.current = {
+        x: cx - (cx - offsetRef.current.x) * k,
+        y: cy - (cy - offsetRef.current.y) * k,
+      };
       scaleRef.current = clamped;
-      offsetRef.current = next;
-      setScale(clamped);
-      setOffset(next);
+      settle();
     },
-    [clampOffset],
+    [settle],
   );
 
-  const resetZoom = useCallback(() => {
-    scaleRef.current = 1;
-    offsetRef.current = { x: 0, y: 0 };
-    setScale(1);
-    setOffset({ x: 0, y: 0 });
+  const zoomBy = useCallback((factor: number) => zoomAt(scaleRef.current * factor), [zoomAt]);
+  const resetZoom = useCallback(() => zoomAt(1), [zoomAt]);
+
+  /* ── chrome: idle, panel, fullscreen/focus ────────────────────────── */
+
+  /** Rearms the 2.5s chrome auto-hide while focused/fullscreen (design wake). */
+  const wake = useCallback(() => {
+    setIdle(false);
+    if (idleTRef.current) window.clearTimeout(idleTRef.current);
+    if (focusRef.current) idleTRef.current = window.setTimeout(() => setIdle(true), 2500);
   }, []);
 
-  const zoomBy = useCallback(
-    (factor: number) => {
-      const stage = stageRef.current;
-      if (!stage) return;
-      const rect = stage.getBoundingClientRect();
-      zoomAt(rect.left + rect.width / 2, rect.top + rect.height / 2, scaleRef.current * factor);
-    },
-    [zoomAt],
-  );
-
-  useEffect(() => {
-    resetZoom();
-  }, [url, resetZoom]);
-
-  // native flows) expands the preview, leaving it (Esc) collapses again.
-  useEffect(() => {
-    const onFsChange = () => setExpanded(Boolean(document.fullscreenElement));
-    document.addEventListener('fullscreenchange', onFsChange);
-    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  const showToast = useCallback((message: string) => {
+    setToast(message);
+    if (toastTRef.current) window.clearTimeout(toastTRef.current);
+    toastTRef.current = window.setTimeout(() => setToast(null), 1700);
   }, []);
 
-  /** Whole-preview expansion: real element fullscreen where supported
-      (desktop, Android), a CSS fallback where not (iPhone Safari). */
-  const toggleExpanded = () => {
-    const el = rootRef.current;
+  const togglePanel = useCallback(() => {
+    setPanelOpen((value) => !value);
+    wake();
+  }, [wake]);
+
+  /** Entering focus (fullscreen): remember the panel state, hide the panel. */
+  const enterFocus = useCallback(() => {
+    panelWasRef.current = panelOpenRef.current;
+    setPanelOpen(false);
+    setFocusMode(true);
+    wake();
+  }, [wake]);
+
+  /** Leaving focus: restore the panel as it was (design setFocus/setPanel). */
+  const exitFocus = useCallback(() => {
+    setFocusMode(false);
+    setPanelOpen(panelWasRef.current);
+    setIdle(false);
+    if (idleTRef.current) window.clearTimeout(idleTRef.current);
+  }, []);
+
+  const panelWasRef = useRef(true);
+
+  const toggleFs = useCallback(async () => {
     if (document.fullscreenElement) {
-      void document.exitFullscreen().catch(() => setExpanded(false));
+      await document.exitFullscreen().catch(() => {});
       return;
     }
+    const el = rootRef.current;
     if (el?.requestFullscreen) {
-      el.requestFullscreen().catch(() => setExpanded(true));
-    } else {
-      setExpanded((value) => !value);
+      try {
+        await el.requestFullscreen();
+        return;
+      } catch {
+        // Fall through to the CSS focus mode.
+      }
     }
+    if (focusRef.current) exitFocus();
+    else enterFocus();
+  }, [enterFocus, exitFocus]);
+
+  /* ── navigation (design show / go) ────────────────────────────────── */
+
+  const listIndex = urls && urls.length > 1 ? urls.indexOf(url) : -1;
+
+  const step = useCallback(
+    (direction: number) => {
+      if (!urls || !onNavigate || urls.length < 2) return;
+      const index = urls.indexOf(url);
+      const next = (index + direction + urls.length) % urls.length;
+      setNavDir(direction);
+      onNavigate(urls[next]);
+    },
+    [urls, onNavigate, url],
+  );
+
+  /* ── actions (design copy / download / toggleFav / reuse) ─────────── */
+
+  const promptText = prompt || meta?.prompt || '';
+
+  const copyPrompt = useCallback(async () => {
+    if (!promptText) return;
+    try {
+      await navigator.clipboard.writeText(promptText);
+    } catch {
+      const helper = document.createElement('textarea');
+      helper.value = promptText;
+      document.body.appendChild(helper);
+      helper.select();
+      document.execCommand('copy');
+      helper.remove();
+    }
+    setCopied(true);
+    if (copiedTRef.current) window.clearTimeout(copiedTRef.current);
+    copiedTRef.current = window.setTimeout(() => setCopied(false), 1600);
+    showToast('Prompt copied');
+  }, [promptText, showToast]);
+
+  const download = useCallback(() => {
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = '';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    showToast('Download started');
+  }, [url, showToast]);
+
+  const toggleSave = () => {
+    if (!onToggleSave) return;
+    onToggleSave();
+    showToast(saved ? 'Removed from gallery' : 'Added to gallery');
   };
 
+  const reusePrompt = () => {
+    if (!onUsePrompt || !promptText) return;
+    onUsePrompt(promptText);
+    showToast('Prompt sent to the editor');
+  };
+
+  /** Bar title + panel heading: design title, else the prompt's first line. */
+  const heading = useMemo(() => {
+    if (title) return title;
+    const first = promptText.split(/[\n.]/)[0]?.trim() ?? '';
+    if (!first) return 'Image';
+    return first.length > 48 ? `${first.slice(0, 47).trimEnd()}…` : first;
+  }, [title, promptText]);
+
+  /** Panel DETAILS rows: only the fields that exist (design kv list). */
+  const details = useMemo(() => {
+    const rows: Array<[string, string]> = [];
+    if (meta?.model) rows.push(['Model', meta.model]);
+    if (meta?.provider) rows.push(['Provider', meta.provider]);
+    const size = meta?.output ?? meta?.requested ?? null;
+    if (size) rows.push(['Size', `${size.width}×${size.height}`]);
+    if (meta?.createdAt) rows.push(['Created', fmtDate.format(new Date(meta.createdAt))]);
+    return rows;
+  }, [meta]);
+
+  /* ── effects ──────────────────────────────────────────────────────── */
+
+  // New image: back to fit (design show() resets sc/tx/ty).
+  useEffect(() => {
+    resetZoom();
+    setMoreOpen(false);
+  }, [url, resetZoom]);
+
+  // Proxy metadata for local images (model / provider / size / created).
   useEffect(() => {
     const match = /\/api\/images\/local\/([a-zA-Z0-9_-]+\.(?:png|jpe?g|webp))$/.exec(url);
     if (!match) {
@@ -192,394 +351,524 @@ export function ImageLightbox({
     return () => controller.abort();
   }, [url]);
 
-  // browser's own exit-fullscreen key and must not also close the preview.
+  // Design "Show more": only offered when the prompt overflows its box.
+  useEffect(() => {
+    const el = promptRef.current;
+    if (!el) {
+      setHasMore(false);
+      return;
+    }
+    setHasMore(el.scrollHeight > el.clientHeight + 2);
+  }, [promptText, panelOpen]);
+
+  // Closed panel is inert (design side.inert = !panelOpen).
+  useEffect(() => {
+    sideRef.current?.toggleAttribute('inert', !panelOpen);
+  }, [panelOpen]);
+
+  // Fullscreen ↔ focus mode (design fullscreenchange → setFocus).
+  useEffect(() => {
+    const onFsChange = () => {
+      if (document.fullscreenElement) enterFocus();
+      else exitFocus();
+    };
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, [enterFocus, exitFocus]);
+
+  // Focus the dialog, lock body scroll, restore both (design open/close).
+  useEffect(() => {
+    openerRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    closeRef.current?.focus();
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+      openerRef.current?.focus();
+      if (idleTRef.current) window.clearTimeout(idleTRef.current);
+      if (toastTRef.current) window.clearTimeout(toastTRef.current);
+      if (copiedTRef.current) window.clearTimeout(copiedTRef.current);
+    };
+  }, []);
+
+  // Keyboard (design): browse, zoom, details, fullscreen, copy, close + Tab trap.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const key = event.key;
+      if (key === 'Escape') {
         if (document.fullscreenElement) return;
         onClose();
-        return;
-      }
-      if (event.key === '+' || event.key === '=') {
+      } else if (key === 'ArrowLeft') {
         event.preventDefault();
-        zoomBy(1.2);
-      } else if (event.key === '-' || event.key === '_') {
+        step(-1);
+      } else if (key === 'ArrowRight') {
         event.preventDefault();
-        zoomBy(1 / 1.2);
-      } else if (event.key === '0') {
+        step(1);
+      } else if (key === '+' || key === '=') {
+        event.preventDefault();
+        zoomBy(ZOOM_STEP);
+      } else if (key === '-' || key === '_') {
+        event.preventDefault();
+        zoomBy(1 / ZOOM_STEP);
+      } else if (key === '0') {
         event.preventDefault();
         resetZoom();
+      } else if (key === 'i' || key === 'I') {
+        togglePanel();
+      } else if (key === 'f' || key === 'F') {
+        void toggleFs();
+      } else if (key === 'c' || key === 'C') {
+        void copyPrompt();
+      } else if (key === 'Tab') {
+        const root = rootRef.current;
+        if (!root) return;
+        const nodes = [
+          ...root.querySelectorAll<HTMLElement>('button,[href],[tabindex]:not([tabindex="-1"])'),
+        ].filter(
+          (el) => !el.hasAttribute('disabled') && !el.closest('[inert]') && el.getClientRects().length,
+        );
+        if (!nodes.length) return;
+        const first = nodes[0];
+        const last = nodes[nodes.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, zoomBy, resetZoom]);
+  }, [onClose, step, zoomBy, resetZoom, togglePanel, toggleFs, copyPrompt]);
 
+  // Wheel zoom toward the cursor (design: exp curve, ctrl = fine).
   useEffect(() => {
-    const stage = stageRef.current;
-    if (!stage) return;
+    const vp = vpRef.current;
+    if (!vp) return;
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
-      const factor = event.deltaY < 0 ? 1.2 : 1 / 1.2;
-      zoomAt(event.clientX, event.clientY, scaleRef.current * factor);
+      const [cx, cy] = rel(event.clientX, event.clientY);
+      zoomAt(scaleRef.current * Math.exp(-event.deltaY * (event.ctrlKey ? 0.01 : 0.0018)), cx, cy);
+      wake();
     };
-    stage.addEventListener('wheel', onWheel, { passive: false });
-    return () => stage.removeEventListener('wheel', onWheel);
-  }, [zoomAt]);
+    vp.addEventListener('wheel', onWheel, { passive: false });
+    return () => vp.removeEventListener('wheel', onWheel);
+  }, [zoomAt, rel, wake]);
 
-  const onImagePointerDown = (event: React.PointerEvent<HTMLImageElement>) => {
+  /* ── pointer: pan / pinch / swipe / tap-to-close (design vp) ──────── */
+
+  const onVpPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    const vp = vpRef.current;
+    if (!vp) return;
+    vp.setPointerCapture(event.pointerId);
     pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    event.currentTarget.setPointerCapture(event.pointerId);
-    draggedRef.current = false;
-
-    if (pointersRef.current.size === 2) {
-      dragRef.current = null;
+    setLive(true);
+    if (pointersRef.current.size === 1) {
+      startRef.current = {
+        x: event.clientX,
+        y: event.clientY,
+        tx: offsetRef.current.x,
+        ty: offsetRef.current.y,
+        target: event.target,
+      };
+    } else if (pointersRef.current.size === 2) {
       const [a, b] = [...pointersRef.current.values()];
-      pinchRef.current = {
-        baseDist: Math.hypot(a.x - b.x, a.y - b.y) || 1,
-        baseScale: scaleRef.current,
-        baseMid: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 },
-        baseOffset: { ...offsetRef.current },
-      };
-    } else if (pointersRef.current.size === 1) {
-      dragRef.current = {
-        pointerId: event.pointerId,
-        startX: event.clientX,
-        startY: event.clientY,
-        baseX: offsetRef.current.x,
-        baseY: offsetRef.current.y,
-      };
+      pinchRef.current = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, sc: scaleRef.current };
     }
   };
 
-  const onImagePointerMove = (event: React.PointerEvent<HTMLImageElement>) => {
-    if (!pointersRef.current.has(event.pointerId)) return;
-    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  const onVpPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const ptrs = pointersRef.current;
+    if (!ptrs.has(event.pointerId)) return;
+    ptrs.set(event.pointerId, { x: event.clientX, y: event.clientY });
 
     const pinch = pinchRef.current;
-    if (pinch && pointersRef.current.size >= 2) {
-      const [a, b] = [...pointersRef.current.values()];
-      const stage = stageRef.current;
-      if (!stage) return;
-      const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
-      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-      const rect = stage.getBoundingClientRect();
-      const nextScale = Math.min(
-        MAX_SCALE,
-        Math.max(MIN_SCALE, (pinch.baseScale * dist) / pinch.baseDist),
-      );
-      const k = nextScale / pinch.baseScale;
-      const px = mid.x - rect.left - rect.width / 2;
-      const py = mid.y - rect.top - rect.height / 2;
-      offsetRef.current = clampOffset(nextScale, {
-        x: px - (px - pinch.baseOffset.x) * k + (mid.x - pinch.baseMid.x),
-        y: py - (py - pinch.baseOffset.y) * k + (mid.y - pinch.baseMid.y),
-      });
-      scaleRef.current = nextScale;
-      setScale(nextScale);
-      setOffset(offsetRef.current);
-      draggedRef.current = true;
+    if (ptrs.size === 2 && pinch) {
+      const [a, b] = [...ptrs.values()];
+      const [cx, cy] = rel((a.x + b.x) / 2, (a.y + b.y) / 2);
+      zoomAt((pinch.sc * Math.hypot(a.x - b.x, a.y - b.y)) / pinch.d, cx, cy);
       return;
     }
 
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    const dx = event.clientX - drag.startX;
-    const dy = event.clientY - drag.startY;
-    if (Math.abs(dx) + Math.abs(dy) > 4) draggedRef.current = true;
-    offsetRef.current = clampOffset(scaleRef.current, { x: drag.baseX + dx, y: drag.baseY + dy });
-    setOffset(offsetRef.current);
-  };
-
-  const endDrag = (event: React.PointerEvent<HTMLImageElement>) => {
-    pointersRef.current.delete(event.pointerId);
-    if (pointersRef.current.size < 2) pinchRef.current = null;
-    if (pointersRef.current.size === 1) {
-      const [restId] = [...pointersRef.current.keys()];
-      const [rest] = [...pointersRef.current.values()];
-      dragRef.current = {
-        pointerId: restId,
-        startX: rest.x,
-        startY: rest.y,
-        baseX: offsetRef.current.x,
-        baseY: offsetRef.current.y,
+    const start = startRef.current;
+    if (ptrs.size === 1 && start && scaleRef.current > 1) {
+      offsetRef.current = {
+        x: start.tx + event.clientX - start.x,
+        y: start.ty + event.clientY - start.y,
       };
-    } else {
-      dragRef.current = null;
-    }
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
+      settle();
     }
   };
 
-  const onImageDoubleClick = (event: React.MouseEvent<HTMLImageElement>) => {
+  const releasePointer = (event: React.PointerEvent<HTMLDivElement>, cancelled: boolean) => {
+    const ptrs = pointersRef.current;
+    if (!ptrs.has(event.pointerId)) return;
+    ptrs.delete(event.pointerId);
+    if (ptrs.size < 2) pinchRef.current = null;
+
+    if (ptrs.size === 1) {
+      const [, pos] = [...ptrs.values()];
+      startRef.current = {
+        x: pos.x,
+        y: pos.y,
+        tx: offsetRef.current.x,
+        ty: offsetRef.current.y,
+        target: null,
+      };
+    } else if (ptrs.size === 0) {
+      setLive(false);
+      const start = startRef.current;
+      if (start && !cancelled && scaleRef.current === 1) {
+        const dx = event.clientX - start.x;
+        const dy = event.clientY - start.y;
+        // Not zoomed: a hard horizontal swipe browses, a tap outside closes.
+        if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+          step(dx < 0 ? 1 : -1);
+        } else if (Math.hypot(dx, dy) < 4 && start.target && start.target !== imgRef.current) {
+          onClose();
+        }
+      }
+      startRef.current = null;
+    }
+
+    const vp = vpRef.current;
+    if (vp?.hasPointerCapture(event.pointerId)) vp.releasePointerCapture(event.pointerId);
+  };
+
+  const onImgDoubleClick = (event: React.MouseEvent<HTMLImageElement>) => {
     event.stopPropagation();
-    if (scaleRef.current === 1) {
-      zoomAt(event.clientX, event.clientY, DBL_CLICK_SCALE);
-    } else {
-      resetZoom();
-    }
-  };
-
-  const copyPrompt = async () => {
-    if (!meta) return;
-    try {
-      await navigator.clipboard.writeText(meta.prompt);
-    } catch {
-      const helper = document.createElement('textarea');
-      helper.value = meta.prompt;
-      document.body.appendChild(helper);
-      helper.select();
-      document.execCommand('copy');
-      helper.remove();
-    }
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
-
-  const usePrompt = () => {
-    if (!meta || !onUsePrompt) return;
-    onUsePrompt(meta.prompt);
-    onClose();
+    const [cx, cy] = rel(event.clientX, event.clientY);
+    zoomAt(scaleRef.current > 1 ? 1 : DBL_CLICK_SCALE, cx, cy);
   };
 
   const magnified = scale > 1;
-  const gesturing = dragRef.current !== null || pinchRef.current !== null;
 
   return createPortal(
     <div
       ref={rootRef}
       role="dialog"
-      aria-label="Image preview"
-      className={
-        expanded
-          ? 'fixed inset-0 z-[60] flex flex-col items-center gap-2 overflow-hidden bg-black p-2'
-          : 'fixed inset-0 z-[60] flex flex-col items-center gap-3 overflow-hidden bg-black/85 p-6'
-      }
-      onClick={() => {
-        if (!draggedRef.current) onClose();
-        draggedRef.current = false;
-      }}
+      aria-modal="true"
+      aria-label="Image viewer"
+      className={cx('vr', idle && 'is-idle')}
+      onPointerMove={wake}
     >
-      <button
-        type="button"
-        aria-label="Close preview"
-        className="absolute right-4 top-4 z-10 rounded-control bg-black/50 p-2 text-white/80 transition-colors hover:text-white"
-        onClick={(event) => {
-          event.stopPropagation();
-          onClose();
-        }}
-      >
-        <X className="h-5 w-5" aria-hidden="true" />
-      </button>
-
-      {}
       <div
-        ref={stageRef}
-        className="relative flex min-h-0 flex-1 items-center justify-center self-stretch overflow-hidden"
-        onClick={(event) => {
-          // click landing on the STAGE ITSELF (not the img) closes the preview
-          if (event.target === event.currentTarget && !draggedRef.current) onClose();
-          draggedRef.current = false;
-        }}
-      >
-        <img
-          src={url}
-          alt="Image, full size"
-          draggable={false}
-          onClick={(event) => event.stopPropagation()}
-          onPointerDown={onImagePointerDown}
-          onPointerMove={onImagePointerMove}
-          onPointerUp={endDrag}
-          onPointerCancel={endDrag}
-          onDoubleClick={onImageDoubleClick}
-          style={{
-            transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
-            maxHeight: expanded ? 'calc(100dvh - 88px)' : 'calc(100dvh - 220px)',
-            transition: gesturing ? 'none' : 'transform 180ms ease-out',
-            cursor: magnified ? (gesturing ? 'grabbing' : 'grab') : 'zoom-in',
-            touchAction: 'none',
-          }}
-          className={
-            expanded
-              ? 'max-w-full select-none rounded-card border border-hairline object-contain shadow-popover will-change-transform'
-              : 'max-w-[90vw] select-none rounded-card border border-hairline object-contain shadow-popover will-change-transform'
-          }
-        />
-      </div>
+        key={`amb-${url}`}
+        className="vamb"
+        style={{ backgroundImage: `url("${url}")` }}
+        aria-hidden="true"
+      />
+      <div className="vscrim" aria-hidden="true" />
 
-      {}
-      {meta && !expanded ? (
+      <section className="vstage">
         <div
-          className="flex w-full max-w-[680px] shrink-0 flex-col gap-2.5 rounded-card border border-hairline bg-black/60 p-4 backdrop-blur-sm"
-          onClick={(event) => event.stopPropagation()}
+          ref={vpRef}
+          className={cx('vvp', live && 'live')}
+          data-zoomed={magnified ? 'true' : 'false'}
+          onPointerDown={onVpPointerDown}
+          onPointerMove={onVpPointerMove}
+          onPointerUp={(event) => releasePointer(event, false)}
+          onPointerCancel={(event) => releasePointer(event, true)}
         >
-          <p className="max-h-24 overflow-y-auto whitespace-pre-wrap text-[13px] leading-relaxed text-white/85">
-            {meta.prompt}
-          </p>
-          <div className="flex flex-wrap items-center gap-1.5">
-            {meta.model ? (
-              <span className="rounded-full bg-white/10 px-2 py-0.5 text-[11px] text-white/70">
-                {meta.model}
-              </span>
-            ) : null}
-            {meta.provider ? (
-              <span className="rounded-full bg-white/10 px-2 py-0.5 text-[11px] text-white/70">
-                {meta.provider}
-              </span>
-            ) : null}
-            {meta.requested ? (
-              <span className="rounded-full bg-white/10 px-2 py-0.5 text-[11px] text-white/70">
-                {meta.requested.width}×{meta.requested.height} requested
-              </span>
-            ) : null}
-            {meta.output &&
-            (!meta.requested ||
-              meta.output.width !== meta.requested.width ||
-              meta.output.height !== meta.requested.height) ? (
-              <span className="rounded-full bg-white/10 px-2 py-0.5 text-[11px] text-white/70">
-                {meta.output.width}×{meta.output.height} actual
-              </span>
-            ) : null}
-            {meta.aspectRatio ? (
-              <span className="rounded-full bg-white/10 px-2 py-0.5 text-[11px] text-white/70">
-                {meta.aspectRatio}
-              </span>
-            ) : null}
-            {meta.createdAt ? (
-              <span className="rounded-full bg-white/10 px-2 py-0.5 text-[11px] text-white/70">
-                {new Date(meta.createdAt).toLocaleString()}
-              </span>
-            ) : null}
-            <span className="min-w-2 flex-1" />
-            <button
-              type="button"
-              onClick={copyPrompt}
-              className="flex items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-1 text-[11px] text-white/80 transition-colors hover:bg-white/20"
-            >
-              {copied ? (
-                <Check className="h-3.5 w-3.5" aria-hidden="true" />
-              ) : (
-                <Copy className="h-3.5 w-3.5" aria-hidden="true" />
-              )}
-              {copied ? 'Copied' : 'Copy prompt'}
-            </button>
-            {onUsePrompt ? (
-              <button
-                type="button"
-                onClick={usePrompt}
-                className="flex items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-1 text-[11px] text-white/80 transition-colors hover:bg-white/20"
-              >
-                <SquarePen className="h-3.5 w-3.5" aria-hidden="true" />
-                Use this prompt
-              </button>
-            ) : null}
-            {onUseReference ? (
-              <button
-                type="button"
-                onClick={onUseReference}
-                className="flex items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-1 text-[11px] text-white/80 transition-colors hover:bg-white/20"
-              >
-                <ImagePlus className="h-3.5 w-3.5" aria-hidden="true" />
-                Use as reference
-              </button>
-            ) : null}
-            {onEditImage ? (
-              <button
-                type="button"
-                onClick={onEditImage}
-                className="flex items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-1 text-[11px] text-white/80 transition-colors hover:bg-white/20"
-              >
-                <Crop className="h-3.5 w-3.5" aria-hidden="true" />
-                Edit image
-              </button>
-            ) : null}
+          <div
+            key={url}
+            ref={frameRef}
+            className="vframe"
+            style={{ '--v-dx': `${navDir * 28}px` } as CSSProperties}
+          >
+            <img
+              ref={imgRef}
+              src={url}
+              alt={heading}
+              draggable={false}
+              onDoubleClick={onImgDoubleClick}
+              style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }}
+            />
           </div>
         </div>
-      ) : null}
 
-      {}
-      <div
-        className="flex w-full max-w-full shrink-0 flex-wrap items-center justify-center gap-2"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="flex items-center gap-1 rounded-full bg-black/60 px-2 py-1.5 text-white/90">
-          <button
-            type="button"
-            aria-label="Zoom out"
-            disabled={!magnified}
-            className="rounded-full p-1.5 transition-colors hover:bg-white/15 hover:text-white disabled:opacity-40"
-            onClick={() => zoomBy(1 / 1.2)}
-          >
-            <ZoomOut className="h-4 w-4" aria-hidden="true" />
-          </button>
-          <Tip label="Reset zoom (0)">
+        <header className="vbar vchrome">
+          <div className="vmeta vglass">
+            <h2>{heading}</h2>
+            {listIndex >= 0 ? (
+              <span className="vcount">
+                {listIndex + 1} / {urls?.length}
+              </span>
+            ) : null}
+          </div>
+          <div className="vacts">
+            {onToggleSave ? (
+              <button
+                type="button"
+                className="vbtn vglass fav"
+                aria-pressed={Boolean(saved)}
+                aria-label={saved ? 'Remove from gallery' : 'Save to gallery'}
+                data-tip={saved ? 'Remove from gallery' : 'Save to gallery'}
+                onClick={toggleSave}
+              >
+                <Save className="ic" aria-hidden="true" />
+              </button>
+            ) : null}
             <button
               type="button"
-              aria-label="Reset zoom to fit"
-              className="min-w-[52px] rounded-full px-1.5 py-1 text-[12px] tabular-nums transition-colors hover:bg-white/15 hover:text-white"
-              onClick={resetZoom}
+              className="vbtn vglass"
+              aria-label="Download"
+              data-tip="Download"
+              onClick={download}
             >
-              {Math.round(scale * 100)}%
+              <Download className="ic" aria-hidden="true" />
             </button>
-          </Tip>
-          <button
-            type="button"
-            aria-label="Zoom in"
-            disabled={scale >= MAX_SCALE}
-            className="rounded-full p-1.5 transition-colors hover:bg-white/15 hover:text-white disabled:opacity-40"
-            onClick={() => zoomBy(1.2)}
-          >
-            <ZoomIn className="h-4 w-4" aria-hidden="true" />
-          </button>
-          <span className="mx-0.5 h-4 w-px bg-white/20" aria-hidden="true" />
-          <Tip label="Double-click also toggles this">
             <button
               type="button"
-              aria-label={magnified ? 'Fit to screen' : 'Magnify image'}
-              className="rounded-full p-1.5 transition-colors hover:bg-white/15 hover:text-white"
-              onClick={(event) => {
-                if (magnified) {
-                  resetZoom();
-                } else {
-                  const rect = event.currentTarget.getBoundingClientRect();
-                  zoomAt(rect.left, rect.top, DBL_CLICK_SCALE);
-                }
-              }}
+              className="vbtn vglass"
+              aria-pressed={panelOpen}
+              aria-label="Details"
+              data-tip="Details · I"
+              onClick={togglePanel}
             >
-              <Maximize2 className="h-4 w-4" aria-hidden="true" />
+              <PanelRight className="ic" aria-hidden="true" />
             </button>
-          </Tip>
+            <button
+              type="button"
+              className="vbtn vglass"
+              aria-pressed={focusMode}
+              aria-label={focusMode ? 'Exit fullscreen' : 'Fullscreen'}
+              data-tip="Fullscreen · F"
+              onClick={() => void toggleFs()}
+            >
+              {focusMode ? (
+                <Minimize className="ic" aria-hidden="true" />
+              ) : (
+                <Maximize className="ic" aria-hidden="true" />
+              )}
+            </button>
+            <button
+              ref={closeRef}
+              type="button"
+              className="vbtn vglass"
+              aria-label="Close"
+              data-tip="Close · Esc"
+              data-tip-align="end"
+              onClick={onClose}
+            >
+              <X className="ic" aria-hidden="true" />
+            </button>
+          </div>
+        </header>
+
+        {listIndex >= 0 ? (
+          <>
+            <button
+              type="button"
+              className="vbtn round vglass vnav prev vchrome"
+              aria-label="Previous image"
+              onClick={() => step(-1)}
+            >
+              <ChevronLeft className="ic" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="vbtn round vglass vnav next vchrome"
+              aria-label="Next image"
+              onClick={() => step(1)}
+            >
+              <ChevronRight className="ic" aria-hidden="true" />
+            </button>
+
+            <div className="vdock vglass vchrome">
+              <div className="vthumbs">
+                {urls?.map((entry, index) => (
+                  <button
+                    key={entry}
+                    type="button"
+                    className="vth"
+                    aria-current={index === listIndex}
+                    aria-label={`Show image ${index + 1}`}
+                    onClick={() => {
+                      setNavDir(index > listIndex ? 1 : -1);
+                      onNavigate?.(entry);
+                    }}
+                  >
+                    <img src={entry} alt="" loading="lazy" />
+                  </button>
+                ))}
+              </div>
+              <span className="vdivider" aria-hidden="true" />
+              <div className="vzoom">
+                <button
+                  type="button"
+                  className="vbtn ghost"
+                  aria-label="Zoom out"
+                  data-tip="Zoom out · −"
+                  data-tip-pos="top"
+                  onClick={() => zoomBy(1 / ZOOM_STEP)}
+                >
+                  <Minus className="ic" aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  className="vpct"
+                  aria-label="Reset zoom"
+                  data-tip="Reset · 0"
+                  data-tip-pos="top"
+                  onClick={resetZoom}
+                >
+                  {Math.round(scale * 100)}%
+                </button>
+                <button
+                  type="button"
+                  className="vbtn ghost"
+                  aria-label="Zoom in"
+                  data-tip="Zoom in · +"
+                  data-tip-pos="top"
+                  onClick={() => zoomBy(ZOOM_STEP)}
+                >
+                  <Plus className="ic" aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+          </>
+        ) : null}
+
+        <div className={cx('vtoast', toast && 'show')} role="status" aria-live="polite">
+          <Check className="ic" aria-hidden="true" />
+          <span>{toast ?? ''}</span>
+        </div>
+      </section>
+
+      <aside ref={sideRef} className={cx('vside', !panelOpen && 'closed')} aria-label="Image details">
+        <div className="vside-h">
+          {listIndex >= 0 ? (
+            <div className="veyebrow">
+              Image {listIndex + 1} of {urls?.length}
+            </div>
+          ) : null}
+          <h3>{heading}</h3>
         </div>
 
-        <Tip label="Download">
-          <a
-            href={url}
-            download
-            aria-label="Download"
-            className="flex items-center gap-1.5 rounded-full bg-black/60 px-3 py-2 text-[13px] text-white/90 transition-colors hover:text-white sm:px-4"
-          >
-            <Download className="h-4 w-4" aria-hidden="true" />
-            <span className="hidden sm:inline">Download</span>
-          </a>
-        </Tip>
+        <div className="vside-b">
+          {promptText ? (
+            <section className="vsec">
+              <div className="vlab">
+                <span>Prompt</span>
+                <button type="button" className="vchip" onClick={() => void copyPrompt()}>
+                  {copied ? (
+                    <Check className="ic" aria-hidden="true" />
+                  ) : (
+                    <Copy className="ic" aria-hidden="true" />
+                  )}
+                  {copied ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+              <div ref={promptRef} className={cx('vprompt', moreOpen && 'open')}>
+                {promptText}
+              </div>
+              {hasMore ? (
+                <button
+                  type="button"
+                  className="vlink"
+                  onClick={() => setMoreOpen((value) => !value)}
+                >
+                  {moreOpen ? 'Show less' : 'Show more'}
+                </button>
+              ) : null}
+            </section>
+          ) : null}
 
-        <Tip label={expanded ? 'Exit fullscreen' : 'Open fullscreen'}>
-          <button
-            type="button"
-            aria-label={expanded ? 'Exit fullscreen' : 'Open fullscreen'}
-            onClick={toggleExpanded}
-            className="flex items-center gap-1.5 rounded-full bg-black/60 px-3 py-2 text-[13px] text-white/90 transition-colors hover:text-white sm:px-4"
-          >
-            {expanded ? (
-              <Minimize className="h-4 w-4" aria-hidden="true" />
-            ) : (
-              <Maximize className="h-4 w-4" aria-hidden="true" />
-            )}
-            <span className="hidden sm:inline">{expanded ? 'Exit' : 'Fullscreen'}</span>
+          {details.length ? (
+            <section className="vsec">
+              <div className="vlab">
+                <span>Details</span>
+              </div>
+              <dl className="vkv">
+                {details.map(([label, value]) => (
+                  <div key={label}>
+                    <dt>{label}</dt>
+                    <dd>{value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
+          ) : null}
+
+          <section className="vsec">
+            <div className="vlab">
+              <span>Shortcuts</span>
+            </div>
+            <ul className="vkeys">
+              <li>
+                <span>
+                  <kbd>←</kbd>
+                  <kbd>→</kbd>
+                </span>
+                Browse
+              </li>
+              <li>
+                <span>
+                  <kbd>+</kbd>
+                  <kbd>−</kbd>
+                  <kbd>0</kbd>
+                </span>
+                Zoom
+              </li>
+              <li>
+                <span>
+                  <kbd>I</kbd>
+                </span>
+                Details
+              </li>
+              <li>
+                <span>
+                  <kbd>F</kbd>
+                </span>
+                Fullscreen
+              </li>
+              <li>
+                <span>
+                  <kbd>C</kbd>
+                </span>
+                Copy prompt
+              </li>
+              <li>
+                <span>
+                  <kbd>Esc</kbd>
+                </span>
+                Close
+              </li>
+            </ul>
+          </section>
+        </div>
+
+        <div className="vside-f">
+          <button type="button" className="vcta" onClick={download}>
+            <Download className="ic" aria-hidden="true" />
+            Download
           </button>
-        </Tip>
-      </div>
+          {onUsePrompt && promptText ? (
+            <button type="button" className="vcta alt" onClick={reusePrompt}>
+              <RotateCcw className="ic" aria-hidden="true" />
+              Reuse prompt
+            </button>
+          ) : null}
+          {onUseReference ? (
+            <button type="button" className="vcta alt" onClick={onUseReference}>
+              <ImagePlus className="ic" aria-hidden="true" />
+              Use as reference
+            </button>
+          ) : null}
+          {onEditImage ? (
+            <button type="button" className="vcta alt" onClick={onEditImage}>
+              <Crop className="ic" aria-hidden="true" />
+              Edit image
+            </button>
+          ) : null}
+        </div>
+      </aside>
     </div>,
     document.body,
   );

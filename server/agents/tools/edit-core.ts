@@ -9,6 +9,7 @@
  */
 import { readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import * as ts from 'typescript';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { MAX_EDIT_BYTES, resolveWithPermission } from './shared.js';
 import { buildUnifiedDiff, diffStatFromOps } from '../diff.js';
@@ -303,7 +304,9 @@ export async function replaceLineRange(
 
 /**
  * SYNTAX GUARD probe for freshly written files. JSON parses in-process;
- * .js/.mjs/.cjs go through `node --check`. Anything unverifiable (other
+ * .js/.mjs/.cjs go through `node --check`; .ts/.tsx/.mts/.cts/.jsx are
+ * validated with the TypeScript Compiler API in-process (F1.6); .css gets a
+ * light brace/comment balance heuristic. Anything unverifiable (other
  * extensions, or an environment that cannot spawn) is SKIPPED — the guard
  * never false-fails an edit.
  */
@@ -320,6 +323,33 @@ export async function verifyWrittenSyntax(
     }
     return {};
   }
+  // F1.6 — TS/JSX family: ts.transpileModule diagnostics, no spawn.
+  if (ext === '.ts' || ext === '.tsx' || ext === '.mts' || ext === '.cts' || ext === '.jsx') {
+    try {
+      const kind = ext === '.tsx' || ext === '.jsx' ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+      const result = ts.transpileModule(nextContent, {
+        reportDiagnostics: true,
+        fileName: path.basename(absolute),
+        compilerOptions: {
+          jsx: kind === ts.ScriptKind.TSX ? ts.JsxEmit.Preserve : ts.JsxEmit.None,
+          target: ts.ScriptTarget.ES2022,
+        },
+      });
+      const diags = (result.diagnostics ?? []).filter((d) => d.category === ts.DiagnosticCategory.Error);
+      if (diags.length > 0) {
+        const first = diags.slice(0, 3).map((d) => {
+          const pos = d.file && d.start !== undefined
+            ? `${d.file.getLineAndCharacterOfPosition(d.start).line + 1}:${d.file.getLineAndCharacterOfPosition(d.start).character + 1}`
+            : '?';
+          return `${pos} ${ts.flattenDiagnosticMessageText(d.messageText, ' ')}`;
+        });
+        return { failed: `syntax error(s): ${first.join(' | ')}.` };
+      }
+      return {};
+    } catch {
+      return {}; // internal error → never false-fail
+    }
+  }
   if (ext === '.js' || ext === '.mjs' || ext === '.cjs') {
     try {
       const outcome = await runProcess(process.execPath, ['--check', absolute], {
@@ -329,6 +359,38 @@ export async function verifyWrittenSyntax(
       if (outcome.exitCode === 0) return {};
       if (outcome.exitCode === null) return {};
       return { failed: `node --check rejected the file (${outcome.output.slice(0, 300).trim()}).` };
+    } catch {
+      return {};
+    }
+  }
+  // F1.6 — light CSS balance heuristic (strings and comments excluded).
+  if (ext === '.css') {
+    try {
+      let depth = 0;
+      let i = 0;
+      let inComment = false;
+      let inString: string | null = null;
+      while (i < nextContent.length) {
+        const ch = nextContent[i];
+        if (inComment) {
+          if (ch === '*' && nextContent[i + 1] === '/') { inComment = false; i += 2; continue; }
+          i += 1; continue;
+        }
+        if (inString) {
+          if (ch === '\\') { i += 2; continue; }
+          if (ch === inString) inString = null;
+          i += 1; continue;
+        }
+        if (ch === '/' && nextContent[i + 1] === '*') { inComment = true; i += 2; continue; }
+        if (ch === '"' || ch === "'") { inString = ch; i += 1; continue; }
+        if (ch === '{') depth += 1;
+        if (ch === '}') depth -= 1;
+        if (depth < 0) return { failed: 'syntax error: unbalanced "}" (extra closing brace).' };
+        i += 1;
+      }
+      if (inComment) return { failed: 'syntax error: unterminated /* comment.' };
+      if (depth !== 0) return { failed: `syntax error: ${depth} unclosed "{".` };
+      return {};
     } catch {
       return {};
     }

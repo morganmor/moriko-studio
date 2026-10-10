@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, lazy, Suspense } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, lazy, Suspense } from 'react';
 import { AgentPermissionDialog } from './components/AgentPermissionDialog';
 import { AgentAskUserDialog } from './components/AgentAskUserDialog';
 import { CheckpointRail } from './components/CheckpointRail';
@@ -12,8 +12,10 @@ import { TopBar } from './components/TopBar';
 import { attachmentRefWireUrl, pickNativeWorkspace, sendReminderPreset, steerWithParts } from './lib/api';
 import { useChatController } from './hooks/useChatController';
 import { isProviderConfigured } from './lib/providerStatus';
-import { bootConversationSync, useStore } from './store/useStore';
-import { LazyViewBoundary, LazyViewFallback, cx } from './components/ui';
+import { brandCatHeadSvgUrl } from './lib/brandAssets';
+import { applyAppearance, isMotionReduced } from './lib/appearance';
+import { bootConversationSync, useEffectiveSettings, useStore } from './store/useStore';
+import { LazyViewBoundary, LazyViewFallback, Modal } from './components/ui';
 import type { TurnAttachment } from './types';
 
 const LazyProvidersDialog = lazy(() =>
@@ -82,9 +84,16 @@ function ResizeHandle({
   const drag = useRef<{ startClientX: number; startWidth: number } | null>(null);
   const latest = useRef(value);
 
+  /* `.resizing` kills the width transition on .rail/.dock/.fold while a drag is
+     live — otherwise the fold eases 260ms behind the handle and the panel
+     content (which resizes instantly) spills past its clipped edge. The
+     unmount cleanup guards against a drag that outlives the handle. */
+  useEffect(() => () => document.body.classList.remove('resizing'), []);
+
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     drag.current = { startClientX: event.clientX, startWidth: value };
     latest.current = value;
+    document.body.classList.add('resizing');
     event.currentTarget.setPointerCapture(event.pointerId);
   };
   const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -97,8 +106,19 @@ function ResizeHandle({
   };
   const onPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
     drag.current = null;
+    document.body.classList.remove('resizing');
     event.currentTarget.releasePointerCapture(event.pointerId);
     onCommit(latest.current);
+  };
+  const onPointerCancel = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!drag.current) return;
+    drag.current = null;
+    document.body.classList.remove('resizing');
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      /* capture may already be released by the browser */
+    }
   };
 
   return (
@@ -106,12 +126,27 @@ function ResizeHandle({
       role="separator"
       aria-orientation="vertical"
       aria-label={`Resize ${side} panel`}
-      className={cx(
-        'group relative z-10 hidden w-1.5 shrink-0 cursor-col-resize md:block',
-      )}
+      className="resizer"
+      tabIndex={0}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onPointerCancel={onPointerCancel}
+      onKeyDown={(event) => {
+        /* Reference design: the resizer is a focusable separator. Arrow keys
+           nudge by 16px (direction matches which side the panel hugs), Home
+           resets — each step persists immediately, like pointer release. */
+        const step = event.key === 'ArrowLeft' ? -16 : event.key === 'ArrowRight' ? 16 : 0;
+        if (!step && event.key !== 'Home') return;
+        event.preventDefault();
+        const next =
+          event.key === 'Home'
+            ? defaultValue
+            : Math.max(min, Math.min(max, latest.current + (side === 'left' ? step : -step)));
+        latest.current = next;
+        onResize(next);
+        onCommit(next);
+      }}
       onDoubleClick={() => {
         onResize(defaultValue);
         onCommit(defaultValue);
@@ -132,6 +167,20 @@ export default function App() {
   const loadProviders = useStore((state) => state.loadProviders);
   const view = useStore((state) => state.view);
   const theme = useStore((state) => state.theme);
+  const accent = useStore((state) => state.accent);
+  const density = useStore((state) => state.density);
+  const ambient = useStore((state) => state.ambient);
+  const reduceMotion = useStore((state) => state.reduceMotion);
+  const fontFamily = useStore((state) => state.fontFamily);
+  /** confirmDel (panel-settings): a chat id parked until the dialog answers. */
+  const pendingConfirmDelete = useStore((state) => state.pendingConfirmDelete);
+  const confirmPendingDelete = useStore((state) => state.confirmPendingDelete);
+  const cancelPendingDelete = useStore((state) => state.cancelPendingDelete);
+  const pendingDeleteTitle = useStore(
+    (state) =>
+      state.conversations.find((entry) => entry.id === state.pendingConfirmDelete)?.title ??
+      'this chat',
+  );
   const settingsOpen = useStore((state) => state.settingsOpen);
   const toggleSettings = useStore((state) => state.toggleSettings);
   /** 6B: what the right dock shows — Configuration or the docked Tree. */
@@ -148,14 +197,14 @@ export default function App() {
   }, [settingsOpen]);
   const sidebarCollapsed = useStore((state) => state.sidebarCollapsed);
   const toggleSidebar = useStore((state) => state.toggleSidebar);
+  /** Agent mode for the design's Alt A shortcut (reads the effective chat settings). */
+  const chatSettings = useEffectiveSettings();
   const sidebarWidth = useStore((state) => state.sidebarWidth);
   const setSidebarWidth = useStore((state) => state.setSidebarWidth);
   const settingsWidth = useStore((state) => state.settingsWidth);
   const setSettingsWidth = useStore((state) => state.setSettingsWidth);
   const diffDockWidth = useStore((state) => state.diffDockWidth);
   const setDiffDockWidth = useStore((state) => state.setDiffDockWidth);
-  // DIFF DOCK: the split view auto-widens the dock (transient width — closing
-  // the panel or switching tabs returns the dock to its normal width).
   const dockWidth = rightPanelMode === 'diff' ? diffDockWidth : settingsWidth;
   const fontScale = useStore((state) => state.fontScale);
   const contextScale = useStore((state) => state.contextScale);
@@ -186,6 +235,15 @@ export default function App() {
   const providers = useStore((state) => state.providers);
   const showNotice = useStore((state) => state.showNotice);
   const activeAgentWorkspaceId = useStore((state) => state.activeAgentWorkspaceId);
+  const agentWorkspaces = useStore((state) => state.agentWorkspaces);
+  /* 2026-10 BUGFIX: pill TopBar dulu HANYA ikut activeAgentWorkspaceId, jadi
+   * saat chat dipindah ke Owl (Move to workspace) pill tetap "No workspace"
+   * padahal menu mencentang Owl. Sekarang pill mengikuti binding CHAT aktif;
+   * fallback ke workspace global hanya saat tidak ada chat. */
+  const workspaceTargetId = activeConversation?.workspaceId ?? (activeConversation ? null : activeAgentWorkspaceId);
+  const workspaceLabel = workspaceTargetId
+    ? agentWorkspaces.find((workspace) => workspace.id === workspaceTargetId)?.label
+    : undefined;
   const loadTreeView = useStore((state) => state.loadTreeView);
   useEffect(() => {
     void loadTreeView(activeAgentWorkspaceId);
@@ -226,15 +284,6 @@ export default function App() {
     setTurnNavigation(navigation);
   }, []);
 
-  /** TURN CHECKPOINT RAIL — the ACTUAL turn numbers mounted in the scroller
-   *  (windowing means they do not start at 1), read raf-throttled. State lives
-   *  here because the rail overlays the scroller from outside it. */
-  const [turnNumbers, setTurnNumbers] = useState<number[]>([]);
-  const [activeTurn, setActiveTurn] = useState(1);
-  const threadScrollerRef = useRef<HTMLDivElement>(null);
-  /** Native scrollbar width (px) of the thread scroller (measured, not assumed). */
-  const [scrollbarWidth, setScrollbarWidth] = useState(0);
-
   /**
    * NATIVE workspace pick: clicking the composer's folder button opens the
    * DEVICE'S OWN dialog (Windows Explorer via the local proxy's PowerShell)
@@ -255,6 +304,16 @@ export default function App() {
       showNotice('workspace.pickFailed', undefined, cause instanceof Error ? { detail: cause.message } : undefined);
     }
   }, [addAgentWorkspace, setActiveAgentWorkspace, activeIdForPick, showNotice]);
+
+  /** HANDLE BIND + ACTIVATE (2026-10 bugfix): pilihan dari SEMUA UI workspace
+   *  (TopBar "Bind a folder...", composer folder button, dan kini sidebar)
+   *  melewati sini — setelah folder dipilih, workspace langsung jadi AKTIF
+   *  (server per-session + state) supaya pill TopBar dan tree ikut, bukan
+   *  sekadar terdaftar. */
+  const handleBindWorkspace = useCallback(async () => {
+    await handlePickWorkspace();
+  }, [handlePickWorkspace]);
+
 
 
 
@@ -293,16 +352,111 @@ export default function App() {
     void loadGallery();
   }, [loadGallery]);
 
+  /** agent__image appends results server-side and broadcasts on the bus.
+   *  TWO refresh paths, because the SSE frame can race the tool_result that
+   *  carries the images: the optimistic push (instant, local) and the bus
+   *  refetch (authoritative, reaches every browser). */
+  const addonEvent = useStore((state) => state.addonEvent);
+  useEffect(() => {
+    if (addonEvent?.topic === 'moriko:gallery-added') void loadGallery();
+  }, [addonEvent, loadGallery]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'b') {
         event.preventDefault();
         toggleSidebar();
       }
+      /* Reference design: Alt N spawns a fresh chat from anywhere. */
+      if (
+        event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        (event.key === 'n' || event.key === 'N')
+      ) {
+        event.preventDefault();
+        useStore.getState().setView('playground');
+        useStore.getState().newConversation();
+      }
+      /* Right-dock design: Ctrl . toggles the configuration panel. */
+      if ((event.ctrlKey || event.metaKey) && event.key === '.') {
+        event.preventDefault();
+        toggleSettings();
+      }
+      /* Canvas-chat design: Alt A flips agent mode on/off. */
+      if (event.altKey && !event.ctrlKey && !event.metaKey && (event.key === 'a' || event.key === 'A')) {
+        event.preventDefault();
+        useStore.getState().updateSettings({ agentMode: !chatSettings.agentMode });
+      }
+      /* Design More menu: F2 renames the active chat when focus is not typing. */
+      if (event.key === 'F2') {
+        const target = event.target instanceof Element ? event.target : null;
+        const typing =
+          target !== null &&
+          (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || (target as HTMLElement).isContentEditable);
+        if (!typing && useStore.getState().view === 'playground') {
+          event.preventDefault();
+          window.dispatchEvent(new CustomEvent('moriko:retitle'));
+        }
+      }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [toggleSidebar]);
+  }, [toggleSidebar, toggleSettings, chatSettings.agentMode]);
+
+  /** Popovers design: Arrow/Home/End walk the focus through an open popover. */
+  useEffect(() => {
+    const onPopoverKeys = (event: KeyboardEvent) => {
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Home' && event.key !== 'End') {
+        return;
+      }
+      const target = event.target instanceof Element ? event.target : null;
+      const popover = target?.closest('.pop');
+      if (!popover || target?.closest('.seg')) return;
+      const items = Array.from(popover.querySelectorAll<HTMLElement>('.mi,.mo,.es,.sw,.pi')).filter(
+        (item) => item.offsetParent !== null && !(item as HTMLButtonElement).disabled,
+      );
+      if (items.length === 0) return;
+      event.preventDefault();
+      let index = items.indexOf(document.activeElement as HTMLElement);
+      index =
+        event.key === 'Home'
+          ? 0
+          : event.key === 'End'
+            ? items.length - 1
+            : event.key === 'ArrowDown'
+              ? (index + 1) % items.length
+              : index <= 0
+                ? items.length - 1
+                : index - 1;
+      items[index]?.focus();
+    };
+    window.addEventListener('keydown', onPopoverKeys);
+    return () => window.removeEventListener('keydown', onPopoverKeys);
+  }, []);
+
+  useEffect(() => {
+    if (!navOpen) return;
+    /* Reference design: growing back past the drawer breakpoint dismisses the
+       mobile nav — the desktop rail is already visible, so the overlay would
+       only sit duplicated on top of it. */
+    const onResize = () => {
+      if (window.matchMedia('(min-width: 768px)').matches) setNavOpen(false);
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [navOpen]);
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    /* Same rule for the RIGHT drawer: at ≥lg the docked fold is already
+       mounted, so the mobile overlay would only duplicate it. */
+    const onResize = () => {
+      if (window.matchMedia('(min-width: 1024px)').matches) dismissSettings();
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [settingsOpen, dismissSettings]);
 
   useEffect(() => {
     if (!navOpen && !settingsOpen) return;
@@ -321,18 +475,27 @@ export default function App() {
     };
   }, [navOpen, settingsOpen, dismissSettings]);
 
+  // Theme mechanism (design/moriko-design-1-theme-mechanism.html): ONE effect
+  // applies every appearance knob, and re-applies when the OS flips its own
+  // system-theme or reduced-motion preference.
   useEffect(() => {
-    const root = document.documentElement;
-    const dark = theme !== 'light';
-    root.classList.toggle('dark', dark);
-    root.classList.toggle('mocha', theme === 'mocha');
-    root.style.colorScheme = dark ? 'dark' : 'light';
-  }, [theme]);
+    const apply = () =>
+      applyAppearance({ theme, accent, density, ambient, fontFamily, reduceMotion });
+    apply();
+    const darkMq = window.matchMedia('(prefers-color-scheme: dark)');
+    const motionMq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    darkMq.addEventListener('change', apply);
+    motionMq.addEventListener('change', apply);
+    return () => {
+      darkMq.removeEventListener('change', apply);
+      motionMq.removeEventListener('change', apply);
+    };
+  }, [theme, accent, density, ambient, reduceMotion, fontFamily]);
 
-  const fontFamily = useStore((state) => state.fontFamily);
+  // Design :root defines --img-cat (pixel cat for .logo/.av); point it at the bundled asset.
   useEffect(() => {
-    document.documentElement.dataset.font = fontFamily;
-  }, [fontFamily]);
+    document.documentElement.style.setProperty('--img-cat', `url(${brandCatHeadSvgUrl})`);
+  }, []);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -365,7 +528,6 @@ export default function App() {
     (text: string, attachments?: TurnAttachment[]) => {
       const role = useStore.getState().composerRole ?? 'user';
       setDraft('');
-      // SLASH COMMAND: /compact [focus] condenses now instead of sending.
       const slash = /^\/compact\b/i.exec(text.trim());
       if (slash && (!attachments || attachments.length === 0)) {
         const focus = text.trim().slice(slash[0].length).trim();
@@ -385,8 +547,6 @@ export default function App() {
    */
   const handleSteer = useCallback(
     (text: string, attachments?: TurnAttachment[]) => {
-      // SLASH COMMAND mid-run: /compact schedules the compaction instead of
-      // steering. The synthetic id only tells the Composer the draft was taken.
       const slash = /^\/compact\b/i.exec(text.trim());
       if (slash && (!attachments || attachments.length === 0)) {
         const focus = text.trim().slice(slash[0].length).trim();
@@ -395,9 +555,6 @@ export default function App() {
       }
       if (!activeConversation) return Promise.resolve({ id: null });
       const conversationId = activeConversation.id;
-      // DSH-STYLE: the steer carries the same parts a normal send would —
-      // text plus image/file attachments (attachments ride their stored ref
-      // when one exists, otherwise the inline data URL).
       const parts: import('./lib/api').SteerClientPart[] = [];
       if (text.trim()) parts.push({ type: 'text', text: text.trim() });
       for (const attachment of attachments ?? []) {
@@ -446,8 +603,6 @@ export default function App() {
         } else if ('reason' in result && result.reason === 'not_streaming') {
           useStore.getState().showNotice('run.steeredAsNew');
         } else {
-          // A real failure (old server without preset support, network drop, …)
-          // must not be dressed up as "the run just finished".
           useStore.getState().showNotice('run.steerFailed', undefined, {
             detail: ('detail' in result && result.detail) || 'HTTP error',
           });
@@ -459,6 +614,48 @@ export default function App() {
 
   const turns = activeConversation?.turns ?? [];
   const hasThread = turns.length > 0;
+
+  /** ONE COMPOSER — a single <Composer/> instance serves both states: the
+   *  landing view (centered under the Explore hero) and the thread dock
+   *  (bottom). It is mounted once in the playground column; the first send
+   *  only re-flows it from center to dock, and FLIP animates that drop. */
+  const composerSlotRef = useRef<HTMLDivElement | null>(null);
+  const slotRectRef = useRef<DOMRect | null>(null);
+  const slotRef = useCallback((node: HTMLDivElement | null) => {
+    composerSlotRef.current = node;
+  }, []);
+
+  // While on the landing view, remember the slot's on-screen rect so the
+  // first-send reflow can be FLIP-animated down to the dock.
+  useLayoutEffect(() => {
+    const slot = composerSlotRef.current;
+    if (!slot || hasThread) return;
+    slotRectRef.current = slot.getBoundingClientRect();
+  });
+
+  // First send: the slot re-flows from the landing cluster to the dock;
+  // animate it from the last landing position down to rest.
+  useLayoutEffect(() => {
+    const from = slotRectRef.current;
+    if (!hasThread || !from) return;
+    slotRectRef.current = null;
+    const slot = composerSlotRef.current;
+    if (!slot || isMotionReduced(useStore.getState().reduceMotion)) return;
+    const to = slot.getBoundingClientRect();
+    const dy = Math.round(from.top - to.top);
+    if (Math.abs(dy) < 4) return;
+    slot.animate(
+      [{ transform: `translateY(${dy}px)` }, { transform: 'translateY(0px)' }],
+      { duration: 480, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+    );
+  }, [hasThread]);
+
+  /** THREAD SCROLLER + TURN RAIL — ref scroller thread & state rail checkpoint:
+   *  turnNumbers/activeTurn diukur dari baris turn di scroller ini. */
+  const threadScrollerRef = useRef<HTMLDivElement | null>(null);
+  const [scrollbarWidth, setScrollbarWidth] = useState(0);
+  const [turnNumbers, setTurnNumbers] = useState<number[]>([]);
+  const [activeTurn, setActiveTurn] = useState(1);
 
   /** Checkpoint rail: pin it at the native scrollbar's left edge. Measuring
    *  (offsetWidth - clientWidth) keeps the overlay exact across browsers/zoom. */
@@ -487,7 +684,6 @@ export default function App() {
         setTurnNumbers((previous) => (previous.length === 0 ? previous : []));
         return;
       }
-      // Build turn-number list from attributes only — no layout reads
       const numbers: number[] = [];
       for (let i = 0; i < rows.length; i++) {
         const value = Number(rows[i].dataset.turn);
@@ -498,7 +694,6 @@ export default function App() {
           ? previous
           : numbers,
       );
-      // Binary search: find last row whose top ≤ pivot — O(log n) layout reads
       const scrollerTop = scroller.getBoundingClientRect().top;
       const pivot = scrollerTop + scroller.clientHeight * 0.35;
       let low = 0, high = rows.length, current = numbers[0] ?? 1;
@@ -537,7 +732,7 @@ export default function App() {
 
   const turnCount = turnNumbers.length;
 
-  const THREAD_BOTTOM_PAD = 16;
+  const THREAD_BOTTOM_PAD = 24;
 
   const title =
     view === 'history'
@@ -555,35 +750,38 @@ export default function App() {
               : 'Playground';
 
   return (
-    <div className="flex h-full w-full overflow-hidden bg-canvas">
+    <div className="app">
+      {}
+      <div className="ambient" aria-hidden="true"><span></span><span></span><span></span></div>
       {}
       <a
         href="#workspace"
-        className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-[70] focus:rounded-control focus:bg-elevated focus:px-3 focus:py-2 focus:text-sm focus:text-ink"
+        className="skip-link"
       >
         Skip to content
       </a>
 
       {}
-      <div className="hidden md:flex">
+      <div className="show-md" style={{ position: 'relative', zIndex: 1 }}>
         <div
-          className={`fold${sidebarCollapsed ? '' : ' fold-open'}`}
-          style={{ width: sidebarCollapsed ? 0 : sidebarWidth }}
-          aria-hidden={sidebarCollapsed}
+          data-demo-rail="true"
+          className="fold fold-open"
+          style={{ width: sidebarCollapsed ? 64 : sidebarWidth }}
         >
           <Sidebar
             width={sidebarWidth}
             onOpenProviders={() => setProvidersOpen(true)}
             onOpenSettings={() => setPrefsOpen(true)}
+            onBindWorkspace={handleBindWorkspace}
           />
         </div>
         {!sidebarCollapsed ? (
           <ResizeHandle
             side="left"
             value={sidebarWidth}
-            min={200}
+            min={260}
             max={420}
-            defaultValue={248}
+            defaultValue={260}
             onResize={setSidebarWidth}
             onCommit={useStore.getState().commitSidebarWidth}
           />
@@ -592,17 +790,21 @@ export default function App() {
 
       {}
       {navOpen ? (
-        <div className="fixed inset-0 z-40 md:hidden">
+        <div className="hide-md nav-open" style={{ position: 'fixed', inset: 0, zIndex: 40 }}>
           <div
-            className="animate-fade-in absolute inset-0 bg-black/60"
+            style={{ position: 'absolute', inset: 0, background: 'rgb(var(--c-shadow) / 0.45)', backdropFilter: 'blur(2px)' }}
             onClick={() => setNavOpen(false)}
             aria-hidden="true"
           />
-          <div className="drawer-slide-left absolute inset-y-0 left-0 w-[248px] shadow-popover">
+          {/* .nav-open on this wrapper: at ≤768px Sidebar's .rail is fixed +
+              translateX(-105%) and ONLY `.nav-open .rail` un-translates it —
+              without the class the drawer's rail stays parked offscreen. */}
+          <div className="drawer-slide-left" style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: 248, boxShadow: 'var(--sh2)' }}>
             <Sidebar
               onOpenProviders={() => setProvidersOpen(true)}
               onOpenSettings={() => setPrefsOpen(true)}
               onNavigate={() => setNavOpen(false)}
+              onBindWorkspace={handleBindWorkspace}
             />
           </div>
         </div>
@@ -610,17 +812,19 @@ export default function App() {
 
       {}
       {settingsOpen ? (
-        <div className="fixed inset-0 z-40 lg:hidden">
+        <div className="hide-lg" style={{ position: 'fixed', inset: 0, zIndex: 40 }}>
           <div
-            className="animate-fade-in absolute inset-0 bg-black/60"
+            style={{ position: 'absolute', inset: 0, background: 'rgb(var(--c-shadow) / 0.45)', backdropFilter: 'blur(2px)' }}
             onClick={dismissSettings}
             aria-hidden="true"
           />
-          <div className="drawer-slide-right absolute inset-y-0 right-0 w-[min(320px,88vw)] shadow-popover">
+          <div
+            className="drawer-slide-right"
+            style={{ position: 'absolute', top: 0, bottom: 0, right: 0, width: 'min(320px, 88vw)', overflow: 'hidden', background: 'rgb(var(--c-canvas))', boxShadow: 'var(--sh2)' }}
+          >
             <Suspense fallback={null}>
-              {/* key → remount on mode switch, replaying the dock-panel-in
-                  transition (slide+fade) between Config / Tree / Addons. */}
-              <div key={rightPanelMode} className="dock-panel-in h-full">
+              {}
+              <div key={rightPanelMode} className="dock-panel-in" style={{ height: '100%' }}>
                 {rightPanelMode === 'tree' ? (
                   <LazyProjectTreePanel />
                 ) : rightPanelMode === 'addons' ? (
@@ -641,12 +845,14 @@ export default function App() {
       ) : null}
 
       {}
-      <main
+        <main
         id="workspace"
-        className="my-5 ml-4 mr-2 flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-hairline bg-elevated shadow-workspace"
+        className="work"
       >
         <TopBar
           title={title}
+          onPickWorkspace={handlePickWorkspace}
+          workspaceLabel={workspaceLabel}
           onOpenNav={() => setNavOpen(true)}
           onShare={() => {
             if (!activeConversation) {
@@ -665,141 +871,104 @@ export default function App() {
           <Suspense fallback={<LazyViewFallback label="Image Studio" />}>
             <LazyImageStudio />
           </Suspense>
-        ) : (
-          <>
-            {view === 'playground' && hasThread ? (
-              <div className="ctx-zoom flex min-h-0 flex-1 flex-col">
-                {}
-                {/* Thread column + TURN CHECKPOINT RAIL. The rail is an ABSOLUTE
-                    overlay pinned at right = measured scrollbar width, so it
-                    sits BETWEEN the conversation and the scrollbar while the
-                    thread column keeps its full width — nothing is pushed or
-                    shifted. pointer-events-none on the rail (auto on each
-                    marker) keeps the content underneath clickable. */}
-                <div className="relative flex min-h-0 flex-1">
-                  <div
-                    ref={threadScrollerRef}
-                    className="min-h-0 flex-1 overflow-y-auto [overflow-anchor:none] [scrollbar-gutter:stable]"
-                  >
-                  {/* NOTE: deliberately NO key on Thread. A key by conversation
-                      id forced Thread to UNMOUNT-REMMOUNT mid-reload — activeId
-                      starts undefined and resolves once boot reconcile lands,
-                      so the resume replay (which refills the trailing turn)
-                      lost continuity and the thread froze mid-generation. The
-                      stale-switch problem this key "fixed" was really main-
-                      thread starvation from the dead `conversations`
-                      subscription in useChatController, which is now gone, so
-                      useDeferredValue's switch render lands within a frame or
-                      two without any remount. */}
-                  <Thread
-                    turns={turns}
-                    streaming={streaming}
-                    compaction={activeConversation?.compaction}
-                    bottomPad={THREAD_BOTTOM_PAD}
-                    onRegenerate={regenerate}
-                    onEditTurn={handleEditTurn}
-                    onRegenerateFrom={regenerateFrom}
-                    onBranchTurn={handleBranchTurn}
-                    onDeleteTurn={handleDeleteTurn}
-                    onNavigationReady={handleNavigationReady}
-                  />
-                  </div>
-                  {turnCount > 0 && (
-                    <CheckpointRail
-                      turnNumbers={turnNumbers}
-                      activeTurn={activeTurn}
-                      onJumpToTurn={(turn) => turnNavigation?.toTurn(turn)}
-                      rightOffset={scrollbarWidth}
-                    />
-                  )}
+        ) : view === 'playground' ? (
+          <div
+            className={`ctx-zoom view-enter${!hasThread ? ' chat-v empty' : ''}`}
+            style={{
+              display: 'flex',
+              minHeight: 0,
+              flex: 1,
+              flexDirection: 'column',
+              justifyContent: hasThread ? undefined : 'center',
+			  paddingBottom: hasThread ? undefined : 110,
+              overflowY: hasThread ? undefined : 'auto',
+              overflowAnchor: 'none',
+            }}
+          >
+            {hasThread ? (
+              <div style={{ position: 'relative', display: 'flex', minHeight: 0, flex: 1 }}>
+                <div
+                  ref={threadScrollerRef}
+                  className="chat-scroll"
+                  style={{ minHeight: 0, flex: 1, overflowY: 'auto', overflowAnchor: 'none', scrollbarGutter: 'stable' }}
+                >
+                <Thread
+                  turns={turns}
+                  streaming={streaming}
+                  compaction={activeConversation?.compaction}
+                  bottomPad={THREAD_BOTTOM_PAD}
+                  onRegenerate={regenerate}
+                  onEditTurn={handleEditTurn}
+                  onRegenerateFrom={regenerateFrom}
+                  onBranchTurn={handleBranchTurn}
+                  onDeleteTurn={handleDeleteTurn}
+                  onNavigationReady={handleNavigationReady}
+                />
                 </div>
-                <div className="shrink-0">
-                  {/* FASE 5 — addon render site: composer-band widgets above the composer */}
-                  <AddonWidgetHost site="composer-band" streaming={streaming} />
-                  <Composer
-                    draft={draft}
-                    onDraftChange={setDraft}
-                    onSend={handleSend}
-                    onStop={stop}
-                    streaming={streaming}
-                    blockedReason={blockedReason}
-                    onPickWorkspace={handlePickWorkspace}
-                    onToggleGoals={() => setGoalsOpen((value) => !value)}
-                    goalsOpen={goalsOpen}
-                    onSteer={handleSteer}
-                    onSendReminder={handleSendReminder}
-                    onNavigateFirstTurn={() => turnNavigation?.toFirstTurn()}
-                    onNavigateLatest={() => turnNavigation?.toLatest()}
+                {turnCount > 0 && (
+                  <CheckpointRail
+                    turnNumbers={turnNumbers}
+                    activeTurn={activeTurn}
+                    onJumpToTurn={(turn) => turnNavigation?.toTurn(turn)}
+                    rightOffset={scrollbarWidth}
                   />
-                </div>
+                )}
               </div>
             ) : (
-              <>
-                {}
-                <div className="min-h-0 flex-1 overflow-y-auto [overflow-anchor:none] [scrollbar-gutter:stable]">
-                  {view === 'history' ? (
-                    <LazyViewBoundary label="History">
-                      <Suspense fallback={<LazyViewFallback label="History" />}>
-                        <LazyHistoryView />
-                      </Suspense>
-                    </LazyViewBoundary>
-                  ) : view === 'dashboard' ? (
-                    <LazyViewBoundary label="Dashboard">
-                      <Suspense fallback={<LazyViewFallback label="Dashboard" />}>
-                        <LazyDashboardView onOpenProviders={() => setProvidersOpen(true)} />
-                      </Suspense>
-                    </LazyViewBoundary>
-                  ) : view === 'gallery' ? (
-                    <LazyViewBoundary label="Gallery">
-                      <Suspense fallback={<LazyViewFallback label="Gallery" />}>
-                        <LazyGallery />
-                      </Suspense>
-                    </LazyViewBoundary>
-                  ) : view === 'imagehistory' ? (
-                    <LazyViewBoundary label="Image History">
-                      <Suspense fallback={<LazyViewFallback label="Image History" />}>
-                        <LazyImageHistoryView />
-                      </Suspense>
-                    </LazyViewBoundary>
-                  ) : hasThread ? (
-                    <div className="ctx-zoom">
-                      <Thread
-                        turns={turns}
-                        streaming={streaming}
-                        compaction={activeConversation?.compaction}
-                        bottomPad={THREAD_BOTTOM_PAD}
-                        onRegenerate={regenerate}
-                        onEditTurn={handleEditTurn}
-                        onRegenerateFrom={regenerateFrom}
-                        onBranchTurn={handleBranchTurn}
-                        onDeleteTurn={handleDeleteTurn}
-                      />
-                    </div>
-                  ) : (
-                    <div className="ctx-zoom">
-                      <Suspense fallback={null}>
-                        <LazyExplore>
-                          <Composer
-                          draft={draft}
-                          onDraftChange={setDraft}
-                          onSend={handleSend}
-                          onStop={stop}
-                          streaming={streaming}
-                          blockedReason={blockedReason}
-                          variant="centered"
-                          onPickWorkspace={handlePickWorkspace}
-                          onToggleGoals={() => setGoalsOpen((value) => !value)}
-                          goalsOpen={goalsOpen}
-                          onSteer={handleSteer}
-                          onSendReminder={handleSendReminder}
-                        />
-                        </LazyExplore>
-                      </Suspense>
-                    </div>
-                  )}
-                </div>
-              </>
+              <Suspense fallback={null}>
+                <LazyExplore />
+              </Suspense>
             )}
+            {}
+            <div ref={slotRef} style={{ flexShrink: 0, width: '100%' }}>
+              <AddonWidgetHost site="composer-band" streaming={streaming} />
+              <Composer
+                draft={draft}
+                onDraftChange={setDraft}
+                onSend={handleSend}
+                onStop={stop}
+                streaming={streaming}
+                blockedReason={blockedReason}
+                onPickWorkspace={handlePickWorkspace}
+                onToggleGoals={() => setGoalsOpen((value) => !value)}
+                goalsOpen={goalsOpen}
+                onSteer={handleSteer}
+                onSendReminder={handleSendReminder}
+                onNavigateFirstTurn={() => turnNavigation?.toFirstTurn()}
+                onNavigateLatest={() => turnNavigation?.toLatest()}
+              />
+            </div>
+          </div>
+        ) : (
+          <>
+            {}
+            <div style={{ minHeight: 0, flex: 1, overflowY: 'auto', overflowAnchor: 'none', scrollbarGutter: 'stable' }}>
+              {view === 'history' ? (
+                <LazyViewBoundary label="History">
+                  <Suspense fallback={<LazyViewFallback label="History" />}>
+                    <LazyHistoryView />
+                  </Suspense>
+                </LazyViewBoundary>
+              ) : view === 'dashboard' ? (
+                <LazyViewBoundary label="Dashboard">
+                  <Suspense fallback={<LazyViewFallback label="Dashboard" />}>
+                    <LazyDashboardView onOpenProviders={() => setProvidersOpen(true)} />
+                  </Suspense>
+                </LazyViewBoundary>
+              ) : view === 'gallery' ? (
+                <LazyViewBoundary label="Gallery">
+                  <Suspense fallback={<LazyViewFallback label="Gallery" />}>
+                    <LazyGallery />
+                  </Suspense>
+                </LazyViewBoundary>
+              ) : view === 'imagehistory' ? (
+                <LazyViewBoundary label="Image History">
+                  <Suspense fallback={<LazyViewFallback label="Image History" />}>
+                    <LazyImageHistoryView />
+                  </Suspense>
+                </LazyViewBoundary>
+              ) : null}
+            </div>
           </>
         )}
       </main>
@@ -807,18 +976,18 @@ export default function App() {
 
       {}
       {settingsEverOpened ? (
-        <div className="hidden lg:flex">
+        <div className="show-lg" style={{ position: 'relative', zIndex: 1 }}>
           {settingsOpen && settingsPanelReady ? (
             <ResizeHandle
               side="right"
               value={dockWidth}
-              min={rightPanelMode === 'diff' ? 560 : 260}
-              max={rightPanelMode === 'diff' ? 1600 : 480}
-              defaultValue={rightPanelMode === 'diff' ? 760 : 300}
+              min={rightPanelMode === 'diff' ? 560 : 300}
+              max={rightPanelMode === 'diff' ? 1600 : 520}
+              defaultValue={rightPanelMode === 'diff' ? 760 : 340}
               onResize={rightPanelMode === 'diff' ? setDiffDockWidth : setSettingsWidth}
               onCommit={
                 rightPanelMode === 'diff'
-                  ? // G3: persisted on release — refresh keeps the dragged width.
+                  ?
                     useStore.getState().commitDiffDockWidth
                   : useStore.getState().commitSettingsWidth
               }
@@ -826,16 +995,13 @@ export default function App() {
           ) : null}
           <div
             className={`fold${settingsOpen && settingsPanelReady ? ' fold-open' : ''}`}
-            style={{ width: settingsOpen && settingsPanelReady ? dockWidth + 16 : 0 }}
+            style={{ width: settingsOpen && settingsPanelReady ? dockWidth + 4 : 0 }}
             aria-hidden={!settingsOpen}
+            data-demo-dock="true"
           >
             <Suspense fallback={null}>
-              {/* key → remount on mode switch, replaying the dock-panel-in
-                  transition (slide+fade) between Config / Tree / Addons / Diff.
-                  h-full: the panel's own height is calc(100%-2.5rem), which
-                  collapses without a definite-height ancestor — and with it,
-                  the panel's internal scroll chain. */}
-              <div key={rightPanelMode} className="dock-panel-in h-full">
+              {}
+              <div key={rightPanelMode} className="dock-panel-in" style={{ height: '100%' }}>
                 {rightPanelMode === 'tree' ? (
                   <LazyProjectTreePanel width={dockWidth} />
                 ) : rightPanelMode === 'addons' ? (
@@ -871,9 +1037,33 @@ export default function App() {
           <GoalsPanel open onClose={() => setGoalsOpen(false)} />
         </Suspense>
       ) : null}
+      {pendingConfirmDelete ? (
+        <Modal
+          open
+          onClose={cancelPendingDelete}
+          title="Delete chat?"
+          description="This removes the conversation from this device."
+          size="sm"
+        >
+          <p style={{ margin: 0, fontSize: 13.5, color: 'rgb(var(--c-ink))' }}>{pendingDeleteTitle}</p>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+            <button type="button" className="btn ghost sm" onClick={cancelPendingDelete}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn sm"
+              style={{ background: 'rgb(var(--c-danger))', borderColor: 'transparent', color: '#fff' }}
+              onClick={confirmPendingDelete}
+            >
+              Delete
+            </button>
+          </div>
+        </Modal>
+      ) : null}
       <AgentPermissionDialog />
       <AgentAskUserDialog />
-      {/* FASE 5 — addon render site: floating overlay widgets (tetris, etc.) */}
+      {}
       <AddonWidgetHost site="floating" streaming={streaming} />
     </div>
   );

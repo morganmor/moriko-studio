@@ -412,8 +412,6 @@ class BrowserManager {
         this.pushDiag({ kind: 'http', text: `HTTP ${res.status()} ${res.url().slice(0, 200)}` });
       }
     });
-    // WebRTC: the in-page peer dies with its document — a navigation must
-    // re-point the capture at the fresh document (webrtc.ts retarget).
     page.on('framenavigated', (frame: unknown) => {
       if (frame === page.mainFrame() && this.signalingSink)
         this.signalingSink({ type: '__pageNavigated', __page: page });

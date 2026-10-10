@@ -56,8 +56,98 @@ const RATIO_TO_SIZE: Record<string, string> = {
   '2:3': '1024x1536',
 };
 
+/**
+ * Maps custom pixel dimensions to the closest standard OpenAI size by
+ * computing the aspect ratio and snapping to the nearest known pair.
+ * Returns null when no standard size is close enough (e.g. 1:1 stays 1024x1024).
+ */
+function closestStandardSize(width: number, height: number): string | null {
+  const ratio = width / height;
+  const standards: Array<{ size: string; r: number }> = [
+    { size: '1024x1024', r: 1 },
+    { size: '1792x1024', r: 16 / 9 },
+    { size: '1024x1792', r: 9 / 16 },
+    { size: '1536x1024', r: 3 / 2 },
+    { size: '1024x1536', r: 2 / 3 },
+  ];
+  let best: { size: string; diff: number } | null = null;
+  for (const s of standards) {
+    const diff = Math.abs(s.r - ratio);
+    if (!best || diff < best.diff) best = { size: s.size, diff };
+  }
+  return best ? best.size : null;
+}
+
 interface OpenAiImagesResponse {
   data?: Array<{ url?: string; b64_json?: string }>;
+}
+
+// ─── provider resolution catalog (NanoGPT-style) ─────────────────────
+
+interface DetailedImageModel {
+  id?: string;
+  model?: string;
+  supported_parameters?: { resolutions?: string[] } | null;
+}
+
+const catalogCache = new Map<string, { at: number; models: Map<string, string[]> }>();
+const CATALOG_TTL = 10 * 60 * 1000;
+
+/**
+ * Fetches the provider's image-model catalog (NanoGPT
+ * `GET /image-models?detailed=true`) and indexes each model's
+ * `supported_parameters.resolutions`. Cached 10 min per base URL. An empty
+ * map means the catalog is unavailable — size snapping is skipped.
+ */
+async function fetchResolutionCatalog(base: string, apiKey: string | undefined): Promise<Map<string, string[]>> {
+  const cached = catalogCache.get(base);
+  if (cached && Date.now() - cached.at < CATALOG_TTL) return cached.models;
+
+  const models = new Map<string, string[]>();
+  const headers: Record<string, string> = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+  try {
+    const res = await fetch(`${base}/image-models?detailed=true`, {
+      headers,
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (res.ok) {
+      const payload = (await res.json()) as { data?: DetailedImageModel[] } | DetailedImageModel[];
+      const list = Array.isArray(payload) ? payload : (payload.data ?? []);
+      for (const m of list) {
+        const id = m.id ?? m.model;
+        const resolutions = m.supported_parameters?.resolutions;
+        if (id && Array.isArray(resolutions)) {
+          const clean = resolutions.filter((r): r is string => typeof r === 'string' && /^\d+x\d+$/.test(r.trim()));
+          if (clean.length > 0) models.set(id, clean);
+        }
+      }
+    }
+  } catch { /* catalog is optional — provider may not expose it */ }
+  catalogCache.set(base, { at: Date.now(), models });
+  return models;
+}
+
+/**
+ * Picks the supported resolution with the closest aspect ratio (ties broken
+ * by total pixel count). Only pixel-dimension entries ("WxH") are considered;
+ * symbolic values like "auto" are skipped.
+ */
+function snapToSupported(width: number, height: number, resolutions: string[]): string | null {
+  const ratio = width / height;
+  let best: { size: string; diff: number; areaDiff: number } | null = null;
+  for (const r of resolutions) {
+    const m = /^(\d+)x(\d+)$/.exec(r.trim());
+    if (!m) continue;
+    const w = Number(m[1]);
+    const h = Number(m[2]);
+    if (!w || !h) continue;
+    const diff = Math.abs(w / h - ratio);
+    const areaDiff = Math.abs(w * h - width * height);
+    if (!best || diff < best.diff - 1e-9 || (Math.abs(diff - best.diff) < 1e-9 && areaDiff < best.areaDiff)) {
+      best = { size: `${w}x${h}`, diff, areaDiff };
+    }
+  }
+  return best ? best.size : null;
 }
 
 /** What this adapter's contract says the endpoint accepts — quoted verbatim
@@ -68,27 +158,49 @@ const ACCEPTED_CONTRACT =
   'Moriko retries with the minimal body and the provider default applies) — response ' +
   'returns data[].url or data[].b64_json';
 
-/** The two request shapes the adapter tries, in order. Gateways vary in how
+/** The request shapes the adapter tries, in order. Gateways vary in how
  * strictly they validate optional parameters (BitDeer rejects `size` with
- * 400), so a 400 falls back to the minimal proven body instead of failing
- * the generation outright. */
-function attemptBodies(req: ImageSubmitRequest): Array<{ label: string; body: Record<string, unknown> }> {
-  const size =
-    req.width && req.height
+ * 400), so a 400 falls back to the next simpler body instead of failing
+ * the generation outright.
+ *
+ * When the user enters custom pixels (e.g. 1080x1920) and the provider
+ * rejects that size, the adapter tries the closest standard OpenAI size
+ * (e.g. 1024x1792 for 9:16) before falling back to no size at all. */
+function attemptBodies(req: ImageSubmitRequest, explicitSize?: string): Array<{ label: string; body: Record<string, unknown> }> {
+  const customSize =
+    explicitSize ??
+    (req.width && req.height
       ? `${req.width}x${req.height}`
       : req.aspectRatio
         ? (RATIO_TO_SIZE[req.aspectRatio] ?? ratioToSize(req.aspectRatio) ?? undefined)
-        : undefined;
-  const attempts: Array<{ label: string; body: Record<string, unknown> }> = [
-    {
-      label: 'full request (model, prompt, n' + (size ? ', size)' : ')'),
-      body: { model: req.model, prompt: req.prompt, n: 1, ...(size ? { size } : {}) },
-    },
-    {
-      label: 'minimal fallback (model, prompt only — no optional parameters)',
-      body: { model: req.model, prompt: req.prompt },
-    },
-  ];
+        : undefined);
+
+  const attempts: Array<{ label: string; body: Record<string, unknown> }> = [];
+
+  // Attempt 1: full request with the requested size
+  if (customSize) {
+    attempts.push({
+      label: `full request (model, prompt, n, size ${customSize})`,
+      body: { model: req.model, prompt: req.prompt, n: 1, size: customSize },
+    });
+  }
+
+  // Attempt 2: if custom pixels, try closest standard size before giving up
+  if (req.width && req.height) {
+    const standard = closestStandardSize(req.width, req.height);
+    if (standard && standard !== customSize) {
+      attempts.push({
+        label: `standard size fallback (size ${standard})`,
+        body: { model: req.model, prompt: req.prompt, n: 1, size: standard },
+      });
+    }
+  }
+
+  // Attempt 3: minimal — no optional parameters
+  attempts.push({
+    label: 'minimal fallback (model, prompt only — no optional parameters)',
+    body: { model: req.model, prompt: req.prompt },
+  });
   return attempts;
 }
 
@@ -113,8 +225,38 @@ async function execute(
   let lastText = '';
   let fellBack = false;
 
+  // Resolve a provider-supported size BEFORE sending. NanoGPT accepts any
+  // `size` string but silently renders at 1024x1024 when the value is not in
+  // the model's supported_parameters.resolutions — no HTTP 400, so the
+  // fallback ladder below never triggers. Snapping up front fixes that.
+  let snapNote: string | undefined;
+  let sizeOverride: string | undefined;
+  const desiredSize =
+    req.width && req.height
+      ? `${req.width}x${req.height}`
+      : req.aspectRatio
+        ? (RATIO_TO_SIZE[req.aspectRatio] ?? ratioToSize(req.aspectRatio) ?? undefined)
+        : undefined;
+  if (desiredSize) {
+    const resolutions = (await fetchResolutionCatalog(base, credentials.apiKey)).get(req.model);
+    if (resolutions && resolutions.length > 0 && !resolutions.includes(desiredSize)) {
+      const [w, h] = desiredSize.split('x').map(Number);
+      if (w && h) {
+        const snapped = snapToSupported(w, h, resolutions);
+        if (snapped && snapped !== desiredSize) {
+          sizeOverride = snapped;
+          snapNote =
+            `Requested size ${desiredSize} is not supported by ${req.model} on this provider; ` +
+            `Moriko sent ${snapped}, the closest supported resolution.`;
+        }
+      }
+    }
+  }
+
+  const attempts = attemptBodies(req, sizeOverride);
+
   try {
-    for (const [index, attempt] of attemptBodies(req).entries()) {
+    for (const [index, attempt] of attempts.entries()) {
       if (index > 0) fellBack = true;
       const upstream = await fetch(url, {
         method: 'POST',
@@ -157,9 +299,14 @@ async function execute(
         job.images = images;
         job.raw = payload;
         job.status = 'SUCCEED';
-        if (fellBack) {
-          job.note =
-            'This provider rejected the size parameter (HTTP 400), so the generation was retried without it — the image uses the provider\'s default size. Leave Size: Default for this provider, or use a provider that accepts size.';
+        if (snapNote || fellBack) {
+          const parts = [
+            snapNote,
+            fellBack
+              ? 'This provider rejected the size parameter (HTTP 400), so the generation was retried without it — the image uses the provider\'s default size.'
+              : null,
+          ].filter(Boolean);
+          job.note = parts.join(' ');
         }
         return;
       }
@@ -197,9 +344,6 @@ export const openaiSyncAdapter: ImageAdapter = {
     resultFormat: 'both',
     maxImages: 1,
     supportsNegativePrompt: false,
-    // POST /images/generations carries no image input in the OpenAI spec —
-    // this adapter puts references on NO wire, so the composer warns before
-    // sending (capability is ours to declare, not HF's to guess).
     maxReferences: 0,
   },
 

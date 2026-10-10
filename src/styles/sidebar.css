@@ -1,0 +1,727 @@
+/* ---------------------------------------------------------------------------
+ * LEFT SIDEBAR — verbatim port of moriko-design-1-sidebar.html (the attached
+ * reference). Rule bodies follow the reference 1:1; only the token SOURCES are
+ * remapped onto the app palette: --muted/--faint/--line/--sh1/--sh2/--a-*
+ * derive from --c-* (--c-line -> --c-hairline, --c-ok -> --c-success).
+ * Unlayered on purpose: it outranks Tailwind's layered utilities.
+ * ------------------------------------------------------------------------ */
+:root {
+  --row: 34px;
+  --rail-w: 260px;
+  --r-sm: 9px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --a-muted: 0.66;
+  --a-faint: 0.42;
+  --c-shadow: 60 40 20;
+  --a-sh: 0.1;
+  --muted: rgb(var(--c-ink) / var(--a-muted));
+  --faint: rgb(var(--c-ink) / var(--a-faint));
+  --line: rgb(var(--c-hairline));
+  --sh1: 0 1px 2px rgb(var(--c-shadow) / var(--a-sh)),
+    0 8px 24px -12px rgb(var(--c-shadow) / var(--a-sh));
+  --sh2: 0 2px 6px rgb(var(--c-shadow) / var(--a-sh)),
+    0 24px 60px -18px rgb(var(--c-shadow) / calc(var(--a-sh) * 1.6));
+}
+.dark {
+  --a-muted: 0.62;
+  --a-faint: 0.38;
+  --c-shadow: 0 0 0;
+  --a-sh: 0.5;
+}
+
+/* Utilities (reference .ic / .grow). */
+.ic {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.grow {
+  flex: 1;
+}
+
+/* Shell + dual rail (full 260 / mini 64). Width itself comes from the
+   React inline style (drag-resize), so the reference's width transition on
+   .rail is omitted — the .fold wrapper in App.tsx already animates it. */
+.rail {
+  width: var(--rail-w);
+  height: 100%;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.rail-full,
+.rail-mini {
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+.rail-full {
+  display: flex;
+  padding: 4px 8px 0 8px;
+}
+.rail-mini {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+}
+.rail.rail-sm {
+  width: 64px;
+}
+.rail.rail-sm .rail-full {
+  display: none;
+}
+.rail.rail-sm .rail-mini {
+  display: flex;
+}
+
+/* Brand row. */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+  flex: none;
+  padding: 0 2px;
+}
+.logo {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border-radius: 11px;
+  background-color: rgb(var(--c-accent) / 0.12);
+  background-image: var(--img-cat);
+  background-position: center 58%;
+  background-size: 120%;
+  background-repeat: no-repeat;
+  image-rendering: pixelated;
+  border: 1px solid rgb(var(--c-accent) / 0.25);
+  transition: transform 0.35s var(--spring);
+}
+.logo:hover {
+  transform: rotate(-8deg) scale(1.06);
+}
+.wm {
+  display: block;
+  width: 84px;
+  height: 18px;
+  flex: none;
+  background-image: var(--img-wm);
+  background-position: left center;
+  background-size: contain;
+  background-repeat: no-repeat;
+  image-rendering: pixelated;
+}
+
+/* Search + scroll region. */
+.rsearch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 36px;
+  flex: none;
+  padding: 0 10px;
+  margin: 4px 0 10px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  background: rgb(var(--c-field));
+  color: var(--muted);
+  text-align: left;
+  transition: border-color 0.2s, color 0.2s;
+}
+.rsearch span {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rsearch:hover {
+  border-color: rgb(var(--c-accent) / 0.5);
+  color: rgb(var(--c-ink));
+}
+.rscroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 0 -6px;
+  padding: 0 6px 10px;
+}
+
+/* Section labels + chevrons + collapse columns. */
+.sec-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+  padding: 2px 8px 6px;
+  margin: 2px 0px 0px; 
+}
+.sec-row {
+  display: flex;
+  justify-content: space-between;
+  margin: 10px 0px 0px;
+}
+.sec-row .sec-label {
+  flex: 1;
+}
+.sec-label.tog:hover {
+  color: var(--muted);
+}
+.chev {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  transition: transform 0.25s var(--ease);
+}
+[aria-expanded='false'] > .chev {
+  transform: rotate(0deg);
+}
+.col {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 0.3s var(--ease);
+}
+.col > .col-in {
+  min-height: 0;
+  overflow: hidden;
+}
+.col.shut {
+  grid-template-rows: 0fr;
+}
+.col.shut > .col-in {
+  visibility: hidden;
+  transition: visibility 0s 0.3s;
+}
+
+/* Nav rows. */
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: var(--row);
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  color: var(--muted);
+  font-weight: 500;
+  text-align: left;
+  transition: background 0.15s, color 0.15s;
+}
+.nav:hover {
+  background: rgb(var(--c-ink) / 0.06);
+  color: rgb(var(--c-ink));
+}
+.nav span {
+  flex: 1;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nav[aria-current='page'] {
+  /* Glass highlight: translucent accent tint instead of a solid gray pill. */
+  background: rgb(var(--c-accent) / 0.1);
+  color: rgb(var(--c-ink));
+}
+.nav[aria-current='page'] > .nav-ic {
+  color: rgb(var(--c-accent));
+}
+.nav .nav-ic {
+  flex: none;
+  display: flex;
+  color: inherit;
+}
+.nav .cnt,
+.ws-h .cnt {
+  flex: none;
+  font-size: 11px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.nav kbd {
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.nav:hover kbd {
+  opacity: 1;
+}
+.navsub {
+  padding-left: 16px;
+  position: relative;
+}
+.navsub::before {
+  content: '';
+  position: absolute;
+  left: 18px;
+  top: 4px;
+  bottom: 4px;
+  width: 1px;
+  background: var(--line);
+}
+.nav.sub {
+  height: calc(var(--row) - 4px);
+  font-size: 13px;
+}
+.nav:disabled {
+  cursor: default;
+  opacity: 0.4;
+  background: none;
+  color: var(--muted);
+}
+.nav-tip {
+  display: flex;
+  width: 100%;
+}
+
+/* Workspace rows. */
+.ws {
+  position: relative;
+}
+.ws-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.ws-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* flex:1 (not width:100%) — the delete button sits beside it in-flow, so
+     width:100% would push it out of the row. */
+  flex: 1;
+  min-width: 0;
+  height: var(--row);
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  color: var(--muted);
+  text-align: left;
+}
+.ws-h:hover {
+  background: rgb(var(--c-ink) / 0.06);
+  color: rgb(var(--c-ink));
+}
+.ws-h span {
+  flex: 1;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-in {
+  padding-left: 14px;
+}
+.ws-in .nav-ic {
+  color: var(--faint);
+}
+.ws-empty {
+  font-size: 12px;
+  color: var(--faint);
+  padding: 4px 12px 8px;
+  margin: 0;
+}
+/* Unregister control — in-flow slot like the reference .crow-m (opacity
+   toggles, the 26px slot never does), so it can't stack on the count or
+   chevron the way the old absolute right:6px placement did. */
+.ws-del {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  margin-right: 4px;
+  color: var(--faint);
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+.ws-row:hover .ws-del,
+.ws-del:focus-visible {
+  opacity: 1;
+}
+.ws-del:hover {
+  background: rgb(var(--c-ink) / 0.08);
+  color: rgb(var(--c-ink));
+}
+
+/* Recent-chat rows. */
+.crow {
+  display: flex;
+  align-items: center;
+  border-radius: var(--r-sm);
+  position: relative;
+}
+.crow:hover {
+  background: rgb(var(--c-ink) / 0.06);
+}
+.crow.on {
+  /* Glass highlight: matches the nav rows' translucent accent tint. */
+  background: rgb(var(--c-accent) / 0.1);
+}
+.crow.on::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 3px;
+  background: rgb(var(--c-accent));
+  z-index: 1;
+}
+.crow-t {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--row);
+  padding: 0 4px 0 12px;
+  color: var(--muted);
+  text-align: left;
+}
+.crow.on .crow-t,
+.crow:hover .crow-t {
+  color: rgb(var(--c-ink));
+}
+.crow-t .ct {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.crow-m {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  color: var(--faint);
+  opacity: 0;
+  margin-right: 4px;
+}
+.crow:hover .crow-m,
+.crow-m[aria-expanded='true'],
+.crow-m:focus-visible {
+  opacity: 1;
+}
+.crow-m:hover {
+  background: rgb(var(--c-ink) / 0.08);
+  color: rgb(var(--c-ink));
+}
+.pinic {
+  width: 12px;
+  height: 12px;
+  color: rgb(var(--c-accent));
+}
+.spin {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid rgb(var(--c-accent) / 0.25);
+  border-top-color: rgb(var(--c-accent));
+  animation: sb-spin 0.8s linear infinite;
+}
+@keyframes sb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* Rename editor (ours; the reference renames via contenteditable elsewhere). */
+.crow-edit {
+  padding: 2px 4px;
+}
+.crow-edit input {
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid rgb(var(--c-accent) / 0.6);
+  background: rgb(var(--c-field));
+  color: rgb(var(--c-ink));
+  font-size: 13px;
+  outline: none;
+}
+
+/* Filter. */
+.filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  margin: 2px 0 6px;
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: rgb(var(--c-field));
+  color: var(--faint);
+}
+.filter input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  font-size: 12.5px;
+  color: rgb(var(--c-ink));
+}
+.filter input::placeholder {
+  color: var(--faint);
+}
+.filter:focus-within {
+  border-color: rgb(var(--c-accent) / 0.6);
+}
+.filter-x {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border-radius: 5px;
+  color: inherit;
+  transition: color 0.15s;
+}
+.filter-x:hover {
+  color: rgb(var(--c-ink));
+}
+
+/* Footer + live chip. Single row always — coarse pointers shrink content
+   (see the pointer:coarse block at the bottom) instead of wrapping. */
+.rfoot {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  padding: 8px 0 max(6px, var(--safe-bottom));
+  border-top: 1px solid var(--line);
+}
+.livechip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+.livechip .ld {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: rgb(var(--c-success));
+  animation: sb-pulse 2s infinite;
+}
+@keyframes sb-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgb(var(--c-success) / 0.6);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 7px rgb(var(--c-success) / 0);
+  }
+}
+
+/* Theme toggle crossfade (reference + .mocha mirror for the third theme). */
+.theme-tg {
+  position: relative;
+}
+.theme-tg .ic {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  transition: transform 0.45s var(--spring), opacity 0.3s;
+}
+.theme-tg .moon {
+  opacity: 0;
+  transform: rotate(-90deg) scale(0.4);
+}
+.dark .theme-tg .sun,
+.mocha .theme-tg .sun {
+  opacity: 0;
+  transform: rotate(90deg) scale(0.4);
+}
+.dark .theme-tg .moon,
+.mocha .theme-tg .moon {
+  opacity: 1;
+  transform: none;
+}
+
+/* Icon buttons. */
+.ib {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-sm);
+  color: var(--muted);
+  transition: background 0.15s, color 0.15s, transform 0.15s;
+}
+.ib:hover {
+  background: rgb(var(--c-ink) / 0.07);
+  color: rgb(var(--c-ink));
+}
+.ib:active {
+  transform: scale(0.92);
+}
+.ib.sm {
+  width: 28px;
+  height: 28px;
+}
+.ib.xs {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+}
+.ib.xs .ic {
+  width: 13px;
+  height: 13px;
+}
+.ib[aria-expanded='true'],
+.ib.on,
+.rail-mini .ib[aria-current='page'],
+.rfoot .ib[aria-current='page'] {
+  background: rgb(var(--c-accent) / 0.14);
+  color: rgb(var(--c-accent));
+}
+
+/* Live-chip trigger: shrink the shared .icon-button to the reference's
+   icon-only phone slot inside the 30px .livechip pill. */
+.livechip .icon-button {
+  width: 22px;
+  height: 26px;
+  min-width: 0;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+}
+.livechip .icon-button:hover {
+  background: none;
+  color: rgb(var(--c-ink));
+}
+
+/* Popovers (reference .pop/.mi — ours mount already-visible, so the
+   hidden-start state/transition is replaced by a mount animation). */
+.pop {
+  position: fixed;
+  z-index: 70;
+  left: 0;
+  top: 0;
+  min-width: 220px;
+  max-width: min(340px, calc(100vw - 16px));
+  max-height: min(480px, calc(100vh - 16px));
+  overflow: auto;
+  padding: 6px;
+  border-radius: var(--r-lg);
+  background: rgb(var(--c-pop));
+  border: 1px solid var(--line);
+  box-shadow: var(--sh2);
+  animation: sb-pop-in 0.18s var(--ease);
+}
+.pop.drop {
+  position: absolute;
+  left: auto;
+  right: 0;
+  top: 100%;
+  margin-top: 4px;
+  z-index: 50;
+  min-width: 190px;
+  max-height: 220px;
+}
+.pop-host {
+  position: relative;
+}
+@keyframes sb-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.97);
+  }
+}
+.mi {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
+  text-align: left;
+  color: rgb(var(--c-ink));
+  transition: background 0.15s, color 0.15s;
+}
+.mi:hover,
+.mi:focus-visible {
+  background: rgb(var(--c-ink) / 0.07);
+}
+.mi span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mi.danger {
+  color: rgb(var(--c-danger));
+}
+.mi.danger:hover {
+  background: rgb(var(--c-danger) / 0.1);
+}
+.ic-ac {
+  color: rgb(var(--c-accent) / 0.8);
+}
+
+/* App-only helpers. */
+.sf-item {
+  display: inline-flex;
+}
+
+/* Touch parity: 44px targets; hover-reveal rows always visible without hover.
+   Footer budget at 44px targets: 4×44 + gaps + chip ≈ 240 ≤ 244 (rail 260).
+   The keyboard-shortcuts button is pointless without a keyboard, the chip's
+   dot duplicates the phone button's own running dot, and the chip padding
+   trims — together they keep the row on ONE line instead of wrapping. */
+@media (pointer: coarse) {
+  .rfoot .ib,
+  .rail-mini .ib,
+  .crow-m,
+  .ws-del {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .rfoot button[aria-label='Keyboard shortcuts'] {
+    display: none;
+  }
+  .livechip {
+    padding: 0 4px;
+  }
+  .livechip .ld {
+    display: none;
+  }
+}
+@media (hover: none) {
+  .crow-m,
+  .ws-del {
+    opacity: 1;
+  }
+}

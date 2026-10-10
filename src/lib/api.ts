@@ -105,7 +105,6 @@ export async function cancelReminderApi(sessionId: string, reminderId: string): 
   if (!response.ok) await parseError(response);
 }
 
-// ── File vault (Diff Panel restore) ───────────────────────────────────────
 
 export interface VaultSnapshotMeta {
   id: string;
@@ -926,7 +925,9 @@ export async function fetchLocalImages(): Promise<string[]> {
 
 /** The user's persisted, ordered Gallery collection. */
 export async function fetchGallery(): Promise<string[]> {
-  const response = await fetch('/api/gallery');
+  // cache:'no-store' — agent__image appends server-side; a stale HTTP cache
+  // hid the new images until a hard browser refresh.
+  const response = await fetch('/api/gallery', { cache: 'no-store' });
   if (!response.ok) await parseError(response);
   const payload = (await response.json()) as { images?: string[] };
   return payload.images ?? [];
@@ -1702,8 +1703,6 @@ export async function sendReminderPreset(
     });
     if (!response.ok) {
       if (response.status === 409) return { id: null, reason: 'not_streaming' };
-      // 400 (old server without preset support, unknown preset) and any other
-      // refusal must NOT be reported as "the run just finished" — that lie sent
       // the user hunting the wrong bug. Surface the real reason.
       let detail: string | undefined;
       try {
@@ -1738,7 +1737,7 @@ export function providerHasKey(provider: ProviderPublic | undefined): boolean {
 }
 
 export interface ExportBundle {
-  kind: 'nova-ai-studio-export';
+  kind: 'moriko-export';
   version: 1;
   exportedAt: string;
   conversations: unknown[];
@@ -1750,7 +1749,7 @@ export function buildExportBundle(
   providerKeys: Record<string, string>,
 ): ExportBundle {
   return {
-    kind: 'nova-ai-studio-export',
+    kind: 'moriko-export',
     version: 1,
     exportedAt: new Date().toISOString(),
     conversations,
@@ -1760,7 +1759,7 @@ export function buildExportBundle(
 
 /** Single-conversation export: one thread, no provider keys. */
 export interface ConversationExport {
-  kind: 'nova-ai-studio-conversation-export';
+  kind: 'moriko-conversation-export';
   version: 1;
   exportedAt: string;
   conversation: unknown;
@@ -1768,7 +1767,7 @@ export interface ConversationExport {
 
 export function buildConversationExport(conversation: unknown): ConversationExport {
   return {
-    kind: 'nova-ai-studio-conversation-export',
+    kind: 'moriko-conversation-export',
     version: 1,
     exportedAt: new Date().toISOString(),
     conversation,
@@ -1787,7 +1786,6 @@ export function downloadJson(filename: string, data: unknown): void {
   URL.revokeObjectURL(url);
 }
 
-// --- Storage location (Settings → Data) -----------------------------------
 
 export interface StorageLocationView {
   current: string;
@@ -1827,8 +1825,6 @@ export async function reloadHarness(): Promise<void> {
     const text = await res.text().catch(() => '');
     throw new Error(text || `harness reload failed (${res.status})`);
   }
-  // The old server drains streams before exiting; give it the window, then
-  // poll until the respawned process answers.
   await new Promise((resolve) => setTimeout(resolve, 1200));
   const deadline = Date.now() + 120_000;
   let lastError: unknown = null;

@@ -35,9 +35,6 @@ export function attachBrowserPanelWs(server: Server): void {
   wss = new WebSocketServer({ server, path: '/api/browser/ws' });
 
   wss.on('connection', (ws: WebSocket, req) => {
-    // WEB ACCESS KILL-SWITCH — a panel socket is never a reason to relaunch
-    // the context while web access is off; the panel gets a shutdown notice
-    // instead and closes its window (no background runtime survives).
     if (browserManager.isWebAccessOn() === false) {
       if (ws.readyState === WS_OPEN) {
         ws.send(JSON.stringify({ type: 'shutdown', reason: 'web-access-off' }));
@@ -84,8 +81,6 @@ export function attachBrowserPanelWs(server: Server): void {
     })();
 
       ws.on('message', (raw) => {
-      // Refuse input once web access is off — the shutdown notice is on its way
-      // and the context may already be gone.
       if (browserManager.isWebAccessOn() === false) return;
       let msg: Record<string, unknown>;
       try {

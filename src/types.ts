@@ -214,8 +214,6 @@ export interface ChatSettings {
    * context-limit trigger fires.
    */
   compactThresholdTokens: number | null;
-  /** How many of the newest turns compaction always keeps verbatim. */
-  compactKeepRecentTurns: number;
   /**
    * Context-limit auto-compact trigger as a ratio of the effective limit
    * (0.5–0.98, clamped). The 95% default when left alone.
@@ -230,7 +228,7 @@ export interface ChatSettings {
   summarizerProviderId: string | null;
   summarizerModel: string | null;
   /**
-   * IMAGE OFFLOAD: images outside the protected keep-recent window ride as
+   * IMAGE OFFLOAD: images in older turns ride as
    * read_file placeholders instead of pixels. Pathless images are never
    * offloaded (dropping them would be unrecoverable).
    */
@@ -292,6 +290,9 @@ export interface TurnToolCall {
   args?: string;
   /** Empty while the tool is still running. */
   summary?: string;
+  /** Live progress line (tool_progress events) — NEVER overwrites `summary`,
+   *  so the final tool_result can still pair with its segment afterwards. */
+  progress?: string;
   ok?: boolean;
   /** Unified diff (before → after) for file edits/restores. */
   diff?: string;
@@ -355,7 +356,7 @@ export type TurnSegment =
        * can never land on the wrong tool's segment again.
        */
       toolCallId?: string;
-    } & Pick<TurnToolCall, 'summary' | 'ok' | 'diff' | 'toolImages' | 'visual'> & {
+    } & Pick<TurnToolCall, 'summary' | 'ok' | 'diff' | 'toolImages' | 'visual' | 'progress'> & {
         /** Line counts from the server's diff engine — persisted with the turn. */
         diffstat?: { added: number; removed: number };
       })
@@ -721,6 +722,8 @@ export interface Conversation {
    * Absent on older chats — they simply stay in the Recent Chat list.
    */
   workspaceId?: string;
+  /** Popovers design (chat options): pinned chats sort first in Recent Chat. */
+  pinned?: boolean;
   /**
    * PROBATION: the trust ladder state. `level` escalates as the classifier
    * detects violations and rides harnessFlags so every level change reaches
@@ -963,6 +966,13 @@ export interface Goal {
 
 export type ViewId = 'playground' | 'history' | 'imagehistory' | 'gallery' | 'dashboard' | 'imagestudio';/** UI font style chosen in Settings → Appearance. */
 export type FontFamily = 'inter' | 'mono' | 'system';
+
+/** Theme mechanism (design/moriko-design-1-theme-mechanism): colour-scheme choice; 'system' follows prefers-color-scheme. */
+export type ThemeMode = 'dark' | 'light' | 'mocha' | 'system';
+/** Accent swatch — drives --al/--ad through <html data-accent>. */
+export type Accent = 'ember' | 'sakura' | 'matcha' | 'ocean' | 'violet';
+/** Row height/spacing preset — drives --row through <html data-density>. */
+export type Density = 'comfy' | 'compact';
 
 /**
  * Output-size override for Image Studio, forwarded to the provider as-is:

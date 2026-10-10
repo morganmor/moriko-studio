@@ -46,10 +46,6 @@ const EDIT_PATTERNS: Array<{ test: RegExp; maxReferences: number }> = [
 const UNIFIED_PATTERNS: Array<{ test: RegExp; maxReferences: number }> = [
   { test: /flux[\.-]2-klein/i, maxReferences: 4 },
   { test: /flux[\.-]2-(dev|pro|max)/i, maxReferences: 8 },
-  // Qwen-Image-2.1 does reference-guided editing while HF tags only the base
-  // pipeline "text-to-image" (only *-edit checkpoints carry the edit tag).
-  // Conservative count — one input image, raise when a provider documents more.
-  // Explicit t2i variants (…-pe-t2i) stay text-to-image.
   { test: /qwen[\s._-]*image[\s._-]*2[\s._-]?1(?![\s\S]*-t2i\b)/i, maxReferences: 1 },
 ];
 
@@ -63,7 +59,7 @@ function unifiedFor(model: string): number | null {
 
 /** Families that generate images but take no reference input. */
 const T2I_PATTERN =
-  /image|flux|seedream|krea|z-image|diffusion|sd3|sdxl|stable-diffusion|dall/i;
+  /image|flux|seedream|krea|z-image|diffusion|sd3|sdxl|stable-diffusion|dall|hidream|ideogram|imagen|recraft|playground|juggernaut|sdxl|pony|cyberrealistic|dreamshaper|photon|nova|cascade|wuerstchen|kolors|pixart|aura|lumina|hidream/i;
 
 /** Everything else on a provider's model list (chat, rerankers, embeddings). */
 const NON_IMAGE_PATTERN = /deepseek|qwen\d|glm|kimi|nex-|bge|reranker|embed|qvq|ocr|whisper|tts|guard|omni|vl\b/i;
@@ -80,26 +76,31 @@ function maxReferencesFor(model: string): number {
  * image-model picker hides it and image requests to it are a user error.
  */
 export function classifyImageModel(model: string): ImageModelCaps | null {
+  // ComfyUI tagged models — all support t2i and i2i (edit) with 1 reference
+  if (/^(ckpt|diff|unet):/i.test(model)) {
+    return { modes: ['text-to-image', 'edit'], maxReferences: 1 };
+  }
+
   const hf = lookupDiffusionMeta(model);
   const unified = unifiedFor(model);
   if (hf) {
     if (hf.tag === 'edit' || hf.tag === 'inpaint') {
-      // Unified families also take plain-text prompts — no forced reference.
       const modes: ImageModelMode[] = unified !== null ? ['text-to-image', 'edit'] : ['edit'];
       return { modes, maxReferences: unified ?? maxReferencesFor(model) };
     }
-    // HF says plain text-to-image — but unified families still edit.
     if (unified !== null) return { modes: ['text-to-image', 'edit'], maxReferences: unified };
     return { modes: ['text-to-image'], maxReferences: 0 };
   }
 
-  if (NON_IMAGE_PATTERN.test(model)) return null;
-
+  // Check T2I_PATTERN BEFORE NON_IMAGE_PATTERN — a model like
+  // "qwen2vl/image" or "glm-image" is an image model even though it
+  // contains a keyword that also appears in NON_IMAGE_PATTERN.
   for (const edit of EDIT_PATTERNS) {
     if (edit.test.test(model)) return { modes: ['edit'], maxReferences: edit.maxReferences };
   }
   if (unified !== null) return { modes: ['text-to-image', 'edit'], maxReferences: unified };
   if (T2I_PATTERN.test(model)) return { modes: ['text-to-image'], maxReferences: 0 };
+  if (NON_IMAGE_PATTERN.test(model)) return null;
   return null;
 }
 

@@ -1,18 +1,26 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  Activity,
+  Bell,
+  Check,
+  ChevronDown,
+  Code2,
   Download,
-  Menu,
+  Folder,
   MoreHorizontal,
-  PanelLeftClose,
-  PanelLeftOpen,
   PanelRightOpen,
   Pencil,
   Plus,
   Share2,
+  Trash2,
   Upload,
 } from './icons';
 
 import { NoticeCenter, cx } from './ui';
+import { DIcon } from './designIcons';
+import { Popover } from './Popover';
+import { exportUi } from '../lib/exportUi';
+import { exportPill } from '../lib/exportPill';
 import { useStore } from '../store/useStore';
 
 interface TopBarProps {
@@ -20,6 +28,9 @@ interface TopBarProps {
   onShare: () => void;
   /** Opens the navigation drawer. Only visible below the md breakpoint. */
   onOpenNav: () => void;
+  /** Workspace crumb pill — opens the native folder picker (design topbar). */
+  onPickWorkspace: () => void;
+  workspaceLabel?: string;
 }
 
 /**
@@ -36,6 +47,17 @@ function EditableTitle({ title }: { title: string }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(title);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  /** Design's More menu / F2 "Rename" — ask the mounted title to start editing. */
+  useEffect(() => {
+    if (!activeId) return;
+    const onRetitle = () => {
+      setDraft(title);
+      setEditing(true);
+    };
+    window.addEventListener('moriko:retitle', onRetitle);
+    return () => window.removeEventListener('moriko:retitle', onRetitle);
+  }, [activeId, title]);
 
   useEffect(() => {
     if (!editing) return;
@@ -66,33 +88,27 @@ function EditableTitle({ title }: { title: string }) {
           if (event.key === 'Escape') setEditing(false);
         }}
         aria-label="Rename this chat"
-        className={cx(
-          'min-w-0 max-w-[min(340px,50vw)] flex-1 rounded-control border border-hairline',
-          'bg-elevated px-2 py-1 text-sm font-medium text-ink outline-none',
-          'focus:border-accent/60',
-        )}
+        className="title"
+        style={{ minWidth: 0, flex: 1, maxWidth: 'min(340px, 50vw)' }}
       />
     );
   }
 
-  // Tanpa tooltip — panel "Click to rename this chat" dihapus; ikon pensil
-  // (muncul saat hover via group-hover) sudah cukup sebagai affordance.
   return (
-    <div className="min-w-0 flex-1">
+    <div style={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
       <button
         type="button"
         onClick={() => {
           setDraft(title);
           setEditing(true);
         }}
-        className={cx(
-          'group flex min-w-0 flex-1 items-center gap-1.5 rounded-control px-1 py-1 text-left',
-          'transition-colors hover:bg-elevated/60',
-        )}
+        className="title"
+        style={{ minWidth: 0, flex: 1, maxWidth: 'min(340px, 50vw)', display: 'flex', alignItems: 'center', gap: 6, textAlign: 'left' }}
       >
-      <span className="truncate text-sm font-medium text-ink">{title}</span>
+      <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
       <Pencil
-        className="h-3 w-3 shrink-0 text-faint opacity-0 transition-opacity group-hover:opacity-100"
+        className="ic"
+        style={{ width: 12, height: 12, flexShrink: 0, color: 'var(--faint)' }}
         aria-hidden="true"
       />
       </button>
@@ -108,7 +124,7 @@ function EditableTitle({ title }: { title: string }) {
  * flexes; every control keeps a fixed 36px hit target so the row never
  * reflows as the title grows or a panel toggles.
  */
-export function TopBar({ title, onShare, onOpenNav }: TopBarProps) {
+export function TopBar({ title, onShare, onOpenNav, onPickWorkspace, workspaceLabel }: TopBarProps) {
   const settingsOpen = useStore((state) => state.settingsOpen);
   const toggleSettings = useStore((state) => state.toggleSettings);
   const sidebarCollapsed = useStore((state) => state.sidebarCollapsed);
@@ -124,10 +140,20 @@ export function TopBar({ title, onShare, onOpenNav }: TopBarProps) {
   const dismissNotice = useStore((state) => state.dismissNotice);
   const toggleNoticeHistory = useStore((state) => state.toggleNoticeHistory);
   const clearNoticeHistory = useStore((state) => state.clearNoticeHistory);
+  /** Popovers design: the crumb opens "Move to workspace" over the registry. */
+  const activeId = useStore((state) => state.activeId);
+  const activeWorkspaceId = useStore((state) => state.activeConversation()?.workspaceId);
+  const agentWorkspaces = useStore((state) => state.agentWorkspaces);
+  const patchConversation = useStore((state) => state.patchConversation);
+  const deleteConversation = useStore((state) => state.deleteConversation);
+  const [wsMenuOpen, setWsMenuOpen] = useState(false);
+  const wsMenuRef = useRef<HTMLDivElement>(null);
 
   /** Only real conversations are renameable — not the static view titles. */
   const editableTitle = view === 'playground' && hasActiveChat;
   const fileInputRef = useRef<HTMLInputElement>(null);
+  /** The bell anchors BOTH the transient notice stack and the Notices popover. */
+  const bellRef = useRef<HTMLButtonElement>(null);
 
   /**
    * Secondary actions (theme, share, import, export) live in a LEFT drop
@@ -138,25 +164,12 @@ export function TopBar({ title, onShare, onOpenNav }: TopBarProps) {
   const [dropOpen, setDropOpen] = useState(false);
   const dropRef = useRef<HTMLDivElement>(null);
 
-  /** Closes the drop on any outside click or Escape — the same contract the
-   *  modals use. Listeners mount only while open. */
+  /** The palette's "Import chats" action reaches the picker via this event. */
   useEffect(() => {
-    if (!dropOpen) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (dropRef.current && !dropRef.current.contains(event.target as Node)) {
-        setDropOpen(false);
-      }
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setDropOpen(false);
-    };
-    document.addEventListener('pointerdown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [dropOpen]);
+    const onImportChat = () => fileInputRef.current?.click();
+    window.addEventListener('moriko:import-chat', onImportChat);
+    return () => window.removeEventListener('moriko:import-chat', onImportChat);
+  }, []);
 
   /** Downloads the ACTIVE conversation as a portable single-chat file. */
   const exportActiveChat = () => {
@@ -186,7 +199,7 @@ export function TopBar({ title, onShare, onOpenNav }: TopBarProps) {
         kind?: string;
         conversation?: unknown;
       };
-      if (parsed.kind !== 'nova-ai-studio-conversation-export') {
+      if (parsed.kind !== 'moriko-conversation-export') {
         showNotice('export.notConversation');
         return;
       }
@@ -206,100 +219,191 @@ export function TopBar({ title, onShare, onOpenNav }: TopBarProps) {
   };
 
   return (
-    <header id="moriko-session-bar" className="relative flex h-14 shrink-0 items-center gap-2 px-4">
+    <header id="moriko-session-bar" className="topbar">
       {}
       <NoticeCenter
         entries={notices}
         history={noticeHistory}
         expanded={noticeHistoryExpanded}
+        anchorRef={bellRef}
         onToggleExpanded={toggleNoticeHistory}
         onDismiss={dismissNotice}
         onClearHistory={clearNoticeHistory}
       />
-      {}
+      {/* Single sidebar toggle (design .ib.sm + DIcon panel-l): opens the
+          drawer below md, toggles the desktop sidebar at md and up. */}
       <button
         type="button"
-        className="icon-button md:hidden"
-        onClick={onOpenNav}
-        aria-label="Open navigation"
-      >
-        <Menu className="h-4 w-4" aria-hidden="true" />
-      </button>
-      <button
-        type="button"
-        className={cx('icon-button hidden md:inline-flex', !sidebarCollapsed && 'bg-elevated text-ink')}
-        onClick={toggleSidebar}
+        data-demo-toggle="rail"
+        className={cx('ib sm', !sidebarCollapsed && 'on')}
+        onClick={() => {
+          if (window.matchMedia('(min-width: 768px)').matches) {
+            toggleSidebar();
+          } else {
+            onOpenNav();
+          }
+        }}
         aria-label={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
         aria-pressed={!sidebarCollapsed}
       >
-        {sidebarCollapsed ? (
-          <PanelLeftOpen className="h-4 w-4" aria-hidden="true" />
-        ) : (
-          <PanelLeftClose className="h-4 w-4" aria-hidden="true" />
-        )}
+        <DIcon name="panel-l" className="ic" aria-hidden="true" />
       </button>
 
       {}
       {editableTitle ? (
         <EditableTitle title={title} />
       ) : (
-        <h1 className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{title}</h1>
+        <h1 style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 15, fontWeight: 600, color: 'rgb(var(--c-ink))' }}>{title}</h1>
       )}
 
       {}
-      <div className="flex items-center gap-2">
+      <div ref={wsMenuRef} style={{ position: 'relative', marginLeft: 4, maxWidth: 220, flexShrink: 0 }}>
         <button
           type="button"
-          className="icon-button"
+          onClick={() => setWsMenuOpen((value) => !value)}
+          title="Move to workspace"
+          aria-haspopup="menu"
+          aria-expanded={wsMenuOpen}
+          className="crumb"
+          style={{ maxWidth: 220 }}
+        >
+          <Folder className="ic" aria-hidden="true" />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{workspaceLabel ?? 'No workspace'}</span>
+          <ChevronDown className="ic" aria-hidden="true" />
+        </button>
+        <Popover
+          open={wsMenuOpen}
+          onClose={() => setWsMenuOpen(false)}
+          anchorRef={wsMenuRef}
+          label="Move to workspace"
+          placement="bottom-start"
+          width={230}
+        >
+            <p className="pop-h">Move to workspace</p>
+            {agentWorkspaces.map((workspace) => (
+              <button
+                key={workspace.id}
+                type="button"
+                role="menuitemradio"
+                aria-checked={workspace.id === activeWorkspaceId}
+                onClick={() => {
+                  if (activeId) {
+                    patchConversation(activeId, { workspaceId: workspace.id });
+                    showNotice('workspace.moved', { label: workspace.label });
+                  }
+                  setWsMenuOpen(false);
+                }}
+                className="mi"
+              >
+                <Folder className="ic" aria-hidden="true" />
+                <span>{workspace.label}</span>
+                {workspace.id === activeWorkspaceId ? <Check className="ic mck" aria-hidden="true" /> : null}
+              </button>
+            ))}
+            <button
+              type="button"
+              role="menuitemradio"
+              aria-checked={!activeWorkspaceId}
+              onClick={() => {
+                if (activeId) {
+                  patchConversation(activeId, { workspaceId: undefined });
+                  showNotice('workspace.moved', { label: 'No workspace' });
+                }
+                setWsMenuOpen(false);
+              }}
+              className="mi"
+            >
+              <span>No workspace</span>
+              {!activeWorkspaceId ? <Check className="ic mck" aria-hidden="true" /> : null}
+            </button>
+            <div className="sep" />
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setWsMenuOpen(false);
+                onPickWorkspace();
+              }}
+              className="mi"
+            >
+              <Folder className="ic" aria-hidden="true" />
+              <span>Bind a folder…</span>
+            </button>
+        </Popover>
+      </div>
+
+      {}
+      <div style={{ display: 'flex', flexShrink: 0, alignItems: 'center', gap: 6 }}>
+        <button
+          type="button"
+          className="ib"
           onClick={() => newConversation()}
           aria-label="New chat"
         >
-          <Plus className="h-4 w-4" aria-hidden="true" />
+          <Plus className="ic" aria-hidden="true" />
         </button>
 
-      <div className="mx-1 h-5 w-px bg-hairline" aria-hidden="true" />
+      {}
+      <button
+        type="button"
+        ref={bellRef}
+        className="ib bell"
+        onClick={toggleNoticeHistory}
+        aria-label="Notices"
+        aria-haspopup="dialog"
+        aria-expanded={noticeHistoryExpanded}
+      >
+        <Bell className="ic" aria-hidden="true" />
+        {notices.length > 0 ? (
+          <span className="badge">
+            {notices.length}
+          </span>
+        ) : null}
+      </button>
 
-      <div ref={dropRef} className="relative">
+      <div ref={dropRef} style={{ position: 'relative' }}>
         <button
           type="button"
-          className={cx('icon-button', dropOpen && 'bg-elevated text-ink')}
+          className={cx('ib', dropOpen && 'on')}
           onClick={() => setDropOpen((value) => !value)}
           aria-expanded={dropOpen}
           aria-haspopup="menu"
           aria-label="More actions"
         >
-          <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+          <MoreHorizontal className="ic" aria-hidden="true" />
         </button>
 
-        {dropOpen ? (
-          <div
-            role="menu"
-            aria-label="More actions"
-            className="animate-scale-in absolute right-0 top-full z-50 mt-1 w-52 origin-top-right rounded-card border border-hairline bg-elevated p-1 shadow-popover"
-          >
+        <Popover
+          open={dropOpen}
+          onClose={() => setDropOpen(false)}
+          anchorRef={dropRef}
+          label="More actions"
+          placement="bottom-end"
+          width={220}
+        >
             <button
               type="button"
               role="menuitem"
-              className="flex w-full items-center gap-2.5 rounded-control px-2.5 py-2 text-left text-sm text-ink transition-colors hover:bg-surface"
+              className="mi"
               onClick={() => {
                 setDropOpen(false);
                 onShare();
               }}
             >
-              <Share2 className="h-4 w-4 shrink-0 text-muted" aria-hidden="true" />
+              <Share2 className="ic" aria-hidden="true" />
               <span>Share this chat</span>
             </button>
 
             <button
               type="button"
               role="menuitem"
-              className="flex w-full items-center gap-2.5 rounded-control px-2.5 py-2 text-left text-sm text-ink transition-colors hover:bg-surface"
+              className="mi"
               onClick={() => {
                 setDropOpen(false);
                 fileInputRef.current?.click();
               }}
             >
-              <Upload className="h-4 w-4 shrink-0 text-muted" aria-hidden="true" />
+              <Upload className="ic" aria-hidden="true" />
               <span>Import a chat</span>
             </button>
 
@@ -307,18 +411,87 @@ export function TopBar({ title, onShare, onOpenNav }: TopBarProps) {
               <button
                 type="button"
                 role="menuitem"
-                className="flex w-full items-center gap-2.5 rounded-control px-2.5 py-2 text-left text-sm text-ink transition-colors hover:bg-surface"
+                className="mi"
                 onClick={() => {
                   setDropOpen(false);
                   exportActiveChat();
                 }}
               >
-                <Download className="h-4 w-4 shrink-0 text-muted" aria-hidden="true" />
+                <Download className="ic" aria-hidden="true" />
                 <span>Export this chat</span>
               </button>
             ) : null}
-          </div>
-        ) : null}
+
+            {}
+            <button
+              type="button"
+              role="menuitem"
+              className="mi"
+              onClick={() => {
+                setDropOpen(false);
+                void exportUi();
+              }}
+            >
+              <Code2 className="ic" aria-hidden="true" />
+              <span>Export UI (HTML)</span>
+            </button>
+
+            <button
+              type="button"
+              role="menuitem"
+              className="mi"
+              onClick={() => {
+                setDropOpen(false);
+                void exportPill();
+              }}
+            >
+              <Activity className="ic" aria-hidden="true" />
+              <span>Export pill panel (HTML)</span>
+            </button>
+
+            <button
+              type="button"
+              role="menuitem"
+              className="mi"
+              onClick={() => {
+                setDropOpen(false);
+                void import('../lib/exportImport').then((module) => module.exportAll());
+              }}
+            >
+              <Download className="ic" aria-hidden="true" />
+              <span>Export all chats</span>
+            </button>
+
+            <div className="sep" />
+
+            <button
+              type="button"
+              role="menuitem"
+              className="mi"
+              onClick={() => {
+                setDropOpen(false);
+                window.dispatchEvent(new CustomEvent('moriko:retitle'));
+              }}
+            >
+              <Pencil className="ic" aria-hidden="true" />
+              <span>Rename</span>
+              <kbd>F2</kbd>
+            </button>
+
+            <button
+              type="button"
+              role="menuitem"
+              className="mi danger"
+              onClick={() => {
+                setDropOpen(false);
+                const id = useStore.getState().activeId;
+                if (id) deleteConversation(id);
+              }}
+            >
+              <Trash2 className="ic" aria-hidden="true" />
+              <span>Delete chat</span>
+            </button>
+        </Popover>
       </div>
 
       {}
@@ -326,7 +499,7 @@ export function TopBar({ title, onShare, onOpenNav }: TopBarProps) {
         ref={fileInputRef}
         type="file"
         accept="application/json,.json"
-        className="hidden"
+        hidden
         aria-hidden="true"
         tabIndex={-1}
         onChange={(event) => {
@@ -337,16 +510,15 @@ export function TopBar({ title, onShare, onOpenNav }: TopBarProps) {
       />
 
       {}
-      {!settingsOpen ? (
-        <button
-          type="button"
-          className="icon-button"
-          onClick={toggleSettings}
-          aria-label="Show configuration"
-        >
-          <PanelRightOpen className="h-4 w-4" aria-hidden="true" />
-        </button>
-      ) : null}
+      <button
+        type="button"
+        className={cx('ib', settingsOpen && 'on')}
+        onClick={toggleSettings}
+        aria-label="Show configuration"
+        aria-expanded={settingsOpen}
+      >
+        <PanelRightOpen className="ic" aria-hidden="true" />
+      </button>
       </div>
     </header>
   );

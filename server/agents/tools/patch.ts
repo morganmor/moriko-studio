@@ -326,8 +326,6 @@ export async function applyPatchTool(args: Record<string, unknown>, ctx: AgentTo
   }
 
   const written: string[] = [];
-  // DIFF PANEL DATA: per-file before→after diffs + summed counts ride the
-  // tool result, so the badge and the panel see apply_patch changes too.
   const diffParts: string[] = [];
   let diffAdded = 0;
   let diffRemoved = 0;

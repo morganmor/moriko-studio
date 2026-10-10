@@ -1,4 +1,5 @@
 import { callAgentTool, isTerminalTool, isWebTool, listAgentToolDefs, type AgentToolDef, type ToolImage } from '../agents/tools/index.js';
+import { toolByName } from '../agents/tools/registry.js';
 import type { VisualPayload } from '../agents/tools/visual.js';
 import { pauseStreamSlot, resumeStreamSlot } from '../agents/reload.js';
 import { jobStore, normalizeArgsKey } from '../agents/journal.js';
@@ -615,6 +616,10 @@ const READ_ONLY_TOOLS = new Set([
   'agent__goal_list',
   'agent__checkpoint_list',
   'agent__vision_status',
+  'agent__glob',
+  'agent__tree_outline',
+  'agent__lsp_symbols',
+  'agent__tree_refresh',
 ]);
 
 /** Max concurrent read-only calls — bounds the spike for a 10-read round. */
@@ -625,11 +630,20 @@ const MAX_PARALLEL = 4;
  * are never classified (their effects live in an external process we cannot
  * inspect — see the replay note below), only the harness tools above.
  */
+/** Registry-declared readOnly flag (F0) — checked after the legacy set. */
+function isRegistryReadOnly(wireName: string): boolean | undefined {
+  try {
+    return toolByName(wireName)?.readOnly;
+  } catch {
+    return undefined;
+  }
+}
+
 function isParallelSafe(call: PendingToolCall, byName: Map<string, CatalogueTool>): boolean {
   if (!call.wireName.startsWith('agent__')) return false;
   const tool = byName.get(call.wireName);
   if (!tool) return false;
-  return READ_ONLY_TOOLS.has(call.wireName);
+  return READ_ONLY_TOOLS.has(call.wireName) || isRegistryReadOnly(call.wireName) === true;
 }
 
 /**

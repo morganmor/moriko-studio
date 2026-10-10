@@ -169,8 +169,6 @@ export function thinkingLadderFor(
     return { levels: CANONICAL_LADDER.filter((level) => union.has(level)), source: 'model' };
   }
   if (entries.length > 0) return { levels: ['off'], source: 'none' };
-  // 4B: unknown model on an uncatalogued provider — offer the FULL ladder; the
-  // wire's nearest-level mapping clamps whatever the endpoint refuses.
   return { levels: [...FULL_LADDER], source: 'portable' };
 }
 
@@ -210,12 +208,6 @@ export function lookupModelMeta(
   if (!wanted) return undefined;
   if (map[wanted]) return map[wanted];
 
-  // RESOLVED-LOOKUP CACHE (the trace's #1 hot spot): the naive scan below
-  // iterates EVERY catalog entry with toLowerCase + variant-strip per call —
-  // and high-cadence callers (the mid-run pressure sampler, per-keystroke
-  // composer renders) made it 67s of self-time in a 213s CPU profile. The
-  // index is cached by map identity (same WeakMap the ladder uses), so a
-  // repeated lookup is one Map.get.
   const index = indexOf(map);
   const wantExact = stripVariantSuffix(wanted);
   const exact = index.byExactKey.get(wantExact);

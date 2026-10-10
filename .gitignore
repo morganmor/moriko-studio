@@ -21,30 +21,11 @@ AGENTS.md
 # Copied esbuild binary (scripts/setup-esbuild.mjs)
 .esbuild/
 
-# zvec-grep local semantic index
 .zvec-grep/
-
-# Runtime user uploads (attachments saved into the workspace by the harness)
 .attachments/
-# Root-level runtime assets only — public/svg/ holds tracked source art.
 /assets/
-
-# TypeScript incremental build info
 *.tsbuildinfo
+.githooks
 
 *.log
 .DS_Store
-
-# Local scratch — one-off diagnostics, runner outputs, and audit dumps.
-# Kept on disk for reference; never committed.
-test-out.txt
-test-fail.txt
-run-tests.cjs
-run-other-tests.cjs
-scripts/tmp-*.cjs
-tests/lighhouse-*.json
-
-# Test scratch + leaked runtime dumps — the tests build their own chat-data.json
-# inside a temp MORIKO_HOME, so a copy sitting in tests/ is never read.
-tests/tmp-*/
-tests/chat-data.json

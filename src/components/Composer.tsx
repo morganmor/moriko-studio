@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
+  ArrowUp,
   Bell,
   Check,
   ChevronDown,
-  ChevronLeft,
   ChevronRight,
   ChevronUp,
   Code2,
-  CornerDownLeft,
+  Cpu,
   Eraser,
   FileText,
   Film,
@@ -16,16 +16,19 @@ import {
   Globe,
   Image as ImageIcon,
   Link2,
+  ListFilter,
   Loader2,
   Music,
   Paperclip,
   Plug,
+  Plus,
+  Search,
   ShieldCheck,
+  Sparkles,
   Square,
-  SquareTerminal,
   Target,
+  Wand2,
   Waypoints,
-  Wrench,
   X,
 } from './icons';
 
@@ -38,7 +41,11 @@ import { CatEyeModeToggle, useTypewriterStatus } from './CatEyeModeToggle';
 import { lookupModelMeta, nearestThinkingLevel, thinkingLadderFor } from '../lib/modelMeta';
 import type { TurnAttachment } from '../types';
 import { ImageLightbox } from './ImageLightbox';
+import { Popover } from './Popover';
+import { SlashMenu, useSlashMenu, type SlashCommand } from './SlashMenu';
+import { EffortSlider } from './EffortSlider';
 import { Tip, Toggle, cx } from './ui';
+import { useIsPhone } from '../hooks/useIsPhone';
 import { THINKING_COPY } from './SettingsPanel';
 
 /** Hard caps so a base64 attachment stays a sane thing to sync to the device. */
@@ -141,9 +148,9 @@ interface ComposerProps {
       failure variant carries the real reason (old server, network drop) so
       the notice never lies with "the run just finished". */
   onSendReminder?: () => Promise<{ id: string | null } | import('../lib/api').SteerFailure>;
-  /** Turn arrows in the right cluster: jump to the earliest / newest turn.
-   *  Rendered only when the handler is wired (thread view), so the empty-state
-   *  composer stays clean. */
+  /** Turn arrows floating above the card's top-right: jump to the earliest /
+   *  newest turn. Rendered only when the handler is wired (thread view), so
+   *  the empty-state composer stays clean. */
   onNavigateFirstTurn?: () => void;
   onNavigateLatest?: () => void;
   /**
@@ -183,6 +190,97 @@ export function Composer({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [attachments, setAttachments] = useState<TurnAttachment[]>([]);
+  /** SLASH COMMAND INPUT (design Moriko-Design2): typing "/" opens the
+   *  command listbox above the textarea. See SlashMenu.tsx. */
+  const theme = useStore((state) => state.theme);
+  const setTheme = useStore((state) => state.setTheme);
+  const newConversation = useStore((state) => state.newConversation);
+
+  /** Runs a picked slash command. Addon commands POST to the server (the
+   *  addon "command.run" hook chain); built-ins act on the store directly. */
+  const runSlashCommand = async (command: SlashCommand, args: string): Promise<void> => {
+    if (command.builtin) {
+      switch (command.c) {
+        case '/theme': {
+          const next = theme === 'light' ? 'dark' : 'light';
+          setTheme(next);
+          showNotice('slash.themeSwitched', { label: next });
+          return;
+        }
+        case '/clear':
+          newConversation();
+          showNotice('slash.clearStarted');
+          return;
+        case '/image': {
+          const request = args.trim();
+          const state = useStore.getState();
+          const active = state.conversations.find((conversation) => conversation.id === state.activeId);
+          const agentMode = active?.settings.agentMode ?? state.pendingSettings.agentMode;
+          if (request && agentMode) {
+            // Agent-driven path (PLAN-AGENT-DRIVEN-IMAGE-GENERATION): the
+            // request rides as an ordinary chat turn — the imageGenInjection
+            // teaches the model to compose the prompt and call agent__image.
+            // Attachments ride along so the agent can edit them.
+            const paths = attachments
+              .map((attachment) => attachment.path)
+              .filter((value): value is string => typeof value === 'string' && value.length > 0);
+            onSend(`/image ${request}`, attachments.length > 0 ? attachments : undefined, paths.length > 0 ? paths : undefined);
+            setAttachments([]);
+            showNotice('slash.imageQueued');
+            return;
+          }
+          // Empty request (or chat mode) → the manual door: Image Studio.
+          state.requestImageStudioPrompt(request);
+          state.setView('imagestudio');
+          showNotice('slash.imageOpened');
+          return;
+        }
+        case '/help':
+          window.dispatchEvent(new CustomEvent('moriko:open-shortcuts'));
+          showNotice('slash.helpOpened');
+          return;
+        case '/model':
+          showNotice('slash.modelOpened');
+          window.dispatchEvent(new CustomEvent('moriko:open-model-picker'));
+          return;
+        case '/compact':
+          // App.handleSend owns the actual compaction — forward verbatim.
+          onSend(args ? `/compact ${args}` : '/compact');
+          return;
+        default:
+          return;
+      }
+    }
+    try {
+      const resp = await fetch('/api/addons/commands/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: command.c.slice(1), args }),
+      });
+      const payload = (await resp.json()) as { text?: string; error?: string };
+      if (!resp.ok) {
+        showNotice('slash.runFailed', { detail: payload.error ?? resp.statusText });
+        return;
+      }
+      showNotice('slash.addonRan', { name: command.c, detail: payload.text ?? 'done' });
+    } catch (error) {
+      showNotice('slash.runFailed', { detail: error instanceof Error ? error.message : 'network error' });
+    }
+  };
+
+  /** The built-in command list (design SLASH minus /plan — skipped by request). */
+  const slashBuiltins = useMemo<SlashCommand[]>(
+    () => [
+      { c: '/compact', h: 'Summarize older turns', builtin: true, argumentHint: '[focus]' },
+      { c: '/model', h: 'Switch model', builtin: true },
+      { c: '/image', h: 'Generate an image — agent, or open Image Studio', builtin: true, argumentHint: '[prompt]' },
+      { c: '/clear', h: 'Start a fresh chat', builtin: true },
+      { c: '/theme', h: 'Toggle light / dark', builtin: true },
+      { c: '/help', h: 'Keyboard shortcuts', builtin: true },
+    ],
+    [],
+  );
+  const slash = useSlashMenu(draft, onDraftChange, (command, args) => void runSlashCommand(command, args), slashBuiltins);
   /** Full-size preview URL for an image attachment the user clicked. */
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   /** Document (text/markdown/code) attachment being previewed in the modal. */
@@ -205,27 +303,27 @@ export function Composer({
     };
   }, [previewDoc]);
   const [steerBusy, setSteerBusy] = useState(false);
-  useEffect(() => {
-    if (!toolsOpen) return;
-    const onPointerDown = (event: MouseEvent) => {
-      const target = event.target instanceof Element ? event.target : null;
-      if (target?.closest('[data-tools-popover]')) return;
-      setToolsOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setToolsOpen(false);
-    };
-    window.addEventListener('mousedown', onPointerDown);
-    window.addEventListener('keydown', onKeyDown);
-    return () => {
-      window.removeEventListener('mousedown', onPointerDown);
-      window.removeEventListener('keydown', onKeyDown);
-    };
-  }, [toolsOpen]);
+  const toolsButtonRef = useRef<HTMLButtonElement>(null);
+  const [plusOpen, setPlusOpen] = useState(false);
+  const plusButtonRef = useRef<HTMLButtonElement>(null);
   const settings = useEffectiveSettings();
   const terminalMode = settings.terminalMode ?? 'auto';
+  /** Mode banner: sekali tampil — type maju, hold 10 detik, backspace,
+   *  lalu strip dilepas dari layout (area dibersihkan). */
+  const bannerFull = settings.agentMode ? 'AGENT MODE ACTIVE' : 'CHAT MODE ONLY';
+  const { text: bannerText, done: bannerDone } = useTypewriterStatus(bannerFull, 10_000);
   const updateSettings = useStore((state) => state.updateSettings);
   const showNotice = useStore((state) => state.showNotice);
+  /** Design .tcount — how many tool toggles are currently ON. */
+  const enabledToolCount = useMemo(() => {
+    let count = 0;
+    if (settings.webAccess) count += 1;
+    if (settings.structuredOutputs) count += 1;
+    if (settings.useMcp) count += 1;
+    if (settings.fetchWeb && settings.webAccess) count += 1;
+    if (terminalMode !== 'off') count += 1;
+    return count;
+  }, [settings.webAccess, settings.structuredOutputs, settings.useMcp, settings.fetchWeb, terminalMode]);
   const agentWorkspace = useStore((state) =>
     state.agentWorkspaces.find((workspace) => workspace.id === state.activeAgentWorkspaceId),
   );
@@ -253,6 +351,40 @@ export function Composer({
     return () => cancelAnimationFrame(frame);
   }, [draft]);
 
+  /** Plus menu actions — shared by the desktop popover and the phone sheet. */
+  const closePlus = () => setPlusOpen(false);
+  const plusBody = (
+    <PlusMenuBody
+      onUpload={() => {
+        closePlus();
+        fileInputRef.current?.click();
+      }}
+      onPlanMode={() => {
+        closePlus();
+        const trimmed = draft.trimStart();
+        if (!trimmed.startsWith('/plan')) onDraftChange(`/plan ${trimmed}`);
+        textareaRef.current?.focus();
+      }}
+      onGoals={() => {
+        closePlus();
+        onToggleGoals?.();
+      }}
+      onSlash={() => {
+        closePlus();
+        window.dispatchEvent(new CustomEvent('moriko:open-palette'));
+      }}
+      onStudio={() => {
+        closePlus();
+        useStore.getState().setView('imagestudio');
+      }}
+      onWorkspace={onPickWorkspace}
+      goalRunning={goalRunning}
+      goalsOpen={goalsOpen}
+      workspaceLabel={agentWorkspace?.label}
+      showWorkspace={Boolean(settings.agentMode && onPickWorkspace)}
+    />
+  );
+
   const canSend =
     (draft.trim().length > 0 || attachments.length > 0) &&
     !streaming &&
@@ -268,6 +400,8 @@ export function Composer({
 
   const submit = () => {
     if (!canSend) return;
+    const text = draft.trim();
+    if (text.startsWith('/') && slash.runText(text)) return;
     const paths = attachments
       .map((attachment) => attachment.path)
       .filter((value): value is string => typeof value === 'string' && value.length > 0);
@@ -300,8 +434,6 @@ export function Composer({
   };
 
   const [dragActive, setDragActive] = useState(false);
-  /** FLASH mode — diketik sekali, tahan 10 detik, lalu backspace keluar. */
-  const modeStatus = useTypewriterStatus(settings.agentMode ? 'AGENT MODE ACTIVE' : 'CHAT MODE ONLY', 10_000);
 
   const onDragOver = (event: React.DragEvent<HTMLDivElement>) => {
     if (event.dataTransfer.types.includes('Files')) {
@@ -389,7 +521,23 @@ export function Composer({
     if (loaded.length > 0) setAttachments((prev) => [...prev, ...loaded]);
   };
 
+  /** TREE ATTACH (right-dock design): files picked in the project tree ride a
+   *  store queue into THIS pipeline, so they get the exact same caps, mime
+   *  checks, upload and dataRef handling as drag-dropped files. The ref keeps
+   *  the consumer on the latest closure (attachment count changes per render). */
+  const addFilesRef = useRef(addFiles);
+  addFilesRef.current = addFiles;
+  const queuedFiles = useStore((state) => state.composerQueuedFiles);
+  const clearComposerQueuedFiles = useStore((state) => state.clearComposerQueuedFiles);
+  useEffect(() => {
+    if (queuedFiles.length === 0) return;
+    const files = queuedFiles;
+    clearComposerQueuedFiles();
+    void addFilesRef.current(files);
+  }, [queuedFiles, clearComposerQueuedFiles]);
+
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (slash.key(event)) return;
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
       if (streaming && onSteer && draft.trim().length > 0) {
@@ -402,57 +550,45 @@ export function Composer({
 
   return (
     <div
-      className={
-        variant === 'centered'
-          ? 'w-full px-2 pb-2'
-          :
-            'animate-slide-down bg-transparent px-6 pb-6 pt-0'
-      }
+      className={cx(
+        'composer-shell',
+        variant === 'centered' && 'composer-shell-centered',
+      )}
     >
       {}
-      <div className="mx-auto w-full max-w-4xl">
+      <div style={{ margin: '0 auto', width: '100%', maxWidth: 'var(--composer-w)' }}>
         {}
         {blockedReason ? (
-          <p className="mb-2 text-[12px] text-warning" role="status">
+          <p style={{ margin: '0 0 8px', fontSize: 12, color: 'rgb(var(--c-warn))' }} role="status">
             {blockedReason}
           </p>
         ) : null}
 
-        {/* MODE STATUS — flash sekali: diketik → tahan 10s → backspace keluar.
-            Setelah `done` barisnya TIDAK dirender, jadi strip ini tidak lagi
-            menutupi context di atas composer. */}
-        {modeStatus.done ? null : (
+        {}
+        {}
+        {bannerDone ? null : (
           <div
             aria-hidden="true"
-            className={cx(
-              'flex h-[18px] select-none items-center px-1.5 font-mono text-[12px] font-medium tracking-[0.2em] transition-colors duration-300',
-              settings.agentMode ? 'text-accent' : 'text-faint',
-              variant === 'centered' ? 'mb-2 self-start' : 'mb-2',
-            )}
+            className={cx('mode-banner', settings.agentMode && 'on')}
           >
-            <span>{modeStatus.text}</span>
+            <span>{bannerText}</span>
             <span className="cat-eye-cursor" />
           </div>
         )}
 
-        {/* Turn navigation sits BESIDE the input panel — a sibling of the
-            card, never a control inside it. ABSOLUTE: the buttons claim no
-            width/height from the row, so the card keeps its full symmetric
-            mx-auto-centered width and never shifts when they appear. */}
-        <div className="relative flex items-center gap-3">
+        {}
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 12 }}>
         <div
           onDrop={onDrop}
           onDragOver={onDragOver}
           onDragLeave={onDragLeave}
           className={cx(
-            // GLOW IKUT MODE (contoh .ag-panel[data-mode]): Agent → border +
-            // glow oranye (fokus memperkuat); Chat only → polos tanpa glow.
-            'flex min-w-0 flex-1 flex-col rounded-3xl border bg-elevated p-3 transition-all',
-            settings.agentMode
-              ? 'border-accent/60 shadow-[0_0_0_1px_rgb(var(--c-accent)/0.18),0_0_24px_-6px_rgb(var(--c-accent)/0.35)] focus-within:border-accent/60 focus-within:shadow-[0_0_0_1px_rgb(var(--c-accent)/0.35),0_0_32px_-6px_rgb(var(--c-accent)/0.5)]'
-              : 'border-hairline focus-within:border-muted/60',
-            dragActive ? 'border-accent bg-accent-soft' : '',
+            'composer',
+            settings.agentMode && 'agent',
+            dragActive && 'dragging',
+            streaming && 'composer-busy',
           )}
+          style={{ position: 'relative', display: 'flex', minWidth: 0, flex: 1, flexDirection: 'column' }}
         >
           <label className="sr-only" htmlFor="composer-input">
             Message
@@ -470,43 +606,49 @@ export function Composer({
               zoom: 'calc(var(--app-zoom, 1) / var(--ctx-scale, 1))',
               fontSize: 'calc(15px * var(--ctx-scale, 1) / var(--app-zoom, 1))',
             }}
-            className="max-h-[200px] w-full resize-none bg-transparent text-[15px] leading-relaxed text-ink placeholder:text-faint focus:outline-none"
+            className="composer-ta"
           />
 
+          {slash.list ? (
+            <SlashMenu
+              list={slash.list}
+              sel={slash.sel}
+              onPick={slash.click}
+              onHover={(index) => {
+                /* hover-select mirrors the palette: the row under the pointer becomes the sel */
+                if (index !== slash.sel) slash.hover(index);
+              }}
+            />
+          ) : null}
+
           {attachments.length > 0 ? (
-            // ATTACHMENT STRIP ON TOP (ChatGPT-style): thumbnails live ABOVE
-            // the input line, inside the same card. flex + order-first keeps
-            // the DOM unchanged while painting the strip first.
-            <div className="order-first mb-2 flex flex-wrap items-center gap-1.5">
+            <div className="composer-attach order-first">
               {attachments.map((attachment) => {
                 const isImage = attachment.mime.startsWith('image/') && (attachment.dataRef || attachment.dataUrl);
                 if (isImage) {
                   return (
-                    <div
-                      key={attachment.id}
-                      className="group/thumb relative h-16 w-16 shrink-0 overflow-hidden rounded-control border border-hairline bg-elevated"
-                    >
+                    <div key={attachment.id} className="att">
                       <button
                         type="button"
                         onClick={() =>
                           setPreviewUrl(attachment.dataRef ? attachmentRefUrl(attachment.dataRef.hash, attachment.dataRef.mime) : attachment.dataUrl!)
                         }
-                        className="h-full w-full"
+                        style={{ width: '100%', height: '100%', padding: 0 }}
                         aria-label={`Preview ${attachment.name}`}
                       >
                         <img
                           src={attachment.dataRef ? attachmentRefUrl(attachment.dataRef.hash, attachment.dataRef.mime) : attachment.dataUrl}
                           alt={attachment.name}
-                          className="h-full w-full object-cover transition-transform hover:scale-105"
+                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                         />
                       </button>
                       <button
                         type="button"
+                        className="att-x"
                         onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== attachment.id))}
                         aria-label={`Remove ${attachment.name}`}
-                        className="absolute right-0.5 top-0.5 rounded bg-black/60 p-0.5 text-white opacity-0 transition-opacity group-hover/thumb:opacity-100"
                       >
-                        <X className="h-3 w-3" aria-hidden="true" />
+                        <X className="ic" aria-hidden="true" />
                       </button>
                     </div>
                   );
@@ -515,26 +657,23 @@ export function Composer({
                 if (attachment.textContent !== undefined) {
                   const Icon = attachmentIcon(attachment.mime);
                   return (
-                    <div
-                      key={attachment.id}
-                      className="group/doc relative h-16 w-16 shrink-0 overflow-hidden rounded-control border border-hairline bg-elevated"
-                    >
+                    <div key={attachment.id} className="att">
                       <button
                         type="button"
                         onClick={() => setPreviewDoc(attachment)}
-                        className="flex h-full w-full flex-col items-center justify-center gap-1 transition-colors hover:bg-elevated/60"
+                        className="att-doc"
                         aria-label={`Preview ${attachment.name}`}
                       >
-                        <Icon className="h-4 w-4 shrink-0 text-faint" aria-hidden="true" />
-                        <span className="max-w-[52px] truncate px-1 text-[9px] text-faint">{attachment.name}</span>
+                        <Icon className="ic" aria-hidden="true" />
+                        <span>{attachment.name}</span>
                       </button>
                       <button
                         type="button"
+                        className="att-x"
                         onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== attachment.id))}
                         aria-label={`Remove ${attachment.name}`}
-                        className="absolute right-0.5 top-0.5 rounded bg-black/60 p-0.5 text-white opacity-0 transition-opacity group-hover/doc:opacity-100"
                       >
-                        <X className="h-3 w-3" aria-hidden="true" />
+                        <X className="ic" aria-hidden="true" />
                       </button>
                     </div>
                   );
@@ -543,18 +682,17 @@ export function Composer({
                 return (
                   <span
                     key={attachment.id}
-                    className="inline-flex items-center gap-1.5 rounded-control border border-hairline bg-elevated px-2 py-1 text-[11.5px] text-ink"
+                    className="att-chip"
                   >
-                    <Icon className="h-3.5 w-3.5 shrink-0 text-faint" aria-hidden="true" />
-                    <span className="max-w-[160px] truncate">{attachment.name}</span>
-                    <span className="shrink-0 text-faint">{formatBytes(attachment.size)}</span>
+                    <Icon className="ic" aria-hidden="true" />
+                    <span className="att-n">{attachment.name}</span>
+                    <span className="att-s">{formatBytes(attachment.size)}</span>
                     <button
                       type="button"
                       onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== attachment.id))}
                       aria-label={`Remove ${attachment.name}`}
-                      className="rounded p-1 text-faint transition-colors hover:text-ink"
                     >
-                      <X className="h-3 w-3" aria-hidden="true" />
+                      <X className="ic" aria-hidden="true" />
                     </button>
                   </span>
                 );
@@ -569,30 +707,32 @@ export function Composer({
           {previewDoc?.textContent !== undefined
             ? createPortal(
                 <div
-                  className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-8"
+                  className="modal open"
+                  style={{ zIndex: 60, padding: 32, background: 'rgb(var(--c-shadow) / 0.8)' }}
                   onClick={() => setPreviewDoc(null)}
                 >
                   <div
-                    className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-card border border-hairline bg-surface shadow-popover"
+                    className="mpanel"
+                    style={{ maxWidth: 672 }}
                     onClick={(event) => event.stopPropagation()}
                   >
-                    <div className="flex items-center justify-between border-b border-hairline px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <FileText className="h-4 w-4 text-faint" aria-hidden="true" />
-                        <span className="text-sm text-ink">{previewDoc.name}</span>
-                        <span className="text-[11px] text-faint">{formatBytes(previewDoc.size)}</span>
+                    <div className="mh">
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <FileText className="ic" style={{ color: 'var(--faint)' }} aria-hidden="true" />
+                        <span style={{ fontSize: 14, color: 'rgb(var(--c-ink))' }}>{previewDoc.name}</span>
+                        <span style={{ fontSize: 11, color: 'var(--faint)' }}>{formatBytes(previewDoc.size)}</span>
                       </div>
                       <button
                         type="button"
                         onClick={() => setPreviewDoc(null)}
                         aria-label="Close preview"
-                        className="icon-button"
+                        className="ib"
                       >
-                        <X className="h-4 w-4" aria-hidden="true" />
+                        <X className="ic" aria-hidden="true" />
                       </button>
                     </div>
                     {}
-                    <pre className="min-h-0 flex-1 overflow-auto px-4 py-3 text-[13px] leading-relaxed text-ink whitespace-pre-wrap break-words">
+                    <pre style={{ margin: 0, minHeight: 0, flex: 1, overflow: 'auto', padding: '12px 16px', fontSize: 13, lineHeight: 1.625, color: 'rgb(var(--c-ink))', whiteSpace: 'pre-wrap', overflowWrap: 'break-word' }}>
                       {previewDoc.textContent}
                     </pre>
                   </div>
@@ -601,87 +741,79 @@ export function Composer({
               )
             : null}
 
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <div className="composer-controls">
             {}
-            {/* CAT-EYE TOGGLE — pengganti segmen Chat/Agent generik. Mata
-                terpejam = Chat only; mata terbuka = Agent (mengikuti
-                agent_input_panel_cat_eye.html). Status ketik ada DI ATAS
-                panel (posisi contoh), bukan di dalam toolbar. */}
+            {}
+            <div className="composer-row-1 contents">
             <CatEyeModeToggle
               agent={settings.agentMode}
               onToggle={() => updateSettings({ agentMode: !settings.agentMode })}
             />
 
             {}
-            <button
-              type="button"
-              className="icon-button"
-              aria-label="Attach files"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <Paperclip className="h-4 w-4" aria-hidden="true" />
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept={FILE_ACCEPT}
-              className="hidden"
-              onChange={(event) => {
-                void addFiles(event.target.files);
-                event.target.value = '';
-              }}
-            />
-            {dragActive ? (
-              <span className="shrink-0 text-[11px] font-medium text-accent">Drop to attach</span>
-            ) : null}
-
-            {/* Opens the Goals panel: plans, goals and todo lists. A running
-                goal (auto-loop) pulses the dot so it is noticeable. */}
-            <button
-              type="button"
-              className={cx(
-                'icon-button relative',
-                goalRunning && 'text-accent',
-              )}
-              aria-label="Goals and plans"
-              aria-pressed={goalsOpen}
-              onClick={onToggleGoals}
-            >
-              <Target className="h-4 w-4" aria-hidden="true" />
-              {goalRunning ? (
-                <span className="absolute right-1 top-1 h-1.5 w-1.5 animate-pulse rounded-full bg-accent" aria-hidden="true" />
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6 }} data-plus-popover>
+              <button
+                ref={plusButtonRef}
+                type="button"
+                className={cx('ib', goalRunning && 'on')}
+                aria-label="Add files, plans and workspace"
+                aria-expanded={plusOpen}
+                aria-haspopup="menu"
+                onClick={() => setPlusOpen((value) => !value)}
+              >
+                <Plus className="ic" aria-hidden="true" />
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept={FILE_ACCEPT}
+                hidden
+                onChange={(event) => {
+                  void addFiles(event.target.files);
+                  event.target.value = '';
+                }}
+              />
+              {dragActive ? (
+                <span style={{ flexShrink: 0, fontSize: 11, fontWeight: 500, color: 'rgb(var(--c-accent))' }}>Drop to attach</span>
               ) : null}
-            </button>
+
+              <Popover
+                open={plusOpen}
+                onClose={() => setPlusOpen(false)}
+                anchorRef={plusButtonRef}
+                label="Add"
+                width={288}
+              >
+                {plusBody}
+              </Popover>
+            </div>
+
 
             {}
-            <div className="relative" data-tools-popover>
+            <div style={{ position: 'relative' }} data-tools-popover>
               <button
+                ref={toolsButtonRef}
                 type="button"
                 onClick={() => setToolsOpen((open) => !open)}
                 aria-expanded={toolsOpen}
                 aria-haspopup="true"
                 aria-label="Tools"
-                className={cx(
-                  'pill-button gap-1.5 border border-hairline py-1.5',
-                  toolsOpen ? 'bg-elevated text-ink' : 'text-muted hover:text-ink',
-                )}
+                className={cx('pill', toolsOpen && 'on')}
               >
-                <Wrench className="h-3.5 w-3.5" aria-hidden="true" />
+                <Plug className="ic" aria-hidden="true" />
+                <span>Tools</span>
+                {enabledToolCount > 0 ? <span className="tcount">{enabledToolCount}</span> : null}
               </button>
 
-              <div
-                role="menu"
-                aria-hidden={!toolsOpen}
-                className={cx(
-                  'absolute bottom-full left-0 z-20 mb-2 w-72 rounded-card border border-hairline bg-elevated p-1.5 shadow-popover',
-                  // Same reverse-transition close as the Model/Effort menu.
-                  'transition-[opacity,transform,visibility] duration-[180ms] ease-[cubic-bezier(0.22,1,0.36,1)]',
-                  toolsOpen
-                    ? 'visible opacity-100 scale-100'
-                    : 'invisible opacity-0 scale-[0.97] pointer-events-none',
-                )}
+              <Popover
+                open={toolsOpen}
+                onClose={() => setToolsOpen(false)}
+                anchorRef={toolsButtonRef}
+                label="Tools for this chat"
+                width={288}
               >
+                    <p className="pop-h">Tools for this chat</p>
                     <ToolRow
                       icon={Globe}
                       label="Web Access"
@@ -711,12 +843,8 @@ export function Composer({
                       onChange={(value) => updateSettings({ fetchWeb: value })}
                     />
                     {}
-                    <div className="mt-1 border-t border-hairline px-2.5 pt-2">
-                      <p className="flex items-center gap-2 text-[12.5px] font-medium text-ink">
-                        <SquareTerminal className="h-3.5 w-3.5 text-muted" aria-hidden="true" />
-                        Terminal
-                      </p>
-                      <div className="mt-1.5 flex gap-1" role="radiogroup" aria-label="Terminal mode">
+                    <p className="pop-h">Terminal</p>
+                      <div className="seg" style={{ marginTop: 0, display: 'flex', borderRadius: 12, border: '1px solid var(--line)', background: 'rgb(var(--c-field))', padding: 3 }} role="radiogroup" aria-label="Terminal mode">
                         {(['off', 'ask', 'auto'] as const).map((mode) => (
                           <button
                             key={mode}
@@ -724,64 +852,42 @@ export function Composer({
                             role="radio"
                             aria-checked={terminalMode === mode}
                             onClick={() => updateSettings({ terminalMode: mode })}
-                            className={cx(
-                              'flex-1 rounded-control border px-2 py-1 font-mono text-[11px] capitalize transition-colors',
-                              terminalMode === mode
-                                ? 'border-accent/60 bg-accent-soft text-ink'
-                                : 'border-hairline text-muted hover:border-accent/40 hover:text-ink',
-                            )}
+                            style={{
+                              height: 26,
+                              flex: 1,
+                              borderRadius: 9,
+                              padding: '0 8px',
+                              fontFamily: 'var(--f-mono)',
+                              fontSize: 12,
+                              fontWeight: 500,
+                              textTransform: 'capitalize',
+                              color: terminalMode === mode ? 'rgb(var(--c-ink))' : 'var(--muted)',
+                              background: terminalMode === mode ? 'rgb(var(--c-elev))' : 'transparent',
+                            }}
                           >
                             {mode}
                           </button>
                         ))}
                       </div>
-                      <p className="mt-1 text-[10.5px] leading-snug text-faint">
+                      <p style={{ margin: '4px 0 0', fontSize: 10.5, lineHeight: 1.375, color: 'var(--faint)' }}>
                         {terminalMode === 'off'
                           ? 'run/git tools hidden from the agent'
                           : terminalMode === 'ask'
                             ? 'every command asks you first'
                             : 'commands run silently · git push/clone still ask'}
                       </p>
-                      <ToolRow
-                        icon={ShieldCheck}
-                        label="Confirm deletes"
-                        hint="Deleting files always asks you first"
-                        checked={settings.confirmDeletes === true}
-                        onChange={(value) => updateSettings({ confirmDeletes: value })}
-                      />
-                    </div>
-              </div>
+                    <ToolRow
+                      icon={ShieldCheck}
+                      label="Confirm deletes"
+                      hint="Deleting files always asks you first"
+                      checked={settings.confirmDeletes === true}
+                      onChange={(value) => updateSettings({ confirmDeletes: value })}
+                    />
+              </Popover>
             </div>
 
             {}
-            {settings.agentMode && onPickWorkspace ? (
-              <>
-                <button
-                  type="button"
-                  onClick={onPickWorkspace}
-                  className={cx(
-                    'inline-flex max-w-[220px] items-center gap-1.5 rounded-control border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
-                    agentWorkspace
-                      ? 'border-accent/40 bg-accent-soft text-ink'
-                      : 'border-hairline text-muted hover:text-ink',
-                  )}
-                >
-                  <FolderOpen
-                    className={cx('h-3.5 w-3.5 shrink-0', agentWorkspace ? 'text-accent' : 'text-faint')}
-                    aria-hidden="true"
-                  />
-                  <span className="truncate">
-                    {agentWorkspace ? agentWorkspace.label : 'Pick workspace'}
-                  </span>
-                </button>
-              </>
-            ) : null}
-
-            <span className="flex-1" />
-
-            {}
-            <ModelEffortPicker />
-
+            <div className="composer-actions contents">
             <ContextChip streaming={streaming} />
 
             {streaming ? (
@@ -792,9 +898,9 @@ export function Composer({
                     type="button"
                     onClick={() => void onSendReminder()}
                     aria-label="Send Reminder"
-                    className="pill-button border border-hairline bg-elevated text-ink"
+                    className="pill"
                   >
-                    <Bell className="h-3.5 w-3.5" aria-hidden="true" />
+                    <Bell className="ic" aria-hidden="true" />
                   </button>
                   </Tip>
                 ) : null}
@@ -803,9 +909,9 @@ export function Composer({
                   type="button"
                   onClick={onStop}
                   aria-label="Stop the generation"
-                  className="pill-button border border-hairline bg-elevated text-ink"
+                  className="pill"
                 >
-                  <Square className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
+                  <Square className="ic" style={{ fill: 'currentColor' }} aria-hidden="true" />
                 </button>
               ) : (
                 <>
@@ -815,9 +921,10 @@ export function Composer({
                     onClick={onStop}
                     disabled={steerBusy}
                     aria-label="Stop the generation"
-                    className="icon-button border border-hairline bg-elevated text-ink"
+                    className="ib"
+                    style={{ border: '1px solid var(--line)', background: 'rgb(var(--c-elev))', color: 'rgb(var(--c-ink))' }}
                   >
-                    <Square className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
+                    <Square className="ic" style={{ fill: 'currentColor' }} aria-hidden="true" />
                   </button>
                   </Tip>
                   <Tip label="Steer — inject this into the running generation">
@@ -825,17 +932,12 @@ export function Composer({
                     type="button"
                     onClick={() => void submitSteer()}
                     disabled={steerBusy}
-                    className={cx(
-                      'pill-button text-accent-ink transition-colors',
-                      steerBusy
-                        ? 'bg-accent/70'
-                        : 'bg-accent hover:brightness-110',
-                    )}
+                    className="btn primary sm"
                   >
                     {steerBusy ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                      <Loader2 className="ic spin" aria-hidden="true" />
                     ) : (
-                      <Waypoints className="h-3.5 w-3.5" aria-hidden="true" />
+                      <Waypoints className="ic" aria-hidden="true" />
                     )}
                     Steer
                   </button>
@@ -849,34 +951,54 @@ export function Composer({
                 onClick={submit}
                 disabled={!canSend}
                 aria-label="Send"
-                className="pill-button bg-accent text-accent-ink hover:brightness-110"
+                className="send"
               >
-                <CornerDownLeft className="h-3.5 w-3.5" aria-hidden="true" />
+                <ArrowUp className="ic" aria-hidden="true" />
               </button>
             )}
+            </div>
+            </div>
+
+
+            {/* Model chip: right-aligned on desktop, own row on phones. */}
+            <div className="composer-row-2 contents">
+              <span className="composer-spacer" style={{ flex: 1 }} />
+
+              <ModelEffortPicker />
+            </div>
           </div>
         </div>
 
           {onNavigateLatest ? (
-            <div className="absolute left-full top-1/2 ml-3 flex -translate-y-1/2 flex-col items-center gap-1.5">
+            <div className="composer-nav">
               <button
                 type="button"
                 onClick={onNavigateFirstTurn}
                 aria-label="Jump to the earliest turn"
-                className="icon-button h-8 w-8 border border-hairline bg-elevated text-muted hover:text-ink"
+                className="ib"
+                style={{ border: '1px solid var(--line)', background: 'rgb(var(--c-elev))', color: 'var(--muted)' }}
               >
-                <ChevronUp className="h-4 w-4" aria-hidden="true" />
+                <ChevronUp className="ic" aria-hidden="true" />
               </button>
               <button
                 type="button"
                 onClick={onNavigateLatest}
                 aria-label="Jump to the latest turn"
-                className="icon-button h-8 w-8 border border-hairline bg-elevated text-muted hover:text-ink"
+                className="ib"
+                style={{ border: '1px solid var(--line)', background: 'rgb(var(--c-elev))', color: 'var(--muted)' }}
               >
-                <ChevronDown className="h-4 w-4" aria-hidden="true" />
+                <ChevronDown className="ic" aria-hidden="true" />
               </button>
             </div>
           ) : null}
+        </div>
+
+        {}
+        <div className="composer-hint" style={{ display: 'flex', justifyContent: 'center', gap: 14, paddingTop: 8, fontSize: 11.5, color: 'var(--faint)' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><kbd>Enter</kbd> send</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><kbd>Shift Enter</kbd> newline</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><kbd>/</kbd> commands</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><kbd>Esc</kbd> stop</span>
         </div>
       </div>
     </div>
@@ -901,39 +1023,32 @@ function ModelEffortPicker() {
   const showNotice = useStore((state) => state.showNotice);
   const updateSettings = useStore((state) => state.updateSettings);
   const settings = useEffectiveSettings();
-  const [open, setOpen] = useState(false);
-  const [view, setView] = useState<'root' | 'model' | 'effort'>('root');
+  /** Quick picker: the pill opens a small panel; each row opens its OWN popover. */
+  const [panel, setPanel] = useState<'quick' | 'model' | 'effort' | null>(null);
+  /** Design pop-model: a search box filters the grouped list live. */
+  const [modelQuery, setModelQuery] = useState('');
+  const isPhone = useIsPhone();
 
-  // Same lazy metadata retry as the Configuration panel: the ladder is
-  // meaningless while the catalog map is still empty.
   useEffect(() => {
     if (Object.keys(modelMeta).length === 0) void useStore.getState().ensureModelMeta();
   }, [modelMeta, model, providerId]);
 
+  const modelButtonRef = useRef<HTMLButtonElement>(null);
+
+  /** /model slash command — open the quick panel from anywhere in the app. */
   useEffect(() => {
-    if (!open) return;
-    const close = () => setOpen(false);
-    const onPointerDown = (event: MouseEvent) => {
-      const target = event.target instanceof Element ? event.target : null;
-      if (target?.closest('[data-model-popover]')) return;
-      close();
+    const onOpenModelPicker = () => {
+      setModelQuery('');
+      setPanel('quick');
     };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') close();
-    };
-    window.addEventListener('mousedown', onPointerDown);
-    window.addEventListener('keydown', onKeyDown);
-    return () => {
-      window.removeEventListener('mousedown', onPointerDown);
-      window.removeEventListener('keydown', onKeyDown);
-    };
-  }, [open]);
+    window.addEventListener('moriko:open-model-picker', onOpenModelPicker);
+    return () => window.removeEventListener('moriko:open-model-picker', onOpenModelPicker);
+  }, []);
 
   const thinking = thinkingLadderFor(modelMeta, providerId, model ?? '');
   const effectiveThinking = nearestThinkingLevel(thinking.levels, settings.thinkingLevel);
   const effortLabel = THINKING_COPY[effectiveThinking].label;
 
-  // Same chat-variant filter as ModelPicker: drop image-only gateways.
   const relevantProviders = providers.filter((entry) => {
     const caps = entry.imageCapabilities?.models;
     return !caps || entry.models.some((id) => !caps[id]);
@@ -942,150 +1057,153 @@ function ModelEffortPicker() {
   const chooseModel = (nextProvider: string, nextModel: string) => {
     setProvider(nextProvider, nextModel);
     showNotice('settings.modelSelected', { model: nextModel });
-    setOpen(false);
+    setPanel(null);
   };
 
-  const backRow = (
-    <button
-      type="button"
-      onClick={() => setView('root')}
-      className="flex w-full items-center gap-1.5 rounded-control px-2 py-1.5 text-[11.5px] text-muted transition-colors hover:bg-surface hover:text-ink"
-    >
-      <ChevronLeft className="h-3.5 w-3.5" aria-hidden="true" />
-      Back
-    </button>
-  );
 
   return (
-    <div className="relative min-w-0" data-model-popover>
+    <div className="cc-chip cc-model" style={{ position: 'relative', minWidth: 0 }} data-model-popover>
       <button
+        ref={modelButtonRef}
         type="button"
         onClick={() => {
-          const next = !open;
-          setOpen(next);
-          // Reset on OPEN, not close: closing leaves the current sub-view
-          // untouched so the fade-out shows what it opened from — no flash
-          // back to the root rows mid-animation.
-          if (next) setView('root');
+          const next = panel === 'quick' ? null : 'quick';
+          if (next) setModelQuery('');
+          setPanel(next);
         }}
-        aria-expanded={open}
+        aria-expanded={panel !== null}
         aria-haspopup="menu"
         aria-label="Model and reasoning effort"
-        className={cx(
-          'pill-button gap-1.5 border border-hairline py-1.5',
-          open ? 'bg-elevated text-ink' : 'text-muted hover:text-ink',
-        )}
+        className={cx('pill model', panel && 'on')}
       >
-        <span className="max-w-[140px] truncate text-ink">{model || 'No model'}</span>
-        <span className="text-faint">·</span>
-        <span className="text-accent">{effortLabel}</span>
-        <ChevronUp className={cx('h-3 w-3 transition-transform', open && 'rotate-180')} aria-hidden="true" />
+        <span className="mn" style={{ maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'rgb(var(--c-ink))' }}>
+          {isPhone ? ((model ?? '').split('/').pop() || 'No model') : (model || 'No model')}
+        </span>
+        <span style={{ color: 'var(--faint)' }}>·</span>
+        <span style={{ color: 'rgb(var(--c-accent))' }}>{effortLabel}</span>
+        <ChevronUp className="chev" style={{ transform: panel ? 'rotate(180deg)' : undefined }} aria-hidden="true" />
       </button>
 
-      <div
-        role="menu"
-        aria-hidden={!open}
-        className={cx(
-          'absolute bottom-full right-0 z-20 mb-2 w-80 rounded-card border border-hairline bg-elevated p-1.5 shadow-popover',
-          // Mirrors `animate-scale-in` (180ms / 0.97↔1 / same curve) but as a
-          // TRANSITION so closing plays it in reverse instead of unmounting
-          // instantly. visibility flips at transition end → fade-out finishes
-          // before the menu leaves the a11y tree / tab order.
-          'transition-[opacity,transform,visibility] duration-[180ms] ease-[cubic-bezier(0.22,1,0.36,1)]',
-          open
-            ? 'visible opacity-100 scale-100'
-            : 'invisible opacity-0 scale-[0.97] pointer-events-none',
-        )}
+      <Popover
+        open={panel === 'quick'}
+        onClose={() => setPanel(null)}
+        anchorRef={modelButtonRef}
+        label="Model and reasoning"
+        placement="bottom-end"
+        width={260}
       >
-          {view === 'root' ? (
-            <>
-              <button
-                type="button"
-                onClick={() => setView('model')}
-                className="flex w-full items-center justify-between gap-2 rounded-control px-3 py-2 text-[12.5px] transition-colors hover:bg-surface"
-              >
-                <span className="text-muted">Model</span>
-                <span className="flex min-w-0 items-center gap-1 text-ink">
-                  <span className="truncate">{model || 'None'}</span>
-                  <ChevronRight className="h-3.5 w-3.5 shrink-0 text-faint" aria-hidden="true" />
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setView('effort')}
-                className="flex w-full items-center justify-between gap-2 rounded-control px-3 py-2 text-[12.5px] transition-colors hover:bg-surface"
-              >
-                <span className="text-muted">Effort</span>
-                <span className="flex items-center gap-1 text-ink">
-                  {effortLabel}
-                  <ChevronRight className="h-3.5 w-3.5 shrink-0 text-faint" aria-hidden="true" />
-                </span>
-              </button>
-            </>
-          ) : null}
+        <button type="button" role="menuitem" className="mi" onClick={() => { setModelQuery(''); setPanel('model'); }}>
+          <Cpu className="ic" aria-hidden="true" />
+          <span>
+            Model
+            <small>{model || 'No model'}</small>
+          </span>
+          <ChevronRight className="ic" style={{ color: 'var(--faint)' }} aria-hidden="true" />
+        </button>
+        <button type="button" role="menuitem" className="mi" onClick={() => setPanel('effort')}>
+          <Sparkles className="ic" aria-hidden="true" />
+          <span>
+            Reasoning
+            <small>{effortLabel}</small>
+          </span>
+          <ChevronRight className="ic" style={{ color: 'var(--faint)' }} aria-hidden="true" />
+        </button>
+      </Popover>
 
-          {view === 'model' ? (
-            <div>
-              {/* Scroll list ONLY — Back lives in the footer below, so it
-                  never scrolls out of reach. */}
-              <div className="max-h-64 overflow-y-auto">
-                {relevantProviders.map((entry) => (
-                  <div key={entry.id} className="mb-1">
-                    <p className="px-3 py-1 text-[10.5px] font-medium uppercase tracking-wide text-faint">
-                      {entry.label || entry.id}
-                    </p>
-                    {entry.models.map((name) => (
-                      <button
-                        key={`${entry.id}/${name}`}
-                        type="button"
-                        onClick={() => chooseModel(entry.id, name)}
-                        className={cx(
-                          'flex w-full items-center justify-between gap-2 rounded-control px-3 py-1.5 text-left text-[12.5px] transition-colors',
-                          entry.id === providerId && name === model
-                            ? 'bg-accent/15 text-ink'
-                            : 'text-muted hover:bg-surface hover:text-ink',
-                        )}
-                      >
-                        <span className="truncate">{name}</span>
-                        {entry.id === providerId && name === model ? (
-                          <Check className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden="true" />
-                        ) : null}
-                      </button>
-                    ))}
-                  </div>
-                ))}
-              </div>
-              <div className="mt-1 border-t border-hairline pt-1">{backRow}</div>
-            </div>
-          ) : null}
+      <Popover
+        open={panel === 'model'}
+        onClose={() => setPanel(null)}
+        onBack={() => setPanel('quick')}
+        anchorRef={modelButtonRef}
+        label="Choose model"
+        placement="bottom-end"
+        width={320}
+      >
+          <label className="mp-search">
+            <Search className="ic" aria-hidden="true" />
+            <input
+              type="search"
+              value={modelQuery}
+              onChange={(event) => setModelQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  const first = (event.currentTarget.closest('.pop') as HTMLElement | null)?.querySelector<HTMLElement>(
+                    '.mp-list .mi',
+                  );
+                  first?.click();
+                }
+              }}
+              placeholder="Search models"
+              aria-label="Search models"
+              autoComplete="off"
+              style={{ flex: 1, minWidth: 0, border: 0, outline: 0, background: 'none', fontSize: 13, color: 'rgb(var(--c-ink))' }}
+            />
+          </label>
+          <div className="mp-list">
+            {(() => {
+              const needle = modelQuery.trim().toLowerCase();
+              const groups = relevantProviders
+                .map((entry) => ({
+                  ...entry,
+                  models: needle
+                    ? entry.models.filter(
+                        (name) =>
+                          name.toLowerCase().includes(needle) ||
+                          (entry.label || entry.id).toLowerCase().includes(needle),
+                      )
+                    : entry.models,
+                }))
+                .filter((entry) => entry.models.length > 0);
+              if (groups.length === 0) return <p className="pop-empty">No models match.</p>;
+              return groups.map((entry) => (
+                <div key={entry.id} style={{ marginBottom: 4 }}>
+                  <p className="mg">{entry.label || entry.id}</p>
+                  {entry.models.map((name) => (
+                    <button
+                      key={`${entry.id}/${name}`}
+                      type="button"
+                      onClick={() => chooseModel(entry.id, name)}
+                      className="mi"
+                      role="menuitemradio"
+                      aria-checked={entry.id === providerId && name === model}
+                    >
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {name}
+                      </span>
+                      {entry.id === providerId && name === model ? (
+                        <Check className="ic mck" aria-hidden="true" />
+                      ) : null}
+                    </button>
+                  ))}
+                </div>
+              ));
+            })()}
+          </div>
+      </Popover>
 
-          {view === 'effort' ? (
-            <div>
-              {thinking.levels.map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => {
-                    updateSettings({ thinkingLevel: value });
-                    setOpen(false);
-                  }}
-                  className={cx(
-                    'flex w-full items-center justify-between gap-2 rounded-control px-3 py-1.5 text-left text-[12.5px] transition-colors',
-                    value === effectiveThinking
-                      ? 'bg-accent/15 text-ink'
-                      : 'text-muted hover:bg-surface hover:text-ink',
-                  )}
-                >
-                  <span>{THINKING_COPY[value].label}</span>
-                  {value === effectiveThinking ? (
-                    <Check className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden="true" />
-                  ) : null}
-                </button>
-              ))}
-              <div className="mt-1 border-t border-hairline pt-1">{backRow}</div>
-            </div>
-          ) : null}
-      </div>
+      <Popover
+        open={panel === 'effort'}
+        onClose={() => setPanel(null)}
+        onBack={() => setPanel('quick')}
+        anchorRef={modelButtonRef}
+        label="Thinking level"
+        placement="bottom-end"
+        width={320}
+      >
+          <div className="mp-eff">
+            <p className="pop-h" style={{ padding: '4px 4px 4px 10px' }}>
+              Thinking level
+            </p>
+            <EffortSlider
+              labels={thinking.levels.map((level) => THINKING_COPY[level].label)}
+              hints={thinking.levels.map((level) => THINKING_COPY[level].hint)}
+              value={Math.max(0, thinking.levels.indexOf(effectiveThinking))}
+              onChange={(index) => updateSettings({ thinkingLevel: thinking.levels[index] })}
+              active={panel === 'effort'}
+              className="effort-desktop"
+            />
+          </div>
+      </Popover>
     </div>
   );
 }
@@ -1103,16 +1221,104 @@ function ToolRow({
   checked: boolean;
   onChange: (value: boolean) => void;
 }) {  return (
-    <div className="flex items-center gap-3 rounded-control px-2.5 py-2 transition-colors hover:bg-surface">
-      <Icon className="h-4 w-4 shrink-0 text-muted" aria-hidden="true" />
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-[13px] font-medium text-ink">{label}</p>
-        <p className="truncate text-[11px] text-faint">{hint}</p>
+    <div className="trow" style={{ padding: '8px 0', borderTop: 'none', gap: 12 }}>
+      <span className="tic" aria-hidden="true">
+        <Icon className="ic" />
+      </span>
+      <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <p style={{ margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, fontWeight: 500, color: 'rgb(var(--c-ink))' }}>{label}</p>
+        <p style={{ margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11, color: 'var(--faint)' }}>{hint}</p>
       </div>
       <Toggle checked={checked} onChange={onChange} label={label} hideLabel />
     </div>
   );
 }
+
+/** Rows of the "+" menu — same order and hints as the design's plus menu. */
+interface PlusMenuBodyProps {
+  onUpload: () => void;
+  onPlanMode: () => void;
+  onGoals: () => void;
+  onSlash: () => void;
+  onStudio: () => void;
+  onWorkspace?: () => void;
+  goalRunning: boolean;
+  goalsOpen: boolean;
+  workspaceLabel?: string;
+  showWorkspace: boolean;
+}
+
+function PlusMenuBody({
+  onUpload,
+  onPlanMode,
+  onGoals,
+  onSlash,
+  onStudio,
+  onWorkspace,
+  goalRunning,
+  goalsOpen,
+  workspaceLabel,
+  showWorkspace,
+}: PlusMenuBodyProps) {
+  return (
+    <>
+      <PlusMenuRow icon={Paperclip} label="Upload files" hint="Images, code, text · or drop / paste" onClick={onUpload} />
+      <PlusMenuRow icon={Waypoints} label="Plan mode" hint="Insert /plan" onClick={onPlanMode} />
+      <PlusMenuRow
+        icon={Target}
+        label="Goals & plans"
+        hint="Goals, plans & todos"
+        onClick={onGoals}
+        dot={goalRunning}
+        active={goalsOpen}
+      />
+      <PlusMenuRow icon={ListFilter} label="Slash command" hint="Browse all commands" onClick={onSlash} />
+      <PlusMenuRow icon={Wand2} label="Generate image" hint="Open Image Studio" onClick={onStudio} />
+      {showWorkspace && onWorkspace ? (
+        <PlusMenuRow
+          icon={FolderOpen}
+          label="Pick workspace"
+          hint={workspaceLabel ?? 'Choose where the agent works'}
+          onClick={onWorkspace}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function PlusMenuRow({
+  icon: Icon,
+  label,
+  hint,
+  onClick,
+  dot,
+  active,
+}: {
+  icon: typeof Code2;
+  label: string;
+  hint: string;
+  onClick: () => void;
+  dot?: boolean;
+  active?: boolean;
+}) {
+  return (
+    <button type="button" role="menuitem" data-plus-item onClick={onClick} className={cx('mi', active && 'on')}>
+      <Icon className="ic" style={{ color: 'var(--muted)' }} aria-hidden="true" />
+      <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+          <b style={{ fontWeight: 500, color: 'rgb(var(--c-ink))' }}>{label}</b>
+          {dot ? (
+            <span className="livechip" style={{ display: 'inline-flex', height: 'auto', padding: '0 4px', flex: 'none' }}>
+              <span className="ld" />
+            </span>
+          ) : null}
+        </div>
+        <small>{hint}</small>
+      </div>
+    </button>
+  );
+}
+
 
 /**
  * Context usage ring inside the input panel's toolbar. The ring shows the
@@ -1125,7 +1331,9 @@ function ContextChip({ streaming }: { streaming: boolean }) {
   const activeConversation = useStore((state) => state.activeConversation());
   const model = useStore((state) => state.model);
   const modelMetaMap = useStore((state) => state.modelMeta);
+  const settings = useEffectiveSettings();
   const [open, setOpen] = useState(false);
+  const contextButtonRef = useRef<HTMLButtonElement>(null);
   const [confirmTrim, setConfirmTrim] = useState(false);
   useEffect(() => {
     if (!open) setConfirmTrim(false);
@@ -1139,35 +1347,17 @@ function ContextChip({ streaming }: { streaming: boolean }) {
       setThrottledConversation(activeConversation);
     }
   }, [activeConversation, open]);
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: MouseEvent) => {
-      const target = event.target instanceof Element ? event.target : null;
-      if (target?.closest('[data-context-popover]')) return;
-      setOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
-    };
-    window.addEventListener('mousedown', onPointerDown);
-    window.addEventListener('keydown', onKeyDown);
-    return () => {
-      window.removeEventListener('mousedown', onPointerDown);
-      window.removeEventListener('keydown', onKeyDown);
-    };
-  }, [open]);
-  if (!activeConversation) return null;
-
   const modelMetaInfo = model ? lookupModelMeta(modelMetaMap, model) : undefined;
   const conversation = throttledConversation ?? activeConversation;
   const breakdown = useMemo(
-    () => contextBreakdown(conversation, modelMetaInfo),
+    () => (conversation ? contextBreakdown(conversation, modelMetaInfo) : null),
     [conversation, modelMetaInfo],
   );
   const reasoning = useMemo(
-    () => reasoningFootprint(conversation),
+    () => (conversation ? reasoningFootprint(conversation) : null),
     [conversation],
   );
+  if (!activeConversation || !breakdown || !reasoning) return null;
   const fmt = (value: number): string => Math.round(value).toLocaleString('id-ID');
   const ratio =
     breakdown.effectiveLimit && breakdown.effectiveLimit > 0
@@ -1175,7 +1365,15 @@ function ContextChip({ streaming }: { streaming: boolean }) {
       : null;
   const pct = ratio !== null ? Math.round(ratio * 100) : null;
   const hot = ratio !== null && ratio >= 0.95;
-  const circumference = 2 * Math.PI * 6;
+  /** Design .cx bar: each bucket as a % of the LIMIT (active when unknown). */
+  const denom = breakdown.effectiveLimit && breakdown.effectiveLimit > 0 ? breakdown.effectiveLimit : Math.max(1, breakdown.activeTokens);
+  const bucketPct = (tokens: number): number => Math.min(100, Math.max(0, (tokens / denom) * 100));
+  /** Design row values: "12k" / "10.6k" style. */
+  const fmtK = (value: number): string => {
+    if (value < 1000) return String(Math.round(value));
+    const k = value / 1000;
+    return `${k >= 100 ? Math.round(k) : Math.round(k * 10) / 10}k`;
+  };
 
   const applyTrim = (): void => {
     const state = useStore.getState();
@@ -1186,125 +1384,155 @@ function ContextChip({ streaming }: { streaming: boolean }) {
   };
 
   return (
-    <div className="relative" data-context-popover>
-      {open ? (
-        <div
-          role="dialog"
-          aria-label="Context usage breakdown"
-          className="animate-scale-in absolute bottom-full right-0 z-20 mb-2 w-64 rounded-card border border-hairline bg-elevated p-3 shadow-popover"
-        >
-            <p className="text-[12.5px] font-semibold text-ink">
-              {pct !== null ? `${pct}% of context used` : 'Context usage'}
-            </p>
-            {ratio !== null && breakdown.effectiveLimit ? (
-              <>
-                <p className="mt-0.5 font-mono text-[11.5px] tabular-nums text-muted">
-                  ~{fmt(breakdown.activeTokens)} / {fmt(breakdown.effectiveLimit)}
-                </p>
-                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-hairline">
-                  <div
-                    className={cx('h-full rounded-full transition-[width] duration-500', hot ? 'bg-warning' : 'bg-accent')}
-                    style={{ width: `${ratio * 100}%` }}
-                  />
-                </div>
-              </>
+    <div className="cc-ctx" style={{ position: 'relative' }} data-context-popover>
+      <Popover
+        open={open}
+        onClose={() => setOpen(false)}
+        anchorRef={contextButtonRef}
+        label="Context usage"
+        role="dialog"
+        placement="bottom-end"
+        width={300}
+      >
+        <div className="cx">
+          <div className="cx-top">
+            <b>{pct !== null ? `${pct}%` : fmtK(breakdown.activeTokens)}</b>
+            <span>
+              {breakdown.effectiveLimit
+                ? `${fmt(breakdown.activeTokens)} / ${fmt(breakdown.effectiveLimit)} tokens`
+                : `${fmt(breakdown.activeTokens)} tokens`}
+            </span>
+          </div>
+          <div className="cbar2">
+            <i className="s1" style={{ width: `${bucketPct(breakdown.systemTokens)}%` }} />
+            <i className="s2" style={{ width: `${bucketPct(breakdown.toolsTokens)}%` }} />
+            <i className="s3" style={{ width: `${bucketPct(breakdown.outputTokens)}%` }} />
+            <i className="s4" style={{ width: `${bucketPct(breakdown.reasoningTokens)}%` }} />
+            {settings.autoCompact ? (
+              <span
+                className="mk"
+                style={{ left: `${Math.min(100, Math.max(0, settings.compactThresholdRatio * 100))}%` }}
+              />
             ) : null}
-            <dl className="mt-2.5 space-y-1.5 text-[12px]">
-              <BreakdownRow dot="bg-hairline" label="System prompt" value={`~${fmt(breakdown.systemTokens)}`} />
-              <BreakdownRow dot="bg-accent/50" label="Tool definitions" value={`~${fmt(breakdown.toolsTokens)}`} />
-              <BreakdownRow dot="bg-accent" label="Messages" value={`~${fmt(breakdown.messagesTokens)}`} />
-            </dl>
-            {}
-            <dl className="ml-[3px] mt-1 space-y-1 border-l border-hairline pl-3 text-[11.5px]">
-              <BreakdownRow dot="bg-accent/25" label="Output" value={`~${fmt(breakdown.outputTokens)}`} faint />
-              <BreakdownRow dot="bg-accent/40" label="Reasoning" value={`~${fmt(breakdown.reasoningTokens)}`} faint />
-            </dl>
-            <div className="mt-2.5 flex items-center justify-between border-t border-hairline pt-2 text-[12px]">
-              <span className="text-faint">Session total</span>
-              <span className="font-mono tabular-nums text-muted">Σ{fmt(breakdown.totalUsedTokens)} used</span>
-            </div>
-            <p className="mt-1.5 text-[10.5px] leading-snug text-faint">
-              {breakdown.limitSource === 'manual'
+          </div>
+          <div className="crow2">
+            <i className="dot s1" />
+            <span>System prompt</span>
+            <b>{fmtK(breakdown.systemTokens)}</b>
+          </div>
+          <div className="crow2">
+            <i className="dot s2" />
+            <span>Tool definitions</span>
+            <b>{fmtK(breakdown.toolsTokens)}</b>
+          </div>
+          <div className="crow2">
+            <i className="dot s3" />
+            <span>Messages</span>
+            <b>{fmtK(breakdown.outputTokens)}</b>
+          </div>
+          <div className="crow2">
+            <i className="dot s4" />
+            <span>Reasoning</span>
+            <b>{fmtK(breakdown.reasoningTokens)}</b>
+          </div>
+          <div className="cx-f">
+            {settings.autoCompact
+              ? `Auto-compact at ${Math.round(settings.compactThresholdRatio * 100)}%.`
+              : breakdown.limitSource === 'manual'
                 ? 'Limit: manually lowered below the model capacity.'
                 : breakdown.limitSource === 'fallback'
-                  ? 'Limit: assumed 256K — no models.dev metadata for this model. Set a lower context limit for a tighter cap.'
+                  ? 'Limit: assumed 256K — no models.dev metadata for this model.'
                   : breakdown.effectiveLimit
                     ? 'Limit: the model built-in capacity (models.dev).'
                     : 'Limit: unknown — no models.dev metadata for this model.'}
-            </p>
-            {}
-            {reasoning.turns > 0 ? (
-              <div className="mt-2.5 border-t border-hairline pt-2">
-                {confirmTrim ? (
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[11.5px] leading-snug text-muted">
-                      Trim all reasoning in this chat?
-                    </span>
-                    <div className="flex shrink-0 items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => setConfirmTrim(false)}
-                        className="rounded-[6px] px-1.5 py-0.5 text-[11.5px] text-faint transition-colors hover:text-ink"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={applyTrim}
-                        className="rounded-[6px] bg-danger/10 px-1.5 py-0.5 text-[11.5px] font-medium text-danger transition-colors hover:bg-danger/20"
-                      >
-                        Trim
-                      </button>
-                    </div>
+          </div>
+          {reasoning.turns > 0 ? (
+            <div style={{ marginTop: 8 }}>
+              {confirmTrim ? (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <span style={{ fontSize: 11.5, lineHeight: 1.375, color: 'var(--muted)' }}>
+                    Trim all reasoning in this chat?
+                  </span>
+                  <div style={{ display: 'flex', flexShrink: 0, alignItems: 'center', gap: 4 }}>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmTrim(false)}
+                      style={{ borderRadius: 6, padding: '2px 6px', fontSize: 11.5, color: 'var(--faint)' }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={applyTrim}
+                      style={{ borderRadius: 6, background: 'rgb(var(--c-danger) / 0.1)', padding: '2px 6px', fontSize: 11.5, fontWeight: 500, color: 'rgb(var(--c-danger))' }}
+                    >
+                      Trim
+                    </button>
                   </div>
-                ) : (
-                  <Tip
-                    className="w-full"
-                    align="start"
-                    label={
-                      streaming
-                        ? 'Reasoning is still being written — finish or stop the run first.'
-                        : 'Reasoning is kept for the whole conversation. Trim it only when YOU decide the context is heavy.'
-                    }
-                  >
-                  <button
-                    type="button"
-                    onClick={() => setConfirmTrim(true)}
-                    disabled={streaming}
-                    className="flex w-full items-center gap-1.5 rounded-[6px] px-1.5 py-1 text-left text-[12px] text-muted transition-colors hover:bg-surface hover:text-ink disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-muted"
-                  >
-                    <Eraser className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                    <span className="min-w-0 flex-1 truncate">Trim reasoning</span>
-                    <span className="font-mono text-[11px] tabular-nums text-faint">~{fmt(reasoning.tokens)}</span>
-                  </button>
-                  </Tip>
-                )}
-              </div>
-            ) : (
-              <p className="mt-2.5 border-t border-hairline pt-2 text-[10.5px] leading-snug text-faint">
-                Reasoning is kept for the whole conversation — nothing is trimmed automatically.
-              </p>
-            )}
+                </div>
+              ) : (
+                <Tip
+                  className="w-full"
+                  align="start"
+                  label={
+                    streaming
+                      ? 'Reasoning is still being written — finish or stop the run first.'
+                      : 'Reasoning is kept for the whole conversation. Trim it only when YOU decide the context is heavy.'
+                  }
+                >
+                <button
+                  type="button"
+                  onClick={() => setConfirmTrim(true)}
+                  disabled={streaming}
+                  style={{
+                    display: 'flex',
+                    width: '100%',
+                    alignItems: 'center',
+                    gap: 6,
+                    borderRadius: 6,
+                    padding: '4px 6px',
+                    textAlign: 'left',
+                    fontSize: 12,
+                    color: 'var(--muted)',
+                    opacity: streaming ? 0.5 : 1,
+                    cursor: streaming ? 'not-allowed' : undefined,
+                  }}
+                >
+                  <Eraser className="ic" aria-hidden="true" />
+                  <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Trim reasoning</span>
+                  <span style={{ fontFamily: 'var(--f-mono)', fontSize: 11, fontVariantNumeric: 'tabular-nums', color: 'var(--faint)' }}>~{fmt(reasoning.tokens)}</span>
+                </button>
+                </Tip>
+              )}
+            </div>
+          ) : null}
         </div>
-      ) : null}
+      </Popover>
+
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
+        ref={contextButtonRef}
         aria-label="Context usage details"
-        className="flex h-7 w-7 items-center justify-center rounded-full text-muted transition-colors hover:text-ink"
+        className="ib"
       >
-        <svg viewBox="0 0 16 16" className={cx('h-[18px] w-[18px] -rotate-90', hot ? 'text-warning' : 'text-accent')} aria-hidden="true">
-          <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeOpacity="0.2" strokeWidth="2.5" />
+        <svg
+          viewBox="0 0 16 16"
+          className={cx('ring', hot && 'hot')}
+          aria-hidden="true"
+        >
+          <circle className="trk" cx="8" cy="8" r="6" />
+          {/* .ring .arc drives the fill via the --p CSS var (dasharray: var(--p) 100
+              on a pathLength=100 circle) — an inline strokeDasharray attribute
+              would be overridden by the stylesheet and collapse to a dot. */}
           <circle
+            className="arc"
             cx="8"
             cy="8"
             r="6"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.5"
-            strokeLinecap="round"
-            strokeDasharray={`${(ratio ?? 0) * circumference} ${circumference}`}
+            pathLength={100}
+            style={{ '--p': ratio !== null ? ratio * 100 : 0 } as React.CSSProperties}
           />
         </svg>
       </button>
@@ -1312,29 +1540,4 @@ function ContextChip({ streaming }: { streaming: boolean }) {
   );
 }
 
-/**
- * What the trim button would remove: every reasoning block still stored on the
- * conversation — the legacy per-turn field plus the per-round reasoning
- * segments — priced with the SAME estimator the context meter uses, so the
- * number on the button is the number the meter would drop.
- */
-function BreakdownRow({
-  dot,
-  label,
-  value,
-  faint,
-}: {
-  dot: string;
-  label: string;
-  value: string;
-  /** Sub-row of another bucket: lighter ink so the nesting reads at a glance. */
-  faint?: boolean;
-}) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className={cx('h-2 w-2 shrink-0 rounded-[3px]', dot)} aria-hidden="true" />
-      <dt className={cx('min-w-0 flex-1 truncate', faint ? 'text-faint' : 'text-muted')}>{label}</dt>
-      <dd className={cx('font-mono tabular-nums', faint ? 'text-faint' : 'text-muted')}>{value}</dd>
-    </div>
-  );
-}
+

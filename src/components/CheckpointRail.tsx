@@ -78,7 +78,6 @@ export function CheckpointRail({
     const b = railH > 0 ? railH / N : 0;
     const M = b > 0 ? Math.max(1, MAGNIFY / b) : 1;
     const activeIdx = Math.max(0, Math.min(N - 1, turnNumbers.indexOf(activeTurn)));
-    // Focus in index space: dot i sits at fraction (i+0.5)/N when uniform.
     const focus = hoverNorm != null ? hoverNorm * N : activeIdx + 0.5;
 
     const weights = new Array<number>(N);
@@ -107,7 +106,6 @@ export function CheckpointRail({
     return result;
   }, [turnNumbers, activeTurn, hoverNorm, railH]);
 
-  // Nearest dot to the cursor — both sides are fractions, zoom-invariant.
   const hoverIdx = useMemo(() => {
     if (hoverNorm == null || layouts.length === 0) return -1;
     let best = Infinity;
@@ -140,8 +138,8 @@ export function CheckpointRail({
     <nav
       ref={railRef}
       aria-label="Turn checkpoints"
-      style={{ right: rightOffset }}
-      className="absolute inset-y-0 hidden w-6 flex-col items-center lg:flex"
+      style={{ right: rightOffset, position: 'absolute', top: 0, bottom: 0, flexDirection: 'column', alignItems: 'center', width: 24 }}
+      className="show-lg cp-rail"
       onPointerMove={handlePointerMove}
       onPointerLeave={() => setHoverNorm(null)}
       onClick={handleClick}
@@ -156,16 +154,14 @@ export function CheckpointRail({
             aria-label={`Turn ${l.turn}`}
             aria-current={l.isActive ? 'true' : undefined}
             className={cx(
-              'rail-dot absolute left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full transition-all duration-150',
-              // Colors + default opacity live in index.css (.rail-dot): every
-              // theme carries its own --c-rail-dot — a bg-hairline dot was
-              // invisible on the light theme (border token, 226 on 246).
+              'rail-dot',
               l.isActive && 'rail-dot--active',
               !l.isActive && isHover && 'rail-dot--hover',
             )}
             style={{
-              // Percentage → resolves in the container's LOCAL px, then zooms
-              // with .ctx-zoom exactly like clientY does. Scale-safe.
+              position: 'absolute',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
               top: `${l.frac * 100}%`,
               width: `${isHover && !l.isActive ? HOVER_W : l.isActive ? ACTIVE_W : l.sz}px`,
               height: `${isHover && !l.isActive ? HOVER_H : l.isActive ? ACTIVE_H : l.sz}px`,
@@ -175,9 +171,28 @@ export function CheckpointRail({
         );
       })}
       {hovered && (
+        /* Tooltip checkpoint ikut MEKANISME .tip (ui.tsx): latar --c-ink,
+         * teks --c-canvas, radius 8 — token yang sama di semua tema
+         * (light/dark/mocha). Dulu: background --c-paper (token light-only,
+         * tidak dioverride di .dark/.mocha) → kotak putih generik. */
         <div
-          className="pointer-events-none absolute right-full mr-2 -translate-y-1/2 whitespace-nowrap rounded border border-hairline bg-surface px-2 py-0.5 text-xs text-muted z-10"
-          style={{ top: `${hovered.frac * 100}%` }}
+          style={{
+            pointerEvents: 'none',
+            position: 'absolute',
+            right: '100%',
+            marginRight: 8,
+            transform: 'translateY(-50%)',
+            whiteSpace: 'nowrap',
+            borderRadius: 8,
+            background: 'rgb(var(--c-ink))',
+            color: 'rgb(var(--c-canvas))',
+            padding: '5px 9px',
+            fontSize: 12,
+            fontWeight: 500,
+            boxShadow: 'var(--sh1)',
+            zIndex: 10,
+            top: `${hovered.frac * 100}%`,
+          }}
         >
           Turn {hovered.turn}
         </div>

@@ -20,13 +20,13 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { morikoHome } from '../paths.js';
 import {
   type SpatialMap,
   type SpatialRegion,
   type SpatialRect,
   type SpatialConstraint,
 } from './spatial.js';
+import { getActiveWorkspace } from './workspace.js';
 
 /** Track playwright availability without ever throwing at import time. */
 type PlaywrightModule = typeof import('playwright-core');
@@ -50,7 +50,14 @@ export async function loadPlaywright(): Promise<PlaywrightModule | null> {
 }
 
 
-const BASELINE_DIR = path.join(morikoHome, 'spatial-baselines');
+/** Data dir for runtime captures: <workspace>/.moriko-dat/spatial/ — User
+ *  decision: screenshot & baseline live INSIDE the workspace so the agent can
+ *  read them back (read-policy forbids reading outside the workspace root).
+ *  No workspace bound → capture still works, but no screenshot is persisted. */
+function spatialDataDir(): string | null {
+  const root = getActiveWorkspace()?.path;
+  return root ? path.join(root, '.moriko-dat', 'spatial') : null;
+}
 const BASELINE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 function baselineSlug(target: string): string {
@@ -62,15 +69,18 @@ function baselineSlug(target: string): string {
   return safe.slice(0, 120) || 'target';
 }
 
-export function baselinePaths(target: string): { json: string; png: string } {
-  const base = path.join(BASELINE_DIR, `${baselineSlug(target)}`);
+export function baselinePaths(target: string): { json: string; png: string } | null {
+  const dir = spatialDataDir();
+  if (!dir) return null;
+  const base = path.join(dir, `${baselineSlug(target)}`);
   return { json: `${base}.json`, png: `${base}.png` };
 }
 
 export function readBaseline(target: string): SpatialMap | null {
-  const { json } = baselinePaths(target);
+  const paths = baselinePaths(target);
+  if (!paths) return null;
   try {
-    const raw = fs.readFileSync(json, 'utf-8');
+    const raw = fs.readFileSync(paths.json, 'utf-8');
     const parsed = JSON.parse(raw) as SpatialMap;
     if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.regions)) return null;
     return parsed;
@@ -81,21 +91,24 @@ export function readBaseline(target: string): SpatialMap | null {
 
 export function writeBaseline(target: string, map: SpatialMap): void {
   try {
-    fs.mkdirSync(BASELINE_DIR, { recursive: true });
-    const { json } = baselinePaths(target);
-    fs.writeFileSync(json, JSON.stringify(map, null, 2), 'utf-8');
+    const paths = baselinePaths(target);
+    if (!paths) return;
+    fs.mkdirSync(path.dirname(paths.json), { recursive: true });
+    fs.writeFileSync(paths.json, JSON.stringify(map, null, 2), 'utf-8');
   } catch {
   }
 }
 
-/** Baseline housekeeping: drop baseline JSON older than 30 days (bounded). */
+/** Baseline housekeeping: drop baseline JSON older than 30 days (bounded).
+ *  Sweep menangani workspace AKTIF — workspace lain disweep saat mereka aktif. */
 export function sweepBaselines(): number {
   try {
-    if (!fs.existsSync(BASELINE_DIR)) return 0;
+    const dir = spatialDataDir();
+    if (!dir || !fs.existsSync(dir)) return 0;
     const cutoff = Date.now() - BASELINE_MAX_AGE_MS;
     let removed = 0;
-    for (const entry of fs.readdirSync(BASELINE_DIR)) {
-      const full = path.join(BASELINE_DIR, entry);
+    for (const entry of fs.readdirSync(dir)) {
+      const full = path.join(dir, entry);
       if (!entry.endsWith('.json')) continue;
       try {
         if (fs.statSync(full).mtimeMs < cutoff) {
@@ -292,13 +305,18 @@ export async function captureRuntime(
 
   let browser;
   try {
-    browser = await pw.chromium.launch({
-      headless: true,
-      channel: 'msedge',
-    });
+    try {
+      browser = await pw.chromium.launch({
+        headless: true,
+        channel: 'msedge',
+      });
+    } catch {
+      // B9 fallback: no Edge → bundled/installed chromium.
+      browser = await pw.chromium.launch({ headless: true });
+    }
   } catch (error) {
     throw new Error(
-      'Could not launch a headless Edge (channel "msedge"). Install Microsoft Edge or run ' +
+      'Could not launch a headless browser (tried channel "msedge", then "chromium"). Install Microsoft Edge or run ' +
       '"npx playwright install chromium" once (downloads ~150 MB). ' +
       `Underlying error: ${error instanceof Error ? error.message : String(error)}`,
     );
@@ -380,13 +398,17 @@ export async function captureRuntime(
 
     let screenshot: string | null = null;
     if (opts.saveScreenshot !== false) {
-      try {
-        const pngPath = baselinePaths(url.toString()).png;
-        fs.mkdirSync(path.dirname(pngPath), { recursive: true });
-        await page.screenshot({ path: pngPath, fullPage: false });
-        screenshot = pngPath;
-      } catch (error) {
-        notes.push(`screenshot failed: ${error instanceof Error ? error.message : String(error)}`);
+      const paths = baselinePaths(url.toString());
+      if (!paths) {
+        notes.push('no workspace bound — screenshot not persisted (spatial data lives in <workspace>/.moriko-dat/spatial)');
+      } else {
+        try {
+          fs.mkdirSync(path.dirname(paths.png), { recursive: true });
+          await page.screenshot({ path: paths.png, fullPage: false });
+          screenshot = paths.png;
+        } catch (error) {
+          notes.push(`screenshot failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
     }
 

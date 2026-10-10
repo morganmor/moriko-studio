@@ -6,6 +6,7 @@ import { listWireTools } from '../mcp/manager.js';
 import { listReminders, renderReminder, takeDueReminders } from '../reminders/store.js';
 import { listContextProviders } from '../addons/registry.js';
 import { isTerminalTool, isWebTool, listAgentToolDefs } from './tools/index.js';
+import { listImageCapableProviders } from '../images/runtime.js';
 import { getActiveWorkspace } from './workspace.js';
 import { collectAgentsMd } from './agentsMd.js';
 
@@ -29,6 +30,34 @@ export interface HarnessInjection {
   title: string;
   /** The exact text appended to the system message sent to the model. */
   content: string;
+}
+
+/**
+ * IMAGE GENERATION — teaches the model the /image directive and how to drive
+ * agent__image: the LLM is the prompt engineer, edits ride referencePaths,
+ * and the default model is the user's saved Image Studio choice. Only
+ * injected when at least one image-capable provider is configured.
+ */
+async function imageGenInjection(): Promise<HarnessInjection | null> {
+  const providers = await listImageCapableProviders();
+  if (providers.length === 0) return null;
+  const usable = providers.filter((entry) => entry.hasServerKey);
+  return {
+    id: 'image-generation',
+    title: 'System prompt · Image generation',
+    content: [
+      'IMAGE GENERATION — the user can ask for images in chat. A message starting with "/image <request>" is an EXPLICIT request; plain language like "buat/generate an image of…" counts too.',
+      '• YOU are the prompt engineer: compose the FINAL prompt (subject, style, composition, lighting, medium) from the user\'s intent and call agent__image with it. Do not ask the user to write a technical prompt unless the request is truly ambiguous. Keep the prompt under ~1000 chars.',
+      '• Text-to-image: call agent__image { prompt }. Edit: when the user attached images (see the attachment/upload list) or references an earlier result, pass their paths in referencePaths and describe the CHANGE in prompt. Look at the attachment first (read_file returns it inline) when you need to understand what to edit.',
+      '• Iterate on your own results: every result includes /api/images/local/... URLs — pass one back via referencePaths to refine it ("make it darker", "change the background").',
+      '• Models: agent__image uses the user\'s saved Image Studio model by default. If the user names a model, pass it in "model" (check agent__image_models when unsure which provider owns it). When they ask what models exist — or the default cannot edit — call agent__image_models.',
+      '• Results ride back INLINE — look at them before claiming success, then describe the result to the user. They are saved to the user\'s Gallery automatically.',
+      '• One generation at a time per session; do not call agent__image spontaneously — only when the user asks for an image.',
+      ...(usable.length === 0
+        ? ['NOTE: no image provider currently has an API key — the tool will tell you to ask the user to configure one.']
+        : []),
+    ].join('\n'),
+  };
 }
 
 function structuredOutputsInjection(): HarnessInjection {
@@ -124,12 +153,6 @@ export function agentHarnessInjection(
 ): HarnessInjection | null {
   const workspace = getActiveWorkspace(sessionId);
   if (!workspace) {
-    // NO-WORKSPACE AGENT MODE: agent mode stays fully usable without a
-    // workspace — thinking, goals, steering, ask-user, addon management all
-    // run as usual. What changes is the tool surface: workspace-attached
-    // tools (file tools, run/git, tree) have no root to resolve against and
-    // return a clear self-explanatory error if the model calls one. The
-    // injection documents the mode so the model never wastes a round trying.
     return {
       id: 'agent-tools',
       title: 'System prompt · Agent harness',
@@ -205,6 +228,8 @@ export function agentHarnessInjection(
       '- agent__read_all: standalone fold, same output, not a read receipt.',
       '- agent__batch_read: up to 6 files per call (paths[], maxLines default 400, max 1000), each with sha + receipt.',
       '- FOLD-FIRST (mandatory): a file >400 lines must be mapped (read_all / fold) before window-reading; then read only the needed block. Exceptions: region already pinpointed (grep receipt, earlier map, line: N, known offsetLine) or file ≤400 lines.',
+      '- Symbol-aware reading: symbol name known → agent__read_symbol (exact range + receipt, no fold needed); about to change a shared API → agent__context_pack (body + callers + tests in one call).',
+      '- agent__search is LEXICAL (camelCase-aware BM25) — keywords, not embeddings.',
       '- Images: read_file returns them inline (image-capable models MUST use it before agent__vision; text-only models fall back to agent__vision). Vision output is secondhand: attribute it ("<model> reports…"), never "I see…".',
       '',
       '## Editing',
@@ -233,9 +258,23 @@ export function agentHarnessInjection(
       '- move/copy never overwrite: delete the destination first.',
       '',
       '## Build & Test (need terminal mode)',
-      '- agent__typecheck: runs `pnpm typecheck` (or custom command), parses tsc into file:line:col + TS code, grouped by file.',
-      '- agent__test_run: node --import tsx --test, TAP parsed per file with failing names/messages. pattern default "**/*.test.ts" or files[]; timeout 10-600s.',
+      '- agent__typecheck: runs `pnpm typecheck` (or custom command), parses tsc (incl. --pretty) into file:line:col + TS code, grouped by file. paths[] filters results to touched files.',
+      '- agent__test_run: auto-detects the project runner (vitest/jest/pytest/cargo/go, default node --import tsx --test); normalized PASS/FAIL/SKIP counts.',
       '- Prefer both over raw agent__run.',
+      '',
+      '## Quality (F3)',
+      '- Use agent__refactor (rename / move_file / organize_imports) instead of manual cross-file renames; dryRun default shows a diff, apply is atomic + vaulted.',
+      '- Post-edit diagnostics: successful .ts/.tsx edits report NEW syntactic diagnostics in the result — do not leave any behind.',
+      '- agent__diagnostics: per-file TS diagnostics in milliseconds (scope "touched" = files edited this session).',
+      '- agent__lint / agent__format: run the PROJECT\'s own linter/formatter when configured; never install one.',
+      '- agent__code_metrics / agent__dead_code: complexity hotspots and zero-reference exports (review only, never auto-delete).',
+      '- Call agent__verify quick ONCE at the END of a task (full adds typecheck + arch rules). Not per edit.',
+      '- Never write your own test/E2E scripts; use the existing runners.',
+      '',
+      '## Architecture (F4)',
+      '- Before creating >3 new files or a new module: agent__arch_map first; respect .moriko/architecture.json when present.',
+      '- agent__arch_rules: init proposes the rules file (dryRun default); check reports layer/cycle/size violations.',
+      '- Offer an ADR (agent__adr new) for big structural decisions; agent__scaffold instantiates project templates.',
       '',
       '## Background Processes',
       '- agent__task_start: non-blocking spawn, returns taskId (48 KB buffer, max 10 tasks, in-memory).',
@@ -744,9 +783,6 @@ export async function buildHarnessInjections(
     return injections;
   }
 
-  // PLAIN CHAT PURITY: everything below the enforcement ladder runs only in
-  // agent mode (or with structured outputs, an explicit user toggle). A plain
-  // chat turn receives NOTHING here except the tools its toggles asked for.
   if (settings.agentMode) {
     if (settings.structuredOutputs) injections.push(structuredOutputsInjection());
     const capabilities = modelCapabilitiesInjection(modelId);
@@ -755,6 +791,24 @@ export async function buildHarnessInjections(
     if (attachments) injections.push(attachments);
     const agent = agentHarnessInjection(settings.terminalMode ?? 'auto', sessionId, settings.webAccess === true);
     if (agent) injections.push(agent);
+    // F6.4 — domain packs (3D/game, architecture), cached per workspace.
+    try {
+      const { getActiveWorkspace } = await import('./workspace.js');
+      const { domainPackInjections } = await import('./domain-packs.js');
+      const ws = getActiveWorkspace(sessionId);
+      if (ws) {
+        const packs = domainPackInjections(ws.path);
+        if (packs.length > 0) {
+          injections.push({
+            id: 'domain-packs',
+            title: 'System prompt · Domain packs',
+            content: packs.join('\n'),
+          });
+        }
+      }
+    } catch { /* domain packs are best-effort */ }
+    const imageGen = await imageGenInjection();
+    if (imageGen) injections.push(imageGen);
     const agentsMd = agentsMdInjection(sessionId);
     if (agentsMd) injections.push(agentsMd);
   }
@@ -767,9 +821,6 @@ export async function buildHarnessInjections(
   const reminders = remindersInjection(sessionId);
   if (reminders) injections.push(reminders);
 
-  // FASE 5 — addon context providers: addons contribute live context to every
-  // agent-mode session (e.g. RS-PRD announcing "Achievement 003 is claimed by
-  // Agent A" to all other sessions). Multi-agent coordination without core PR.
   {
     const providers = listContextProviders().filter((provider) => provider.lines.length > 0);
     if (providers.length > 0) {

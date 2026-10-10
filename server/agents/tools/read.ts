@@ -304,14 +304,45 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
     markStructuralRead(ctx.sessionId, absolute);
     const symbols: string[] = [];
     let capped = false;
-    for (let index = 0; index < view.length; index += 1) {
-      const label = outlineEntry(view[index]);
-      if (!label) continue;
-      if (symbols.length >= OUTLINE_SYMBOL_CAP) {
-        capped = true;
-        break;
+    // F2.4 — AST outline for TS/JS files (arrow functions, object methods,
+    // overloads, enums); regex fallback for everything else.
+    const ext = path.extname(relative).toLowerCase();
+    let usedAst = false;
+    if (['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts'].includes(ext)) {
+      try {
+        const { getLanguageService } = await import('../lsp-service.js');
+        const { requireWorkspace } = await import('./shared.js');
+        const { root } = requireWorkspace(ctx);
+        const service = getLanguageService(absolute, root);
+        const items = service.getNavigationBarItems(absolute);
+        const flatten = (navItems: readonly import('typescript').NavigationBarItem[], indent: string): void => {
+          for (const item of navItems) {
+            if (symbols.length >= OUTLINE_SYMBOL_CAP) { capped = true; return; }
+            let lineNo = 1;
+            try {
+              const sp = item.spans[0];
+              lineNo = content.slice(0, sp.start).split('\n').length;
+            } catch { /* keep 1 */ }
+            symbols.push(`${String(lineNo).padStart(5)}  ${indent}[${item.kind}] ${item.text}`);
+            if (item.childItems && item.childItems.length > 0) flatten(item.childItems, `${indent}  `);
+          }
+        };
+        if (items && items.length > 0) {
+          usedAst = true;
+          flatten(items, '');
+        }
+      } catch { /* fall back to regex */ }
+    }
+    if (!usedAst) {
+      for (let index = 0; index < view.length; index += 1) {
+        const label = outlineEntry(view[index]);
+        if (!label) continue;
+        if (symbols.length >= OUTLINE_SYMBOL_CAP) {
+          capped = true;
+          break;
+        }
+        symbols.push(`${String(index + 1).padStart(5)}  ${label}`);
       }
-      symbols.push(`${String(index + 1).padStart(5)}  ${label}`);
     }
     if (symbols.length === 0) {
       return {
@@ -324,7 +355,7 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
       ok: true,
       isError: false,
       text: truncateOutput(
-        `# outline ${relative} — ${symbols.length} symbol(s)\n${symbols.join('\n')}` +
+        `# outline ${relative} — ${symbols.length} symbol(s)${usedAst ? ' (AST)' : ''}\n${symbols.join('\n')}` +
           (capped ? `\n…(capped at ${OUTLINE_SYMBOL_CAP} symbols)` : '') +
           `\n[outline only — NOT a read receipt. read_file the regions you intend to edit.]`,
       ),

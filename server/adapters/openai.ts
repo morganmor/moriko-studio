@@ -56,7 +56,6 @@ function splitContentBlocks(content: unknown): ContentBlockSplit {
     if (!part || typeof part !== 'object') continue;
     const record = part as Record<string, unknown>;
     if (record.type === 'thinking') {
-      // thinking is a string or a list of text chunks, depending on SDK version
       reasoning += coerceText(record.thinking) ?? '';
     } else {
       text += coerceText(record) ?? '';
@@ -278,9 +277,6 @@ export async function streamOpenAiCompatible(
 
     if (sawUsage) {
       sawAnyUsage = true;
-      // prompt must accumulate at the SAME cadence as cacheRead/completion:
-      // a last-round prompt against a summed cache read made the ratio > 1 and
-      // the UI clamp rendered "100% cache" on every multi-round tool turn.
       sumPromptTokens += sawUsage.promptTokens ?? 0;
       sumCompletionTokens += sawUsage.completionTokens ?? 0;
       sumBilledTokens +=
@@ -331,8 +327,6 @@ export async function streamOpenAiCompatible(
 
     const steered = drainSteers(params.sessionId);
     for (const entry of steered) onEvent({ type: 'steer', id: entry.id, text: steerTextOf(entry), parts: entry.parts });
-    // Wire refs resolve at this seam — the steer buffer bypasses /api/chat's
-    // resolveWireRefs, so the provider would otherwise receive a dead URL.
     const steerParts = steersToUserParts(steered);
     resolveSteerPartRefs(steerParts);
     if (steerParts.length > 0) convo.push({ role: 'user', content: steerParts });

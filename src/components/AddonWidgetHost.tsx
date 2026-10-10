@@ -47,7 +47,6 @@ export async function refreshAddonWidgets(): Promise<void> {
     widgetRegistry.push(...payload.widgets);
     registryVersion++;
   } catch {
-    // server not ready — silently skip
   }
 }
 
@@ -57,13 +56,13 @@ class WidgetErrorBoundary extends Component<{ addonId: string; children: React.R
   componentDidCatch(error: Error) { console.error(`[addon:${this.props.addonId}] widget error:`, error); }
   render() {
     if (this.state.error) {
-      return <div className="text-xs text-red-500 p-2">Widget error: {this.state.error.message}</div>;
+      return <div style={{ padding: 8, fontSize: 12, color: 'rgb(var(--c-danger))' }}>Widget error: {this.state.error.message}</div>;
     }
     return this.props.children;
   }
 }
 
-const WidgetFallback = () => <div className="animate-pulse h-8 bg-elevated rounded" />;
+const WidgetFallback = () => <div style={{ height: 32, borderRadius: 4, background: 'rgb(var(--c-elev))', animation: 'breathe 2s ease-in-out infinite' }} />;
 
 /** One lazy component per (addonId, component) — a lazy() created inside
  *  render gets a fresh identity on every host re-render, which REMOUNTS the
@@ -75,8 +74,6 @@ function getLazyWidget(entry: WidgetEntry): ComponentType {
   const cached = lazyCache.get(key);
   if (cached) return cached;
   const Lazy = lazy(() => {
-    // Component paths may be written as './client/index.tsx' — strip the
-    // leading './' and serve them via the /addon-modules static route.
     const rel = entry.component.replace(/^\.\//, '').replace(/\.tsx$/, '');
     return import(/* @vite-ignore */ `/addon-modules/${entry.addonId}/${rel}`)
       .then((m) => ({ default: (m.default ?? m[entry.addonId]) as ComponentType }))
@@ -99,7 +96,6 @@ export const AddonWidgetHost = memo(function AddonWidgetHost({
     void refreshAddonWidgets().then(() => setVersion(registryVersion));
   }, []);
 
-  // Refresh widget list when streaming state changes (for duringGeneration widgets)
   useEffect(() => {
     void refreshAddonWidgets().then(() => setVersion(registryVersion));
   }, [streaming]);
@@ -109,7 +105,7 @@ export const AddonWidgetHost = memo(function AddonWidgetHost({
   if (visible.length === 0) return null;
 
   const slot = (
-    <div className="addon-widget-slot space-y-2">
+    <div className="addon-widget-slot" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       {visible.map((w) => {
         const Lazy = getLazyWidget(w);
         return (
@@ -123,8 +119,6 @@ export const AddonWidgetHost = memo(function AddonWidgetHost({
     </div>
   );
 
-  // The floating site must escape #root's transform containing block — see
-  // the header note. Non-floating sites render inline.
   if (site === 'floating') return createPortal(slot, document.body);
   return slot;
 });

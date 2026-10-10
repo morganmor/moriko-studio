@@ -15,56 +15,11 @@
  * initial file list but still resolvable on demand.
  */
 import * as ts from 'typescript';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, num, truncateOutput, requireWorkspace, resolveWithPermission } from './shared.js';
-import { walkFiles } from './list.js';
-
-let cachedService: ts.LanguageService | null = null;
-let cachedRoot: string | null = null;
-
-function getService(root: string): ts.LanguageService {
-  if (cachedService && cachedRoot === root) return cachedService;
-
-  const allFiles = walkFiles(root).files;
-  const scriptFiles = allFiles.filter((f) => /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(f));
-  const fileSet = new Set(scriptFiles.map((f) => path.resolve(root, f.split('/').join(path.sep))));
-
-  const host: ts.LanguageServiceHost = {
-    getScriptFileNames: () => [...fileSet],
-    getScriptVersion: (_fileName: string) => '1',
-    getScriptSnapshot: (fileName: string) => {
-      try {
-        return ts.ScriptSnapshot.fromString(readFileSync(fileName, 'utf8'));
-      } catch {
-        return undefined;
-      }
-    },
-    getCurrentDirectory: () => root,
-    getCompilationSettings: () => ({
-      allowJs: true,
-      jsx: ts.JsxEmit.React,
-      module: ts.ModuleKind.ESNext,
-      moduleResolution: ts.ModuleResolutionKind.Bundler,
-      target: ts.ScriptTarget.ES2022,
-      noEmit: true,
-      skipLibCheck: true,
-      esModuleInterop: true,
-    }),
-    getDefaultLibFileName: (options: ts.CompilerOptions) => ts.getDefaultLibFilePath(options),
-    fileExists: (fileName: string) => {
-      try { return existsSync(fileName); } catch { return false; }
-    },
-    readFile: (fileName: string) => {
-      try { return readFileSync(fileName, 'utf8'); } catch { return undefined; }
-    },
-  };
-
-  cachedService = ts.createLanguageService(host, ts.createDocumentRegistry());
-  cachedRoot = root;
-  return cachedService;
-}
+import { getLanguageService } from '../lsp-service.js';
 
 /** Convert 1-based line+column to 0-based character offset. */
 function positionFromLineCol(content: string, line: number, column: number): number {
@@ -111,11 +66,12 @@ export async function lspSymbolsTool(args: Record<string, unknown>, ctx: AgentTo
   }
 
   const mode = str(args, 'mode').trim().toLowerCase();
-  const service = getService(root);
+  const service = getLanguageService(absolute, root);
   const lines: string[] = [];
 
   try {
-    if (mode === 'definition' || mode === 'references' || mode === 'rename') {
+    if (mode === 'definition' || mode === 'references' || mode === 'rename'
+      || mode === 'hover' || mode === 'diagnostics' || mode === 'implementations' || mode === 'type_definition' || mode === 'call_hierarchy') {
       const lineNum = num(args, 'line') ?? 1;
       const colNum = num(args, 'column') ?? 1;
       const position = positionFromLineCol(content, lineNum, colNum);
@@ -153,6 +109,86 @@ export async function lspSymbolsTool(args: Record<string, unknown>, ctx: AgentTo
           }
         }
         lines.unshift(`${total} reference(s) in ${refs.length} symbol(s):`);
+      } else if (mode === 'hover') {
+        const quick = service.getQuickInfoAtPosition(absolute, position);
+        if (!quick) return { ok: true, isError: false, text: 'No quick info at this position.' };
+        const display = ts.displayPartsToString(quick.displayParts);
+        const doc = quick.documentation ? ts.displayPartsToString(quick.documentation) : '';
+        const lc = lineColFromPosition(content, quick.textSpan.start);
+        lines.push(`${display}`);
+        if (doc) { lines.push(''); lines.push(doc); }
+        lines.push('');
+        lines.push(`at ${resolved.relative}:${lc.line}:${lc.column}`);
+      } else if (mode === 'diagnostics') {
+        const diags = [
+          ...(service.getSyntacticDiagnostics(absolute) ?? []),
+          ...(service.getSemanticDiagnostics(absolute) ?? []),
+        ];
+        if (diags.length === 0) return { ok: true, isError: false, text: `No diagnostics in ${resolved.relative}.` };
+        lines.push(`${diags.length} diagnostic(s):`);
+        for (const d of diags) {
+          if (d.file && d.start !== undefined) {
+            const lc = lineColFromPosition(d.file.text ?? '', d.start);
+            lines.push(`${resolved.relative}:${lc.line}:${lc.column}  ${ts.flattenDiagnosticMessageText(d.messageText, ' ')}${d.code ? ` (TS${d.code})` : ''}`);
+          } else {
+            lines.push(ts.flattenDiagnosticMessageText(d.messageText, ' '));
+          }
+        }
+      } else if (mode === 'implementations') {
+        const impls = service.getImplementationAtPosition(absolute, position);
+        if (!impls || impls.length === 0) {
+          return { ok: true, isError: false, text: 'No implementations found at this position.' };
+        }
+        lines.push(`${impls.length} implementation(s):`);
+        for (const impl of impls) {
+          try {
+            const implContent = readFileSync(impl.fileName, 'utf8');
+            lines.push(formatSpan(root, impl.fileName, implContent, impl.textSpan.start));
+          } catch {
+            lines.push(`${path.relative(root, impl.fileName).replace(/\\/g, '/')} (offset ${impl.textSpan.start})`);
+          }
+        }
+      } else if (mode === 'type_definition') {
+        const defs = service.getTypeDefinitionAtPosition(absolute, position);
+        if (!defs || defs.length === 0) {
+          return { ok: true, isError: false, text: 'No type definition found at this position.' };
+        }
+        lines.push(`${defs.length} type definition(s):`);
+        for (const def of defs) {
+          try {
+            const defContent = readFileSync(def.fileName, 'utf8');
+            lines.push(formatSpan(root, def.fileName, defContent, def.textSpan.start));
+          } catch {
+            lines.push(`${path.relative(root, def.fileName).replace(/\\/g, '/')} (offset ${def.textSpan.start})`);
+          }
+        }
+      } else if (mode === 'call_hierarchy') {
+        const dir = str(args, 'direction').trim().toLowerCase() || 'incoming';
+        const depth = Math.max(1, Math.min(num(args, 'depth') ?? 1, 3));
+        const rootItem = service.getNavigateToItems(absolute, position)[0];
+        const walk = (file: string, pos: number, level: number): void => {
+          if (level > depth) return;
+          const items = dir === 'outgoing'
+            ? service.provideCallHierarchyOutgoingCalls(file, pos)
+            : service.provideCallHierarchyIncomingCalls(file, pos);
+          for (const call of items ?? []) {
+            const item = ('item' in call ? call.item : call) as ts.CallHierarchyItem;
+            try {
+              const itemContent = readFileSync(item.file, 'utf8');
+              lines.push(`${'  '.repeat(level - 1)}${dir === 'outgoing' ? '→' : '←'} ${formatSpan(root, item.file, itemContent, item.span.start)}`);
+            } catch {
+              lines.push(`${'  '.repeat(level - 1)}${dir === 'outgoing' ? '→' : '←'} ${path.relative(root, item.file).replace(/\\/g, '/')}`);
+            }
+            const nextPos = item.selectionSpan.start;
+            walk(item.file, nextPos, level + 1);
+          }
+        };
+        if (rootItem) {
+          lines.push(`call hierarchy (${dir}, depth ≤ ${depth}) from ${rootItem.name}:`);
+          walk(absolute, position, 1);
+        } else {
+          return { ok: true, isError: false, text: 'No call hierarchy item at this position.' };
+        }
       } else if (mode === 'rename') {
         const newName = str(args, 'newName').trim();
         if (!newName) return { ok: false, isError: true, text: 'rename mode needs a "newName".' };
@@ -192,7 +228,7 @@ export async function lspSymbolsTool(args: Record<string, unknown>, ctx: AgentTo
       };
       formatItems(items, '');
     } else {
-      return { ok: false, isError: true, text: `Unknown mode "${mode}". Available: definition, references, symbols, rename.` };
+      return { ok: false, isError: true, text: `Unknown mode "${mode}". Available: definition, references, symbols, rename, hover, diagnostics, implementations, type_definition, call_hierarchy.` };
     }
   } catch (error) {
     return {

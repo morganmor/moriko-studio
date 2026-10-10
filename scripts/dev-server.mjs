@@ -33,8 +33,6 @@ try {
   tsxCli = path.join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 }
 
-// Per-side esbuild binary (see setup-esbuild.mjs): tsx pins its own esbuild
-// version, so use the staged binary for THIS side — never a foreign one.
 if (process.env.MORIKO_ESBUILD_SERVER) {
   process.env.ESBUILD_BINARY_PATH = process.env.MORIKO_ESBUILD_SERVER;
 }

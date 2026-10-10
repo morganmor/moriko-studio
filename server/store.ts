@@ -33,8 +33,7 @@ interface ProvidersFile {
   /** Definitions ONLY — credentials never ride here (see api-keys.json). */
   providers: StoredProvider[];
   /**
-   * User-added model ids for BUILT-IN providers (e.g. a Civitai checkpoint
-   * found on its model page, or a specific Civitai checkpoint). Merged after
+   * User-added model ids for BUILT-IN providers. Merged after
    * the definition's curated list — never replacing it.
    */
   builtInModels?: Record<string, string[]>;

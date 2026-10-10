@@ -79,7 +79,6 @@ export function setEnvValue(key: string, value: string): void {
   if (entry) {
     entry.value = value;
   } else {
-    // Append after the last entry (keeps any trailing comment block at the end).
     let insertAt = lines.length;
     while (insertAt > 0 && lines[insertAt - 1].kind === 'comment') insertAt -= 1;
     lines.splice(insertAt, 0, { kind: 'entry', key, value });

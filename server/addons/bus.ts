@@ -32,17 +32,14 @@ export async function publishBusEvent(topic: string, payload: Record<string, unk
     addonId: fromAddon,
     ts: Date.now(),
   };
-  // Addon listeners (cross-session, server-side)
   for (const listener of [...listeners]) {
     if (listener.addonId === fromAddon && listener.topic === topic) continue;
     if (listener.topic !== topic) continue;
     try {
       await listener.handler(message);
     } catch {
-      // a broken listener never breaks the publish
     }
   }
-  // Client push (all browsers)
   for (const client of sseClients.values()) {
     try {
       client.write(message);

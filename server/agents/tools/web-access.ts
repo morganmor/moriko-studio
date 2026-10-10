@@ -7,13 +7,15 @@
  * dispatcher refuses direct/nested calls (see dispatcher.ts guard).
  */
 import type { AgentToolDef } from './shared.js';
+import { toolByName } from './registry.js';
+import './registered.js';
 
 /** Wire names outside the browser block that still reach the public web. */
 const WEB_MISC = new Set(['agent__fetch', 'agent__download']);
 
 /** Exported for the loop's tool catalogue filter (Web Access setting). */
 export function isWebTool(wireName: string): boolean {
-  return wireName.startsWith('agent__browser_') || WEB_MISC.has(wireName);
+  return wireName.startsWith('agent__browser_') || WEB_MISC.has(wireName) || toolByName(wireName)?.web === true;
 }
 
 /** Convenience: filter a defs array down to the non-web subset (or keep all). */

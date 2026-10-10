@@ -109,8 +109,6 @@ export function diffStatFromOps(before: string, after: string): DiffStat | undef
   const beforeLines = before.split('\n');
   const afterLines = after.split('\n');
   if (beforeLines.length > DIFF_MAX_LINES || afterLines.length > DIFF_MAX_LINES) {
-    // Same guard as the renderer — fall back to a cheap char-level estimate
-    // instead of the O(n·m) LCS blow-up.
     const added = Math.max(0, afterLines.length - beforeLines.length);
     return { added, removed: 0 };
   }

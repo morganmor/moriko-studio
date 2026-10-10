@@ -1,4 +1,4 @@
-import type { Conversation, FontFamily, ImageSizeMode, ProviderDraft, SavedPrompt, ViewId } from '../types';
+import type { Accent, Conversation, Density, FontFamily, ImageSizeMode, ProviderDraft, SavedPrompt, ThemeMode, ViewId } from '../types';
 
 /** Left-sidebar collapsible sections — last user condition, device-persisted. */
 export interface SidebarSections {
@@ -65,6 +65,12 @@ const VIEW_IDS: readonly ViewId[] = ['playground', 'history', 'imagehistory', 'g
 const DEVICE_KEYS = {
   activeId: 'activeId',
   theme: 'theme',
+  /** Theme mechanism (design theme-mechanism + panel-settings). */
+  accent: 'accent',
+  density: 'density',
+  ambient: 'ambient',
+  reduceMotion: 'reduceMotion',
+  confirmDel: 'confirmDel',
   sidebar: 'sidebarCollapsed',
   /** Resizable panel widths (px) — device-persisted like the collapse flags. */
   sidebarWidth: 'sidebarWidth',
@@ -324,8 +330,6 @@ export function flushUiStateBeacon(): void {
       DEVICE_ENDPOINT,
       new Blob([JSON.stringify({ patch })], { type: 'application/json' }),
     );
-    // Keep the keys dirty when the beacon was rejected (quota) — a later
-    // flush can still retry.
     if (ok) dirtyKeys.clear();
   } catch {
   }
@@ -417,7 +421,6 @@ function normalizeStoredConversation(conversation: Conversation): Conversation {
         maxContextTokens: conversation.settings?.maxContextTokens ?? null,
         autoCompact: conversation.settings?.autoCompact ?? true,
         compactThresholdTokens: conversation.settings?.compactThresholdTokens ?? null,
-        compactKeepRecentTurns: conversation.settings?.compactKeepRecentTurns ?? 2,
         enforcement:
           conversation.settings?.enforcement ?? {
             level: conversation.settings?.lockdown?.active ? 4 : 0,
@@ -438,17 +441,51 @@ export const storage = {
   loadActiveId: (): string | null => read<string | null>(DEVICE_KEYS.activeId, null),
   saveActiveId: (id: string | null): void => write(DEVICE_KEYS.activeId, id),
 
-  loadTheme: (): 'dark' | 'light' | 'mocha' =>
-    read<'dark' | 'light' | 'mocha'>(DEVICE_KEYS.theme, 'dark') || 'dark',
-  saveTheme: (theme: 'dark' | 'light' | 'mocha'): void => write(DEVICE_KEYS.theme, theme),
+  loadTheme: (): ThemeMode => {
+    const value = read<string>(DEVICE_KEYS.theme, 'dark');
+    return value === 'light' || value === 'mocha' || value === 'system' ? value : 'dark';
+  },
+  saveTheme: (theme: ThemeMode): void => write(DEVICE_KEYS.theme, theme),
+
+  /** Accent swatch driving --al/--ad via <html data-accent>. */
+  loadAccent: (): Accent => {
+    const value = read<string>(DEVICE_KEYS.accent, 'ember');
+    return value === 'sakura' || value === 'matcha' || value === 'ocean' || value === 'violet'
+      ? value
+      : 'ember';
+  },
+  saveAccent: (accent: Accent): void => write(DEVICE_KEYS.accent, accent),
+
+  /** Row density preset driving --row via <html data-density>. */
+  loadDensity: (): Density =>
+    read<string>(DEVICE_KEYS.density, 'comfy') === 'compact' ? 'compact' : 'comfy',
+  saveDensity: (density: Density): void => write(DEVICE_KEYS.density, density),
+
+  /** Ambient glow behind the app — default on (design default). */
+  loadAmbient: (): boolean => read<unknown>(DEVICE_KEYS.ambient, true) !== false,
+  saveAmbient: (ambient: boolean): void => write(DEVICE_KEYS.ambient, ambient),
+
+  /** null = follow prefers-reduced-motion (tri-state like the design). */
+  loadReduceMotion: (): boolean | null => {
+    const value = read<unknown>(DEVICE_KEYS.reduceMotion, null);
+    return typeof value === 'boolean' ? value : null;
+  },
+  saveReduceMotion: (reduceMotion: boolean | null): void =>
+    write(DEVICE_KEYS.reduceMotion, reduceMotion),
+
+  /** Confirm before deleting a chat (design's confirmDel) — default off. */
+  loadConfirmDel: (): boolean => read<unknown>(DEVICE_KEYS.confirmDel, false) === true,
+  saveConfirmDel: (confirmDel: boolean): void => write(DEVICE_KEYS.confirmDel, confirmDel),
 
   loadSidebarCollapsed: (): boolean => read<boolean>(DEVICE_KEYS.sidebar, false),
   saveSidebarCollapsed: (collapsed: boolean): void => write(DEVICE_KEYS.sidebar, collapsed),
 
-  /** Resizable panel widths — clamped on write; drag handlers re-clamp too. */
-  loadSidebarWidth: (): number => read<number>(DEVICE_KEYS.sidebarWidth, 248),
+  /** Resizable panel widths — clamped on write; drag handlers re-clamp too.
+   *  Sidebar floor = 260 (design rail width); older persisted values below it
+   *  (dragged before the design pass) migrate up on load. */
+  loadSidebarWidth: (): number => Math.max(260, read<number>(DEVICE_KEYS.sidebarWidth, 260)),
   saveSidebarWidth: (width: number): void => write(DEVICE_KEYS.sidebarWidth, width),
-  loadSettingsWidth: (): number => read<number>(DEVICE_KEYS.settingsWidth, 300),
+  loadSettingsWidth: (): number => read<number>(DEVICE_KEYS.settingsWidth, 340),
   saveSettingsWidth: (width: number): void => write(DEVICE_KEYS.settingsWidth, width),
 
   loadDefaults: (): Partial<ProviderDraft> => read<Partial<ProviderDraft>>(DEVICE_KEYS.defaults, {}),
@@ -679,8 +716,6 @@ export const storage = {
     visualId: string,
     geometry: { width: number | null; height: number; autoFit: boolean },
   ): void => {
-    // VISUAL v2: an edit-in-place/re-pick replaces the id's key in place (the
-    // spread keeps the NEWEST geometry; Object.entries would keep the OLD).
     const map = read<Record<string, { width: number | null; height: number; autoFit: boolean }> | undefined>(
       DEVICE_KEYS.visualGeometry,
       undefined,

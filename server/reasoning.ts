@@ -365,8 +365,10 @@ export function splitInlineThinking(content: string): {
  * `thinkingBudget`) are never hard-coded: the ceiling is the MODEL's own
  * max-output limit from the metadata snapshot, and the level picks a
  * proportion of that ceiling. A 64k-output model and a 512k-output model
- * therefore get genuinely different budgets for the same "High" setting —
- * the budget always follows the provider/model, never a fixed constant.
+ * therefore get genuinely different budgets for the same "High" setting.
+ * `max` asks for the model's FULL allowance and is then capped by the tuned
+ * provider tops below — Anthropic 128K, Gemini 64K (claude-opus-latest maxOut
+ * is 128,000; Gemini's is 65,536 — Max lands exactly on both).
  */
 const BUDGET_SHARE: Record<Exclude<ReasoningLevel, 'off'>, number> = {
   minimal: 0.02,
@@ -374,21 +376,37 @@ const BUDGET_SHARE: Record<Exclude<ReasoningLevel, 'off'>, number> = {
   medium: 0.15,
   high: 0.3,
   xhigh: 0.5,
-  max: 0.8,
+  max: 1,
 };
 
 /** Floors keep tiny models from producing budgets the API round-trips to 0. */
 const MIN_ANTHROPIC_BUDGET = 1024;
 const MIN_GEMINI_BUDGET = 512;
 
+/** Tuned provider thinking tops: Anthropic 128K, Gemini 64K. */
+const ANTHROPIC_TOP_THINKING = 128_000 - 1024; // 126,976 — the adapter adds +1024 as max_tokens
+const GEMINI_TOP_THINKING = 65_536; // 64K
+
 /**
- * Resolves the model's max-output limit for budget scaling. Falls back to a
- * conservative default only when the snapshot has no entry at all — the
- * fallback is a floor, not a budget: real models always scale above it.
+ * Resolves the model's max-output limit for budget scaling. Falls back to
+ * 32,768 when the snapshot has no entry — the same default window the
+ * Anthropic adapter sends, so an unknown model still gets a real budget
+ * instead of a token-sized one (it used to be 8,192, which shrank every
+ * level of the ladder to nothing).
  */
 function maxOutputFor(model: string, _baseUrl: string): number {
   const meta = lookupModelMetadata(model);
-  return meta?.maxOut ?? 8192;
+  return meta?.maxOut ?? 32_768;
+}
+
+/**
+ * Anthropic's required `max_tokens` when the user picked Max. Reasoning lives
+ * INSIDE this one window (completion_tokens counts thinking too), so Max = the
+ * model's full ceiling covering reasoning + answer together. Unknown model →
+ * 32,768: the API demands the field — it can never be omitted.
+ */
+export function anthropicMaxOutput(model: string): number {
+  return lookupModelMetadata(model)?.maxOut ?? 32_768;
 }
 
 /** Anthropic `thinking.budget_tokens`, or undefined when reasoning is off. */
@@ -399,8 +417,15 @@ export function anthropicThinkingBudget(
 ): number | undefined {
   if (level === 'off') return undefined;
   const ceiling = maxOutputFor(model, baseUrl);
+  // The adapter sends budget + 1024 as max_tokens — that total must stay ≤
+  // the model's own max-out (128,000 for opus-latest), so the budget itself
+  // keeps 1024 of headroom: 126,976 + 1024 = 128,000.
+  const top = Math.max(
+    Math.min(ANTHROPIC_TOP_THINKING, ceiling - 1024),
+    MIN_ANTHROPIC_BUDGET,
+  );
   const budget = Math.floor(ceiling * BUDGET_SHARE[level]);
-  return Math.min(Math.max(budget, MIN_ANTHROPIC_BUDGET), Math.max(ceiling - 512, MIN_ANTHROPIC_BUDGET));
+  return Math.min(Math.max(budget, MIN_ANTHROPIC_BUDGET), top);
 }
 
 /** Gemini `thinkingConfig.thinkingBudget`; 0 disables thinking outright. */
@@ -411,7 +436,8 @@ export function geminiThinkingBudget(
 ): number {
   if (level === 'off') return 0;
   const ceiling = maxOutputFor(model, baseUrl);
-  return Math.max(Math.floor(ceiling * BUDGET_SHARE[level]), MIN_GEMINI_BUDGET);
+  const top = Math.max(Math.min(GEMINI_TOP_THINKING, ceiling), MIN_GEMINI_BUDGET);
+  return Math.min(Math.max(Math.floor(ceiling * BUDGET_SHARE[level]), MIN_GEMINI_BUDGET), top);
 }
 
 /**

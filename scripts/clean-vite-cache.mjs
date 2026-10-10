@@ -1,4 +1,3 @@
-// Clears Vite's dep pre-bundle cache before a dev start.
 import { rmSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 

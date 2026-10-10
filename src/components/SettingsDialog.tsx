@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Download, Loader2, RotateCcw, Upload } from './icons';
+import { Download, Folder, Loader2, MessageSquare, Palette, Plug, RotateCcw, Upload } from './icons';
 
 import {
   fetchStorageLocation,
@@ -9,37 +9,85 @@ import {
   type StorageLocationView,
 } from '../lib/api';
 import { exportAll, importBundle } from '../lib/exportImport';
+import { isMotionReduced } from '../lib/appearance';
 import { McpServersCard } from './McpServersCard';
 import { isPhantomConversation, useStore } from '../store/useStore';
-import type { FontFamily } from '../types';
-import { Tip, Modal, cx } from './ui';
+import type { Accent, Density, FontFamily, ThemeMode } from '../types';
+import { Tip, Modal, Toggle } from './ui';
 
-const FONT_OPTIONS: Array<{ value: FontFamily; label: string; stack: string }> = [
-  { value: 'inter', label: 'Inter', stack: 'Inter, sans-serif' },
-  { value: 'mono', label: 'JetBrains Mono', stack: "'JetBrains Mono', monospace" },
-  { value: 'system', label: 'System UI', stack: 'system-ui, sans-serif' },
+/** Theme cards (design panel-settings): live previews scoping each scheme. */
+const THEME_OPTIONS: Array<{ value: ThemeMode; label: string; preview: ReactNode }> = [
+  {
+    value: 'light',
+    label: 'Light',
+    preview: (
+      <span className="thp scope-light">
+        <i />
+        <b />
+        <em />
+      </span>
+    ),
+  },
+  {
+    value: 'dark',
+    label: 'Dark',
+    preview: (
+      <span className="thp scope-dark">
+        <i />
+        <b />
+        <em />
+      </span>
+    ),
+  },
+  {
+    value: 'mocha',
+    label: 'Mocha',
+    preview: (
+      <span className="thp scope-dark scope-mocha">
+        <i />
+        <b />
+        <em />
+      </span>
+    ),
+  },
+  {
+    value: 'system',
+    label: 'System',
+    preview: (
+      <span className="thp split">
+        <span className="scope-light">
+          <i />
+          <b />
+        </span>
+        <span className="scope-dark">
+          <i />
+          <b />
+        </span>
+      </span>
+    ),
+  },
 ];
 
-/** Card wrapper for one settings group. */
-function Section({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description?: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className="surface-card space-y-4 p-5">
-      <div>
-        <h3 className="text-sm font-semibold text-ink">{title}</h3>
-        {description ? <p className="mt-1 text-[12px] leading-relaxed text-muted">{description}</p> : null}
-      </div>
-      {children}
-    </section>
-  );
-}
+/** Accent swatches — each button carries its own data-accent so the circle
+ *  paints with THAT swatch's colour instead of the active one. */
+const ACCENT_OPTIONS: Array<{ value: Accent; label: string }> = [
+  { value: 'ember', label: 'Ember' },
+  { value: 'sakura', label: 'Sakura' },
+  { value: 'matcha', label: 'Matcha' },
+  { value: 'ocean', label: 'Ocean' },
+  { value: 'violet', label: 'Violet' },
+];
+
+const FONT_SEG: Array<{ value: FontFamily; label: string }> = [
+  { value: 'inter', label: 'Inter' },
+  { value: 'system', label: 'System' },
+  { value: 'mono', label: 'Mono' },
+];
+
+const DENSITY_SEG: Array<{ value: Density; label: string }> = [
+  { value: 'comfy', label: 'Comfy' },
+  { value: 'compact', label: 'Compact' },
+];
 
 /** Labeled range slider, styled like the Configuration panel's sliders. */
 function SliderRow({
@@ -63,9 +111,9 @@ function SliderRow({
 }) {
   return (
     <div>
-      <div className="mb-1 flex items-center justify-between">
-        <span className="text-[12px] font-medium text-muted">{label}</span>
-        <span className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-ink">
+      <div style={{ marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--muted)' }}>{label}</span>
+        <span style={{ borderRadius: 4, background: 'rgb(var(--c-elev))', padding: '2px 6px', fontFamily: 'var(--f-mono)', fontSize: 11, fontVariantNumeric: 'tabular-nums', color: 'rgb(var(--c-ink))' }}>
           {format ? format(value) : value}
         </span>
       </div>
@@ -77,9 +125,66 @@ function SliderRow({
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
         aria-label={label}
-        className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-hairline accent-[rgb(var(--c-accent))]"
+        style={{ ['--fill' as string]: `${((value - min) / (max - min)) * 100}%` }}
       />
-      {hint ? <p className="mt-1 text-[11px] text-faint">{hint}</p> : null}
+      {hint ? <p style={{ margin: '4px 0 0', fontSize: 11, color: 'var(--faint)' }}>{hint}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * Segmented control with the design's sliding indicator (initSeg mechanism):
+ * .ind tracks the checked button's offsetLeft/width, and a ResizeObserver
+ * re-lays it out whenever the control changes size.
+ */
+function SegControl<T extends string>({
+  value,
+  options,
+  onChange,
+  label,
+}: {
+  value: T;
+  options: ReadonlyArray<{ value: T; label: string }>;
+  onChange: (value: T) => void;
+  label: string;
+}) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const indRef = useRef<HTMLSpanElement>(null);
+
+  const layout = useCallback(() => {
+    const root = rootRef.current;
+    const indicator = indRef.current;
+    if (!root || !indicator) return;
+    const active = root.querySelector<HTMLElement>('[aria-checked="true"]');
+    if (!active || !active.offsetWidth) return;
+    indicator.style.setProperty('--x', `${active.offsetLeft}px`);
+    indicator.style.setProperty('--w', `${active.offsetWidth}px`);
+  }, []);
+
+  useLayoutEffect(layout, [value, layout]);
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(layout);
+    observer.observe(root);
+    return () => observer.disconnect();
+  }, [layout]);
+
+  return (
+    <div ref={rootRef} className="seg sm" role="radiogroup" aria-label={label}>
+      <span ref={indRef} className="ind" aria-hidden="true" />
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          role="radio"
+          aria-checked={value === option.value}
+          tabIndex={value === option.value ? 0 : -1}
+          onClick={() => onChange(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -142,14 +247,14 @@ function StorageLocationSection() {
   const dirty = view !== null && draft.trim() !== (view.pending ?? view.current);
 
   return (
-    <div className="space-y-3">
-      <div className="rounded-control border border-hairline bg-elevated/40 px-3 py-2.5">
-        <p className="text-[11px] font-medium uppercase tracking-wide text-faint">Current data folder</p>
-        <p className="mt-0.5 break-all font-mono text-[12px] text-ink">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ borderRadius: 'var(--r-md)', border: '1px solid var(--line)', background: 'rgb(var(--c-elev) / 0.4)', padding: '10px 12px' }}>
+        <p style={{ margin: 0, fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--faint)' }}>Current data folder</p>
+        <p style={{ margin: '2px 0 0', overflowWrap: 'break-word', fontFamily: 'var(--f-mono)', fontSize: 12, color: 'rgb(var(--c-ink))' }}>
           {view?.current ?? '…'}
         </p>
         {view?.pending && view.pending !== view.current ? (
-          <p className="mt-1 text-[11px] text-accent">
+          <p style={{ margin: '4px 0 0', fontSize: 11, color: 'rgb(var(--c-accent))' }}>
             Saved: {view.pending} — press Reload harness to apply.
           </p>
         ) : null}
@@ -159,7 +264,7 @@ function StorageLocationSection() {
         <label htmlFor="storage-location-input" className="field-label">
           Custom location
         </label>
-        <div className="flex items-center gap-2">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <input
             id="storage-location-input"
             type="text"
@@ -168,38 +273,40 @@ function StorageLocationSection() {
             placeholder={view?.default ?? '~/.moriko-studio'}
             spellCheck={false}
             autoComplete="off"
-            className="min-w-0 flex-1 rounded-control border border-hairline bg-elevated px-2.5 py-2 font-mono text-[12px] text-ink outline-none focus:border-accent/60"
+            className="field"
+            style={{ minWidth: 0, flex: 1, fontSize: 12 }}
           />
         </div>
-        <p className="mt-1 text-[11px] text-faint">
+        <p style={{ margin: '4px 0 0', fontSize: 11, color: 'var(--faint)' }}>
           The new folder starts empty — data in the previous location is left untouched. Applies after Reload harness.
         </p>
-        {error ? <p className="mt-1 text-[11px] text-danger">{error}</p> : null}
+        {error ? <p style={{ margin: '4px 0 0', fontSize: 11, color: 'rgb(var(--c-danger))' }}>{error}</p> : null}
       </div>
 
-      <div className="flex items-center justify-end gap-2">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
         <button
           type="button"
-          className="pill-button border border-accent/60 bg-accent-soft px-3 py-1.5 text-ink disabled:opacity-50"
+          className="btn sm"
+          style={{ borderColor: 'rgb(var(--c-accent) / 0.6)', background: 'var(--c-accent-soft)', color: 'rgb(var(--c-ink))' }}
           disabled={saving || !dirty || draft.trim() === ''}
           onClick={() => void commit(() => saveStorageLocation(draft))}
         >
-          {saving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
+          {saving ? <Loader2 className="ic spin" aria-hidden="true" /> : null}
           Save
         </button>
-        <span className="mx-1 h-5 w-px bg-hairline" aria-hidden="true" />
+        <span style={{ width: 1, height: 20, margin: '0 4px', background: 'var(--line)' }} aria-hidden="true" />
         <Tip label="Restart the local server — applies the new data folder">
         <button
           type="button"
-          className="pill-button items-center border border-hairline px-3 py-1.5 text-muted hover:text-ink disabled:opacity-60"
+          className="btn sm"
           onClick={reload}
           disabled={reloading}
           aria-label="Reload harness"
         >
           {reloading ? (
-            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            <Loader2 className="ic spin" aria-hidden="true" />
           ) : (
-            <RotateCcw className="h-4 w-4" aria-hidden="true" />
+            <RotateCcw className="ic" aria-hidden="true" />
           )}
           {reloading ? 'Reloading…' : 'Reload harness'}
         </button>
@@ -208,6 +315,27 @@ function StorageLocationSection() {
     </div>
   );
 }
+
+type SettingsTab = 'appearance' | 'mcp' | 'storage' | 'conversations';
+
+/** One sidebar entry. */
+const NAV_GROUPS: Array<{ label: string; items: Array<{ id: SettingsTab; label: string; icon: ReactNode }> }> = [
+  {
+    label: 'General',
+    items: [{ id: 'appearance', label: 'Appearance', icon: <Palette className="ic" aria-hidden="true" /> }],
+  },
+  {
+    label: 'Integrations',
+    items: [{ id: 'mcp', label: 'MCP servers', icon: <Plug className="ic" aria-hidden="true" /> }],
+  },
+  {
+    label: 'Data',
+    items: [
+      { id: 'storage', label: 'Storage', icon: <Folder className="ic" aria-hidden="true" /> },
+      { id: 'conversations', label: 'Conversations', icon: <MessageSquare className="ic" aria-hidden="true" /> },
+    ],
+  },
+];
 
 interface SettingsDialogProps {
   open: boolean;
@@ -223,8 +351,19 @@ interface SettingsDialogProps {
  * per-conversation run settings live in the right-hand Configuration panel.
  */
 export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
+  const [tab, setTab] = useState<SettingsTab>('appearance');
   const theme = useStore((state) => state.theme);
   const setTheme = useStore((state) => state.setTheme);
+  const accent = useStore((state) => state.accent);
+  const setAccent = useStore((state) => state.setAccent);
+  const density = useStore((state) => state.density);
+  const setDensity = useStore((state) => state.setDensity);
+  const ambient = useStore((state) => state.ambient);
+  const setAmbient = useStore((state) => state.setAmbient);
+  const reduceMotion = useStore((state) => state.reduceMotion);
+  const setReduceMotion = useStore((state) => state.setReduceMotion);
+  const confirmDel = useStore((state) => state.confirmDel);
+  const setConfirmDel = useStore((state) => state.setConfirmDel);
   const fontScale = useStore((state) => state.fontScale);
   const setFontScale = useStore((state) => state.setFontScale);
   const contextScale = useStore((state) => state.contextScale);
@@ -257,178 +396,253 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
       onClose={onClose}
       title="Settings"
       description="Customize the workspace and manage your data."
-      size="max-w-2xl"
+      size="wide"
     >
-      <div className="space-y-5">
-        <Section title="Appearance" description="Theme, font size, and workspace font style.">
-          <div>
-            <p className="field-label">Theme</p>
-            <div className="flex gap-2">
-              {(['dark', 'light', 'mocha'] as const).map((value) => (
+      <div className="set-body">
+        <nav className="set-nav" role="tablist" aria-label="Settings sections">
+          {NAV_GROUPS.map((group) => (
+            <div key={group.label}>
+              <div className="gl">{group.label}</div>
+              {group.items.map((item) => (
                 <button
-                  key={value}
-                  type="button"
-                  onClick={() => setTheme(value)}
-                  aria-pressed={theme === value}
-                  className={cx(
-                    'pill-button flex-1 justify-center border transition-colors',
-                    theme === value
-                      ? 'border-accent/60 bg-accent-soft text-ink'
-                      : 'border-hairline text-muted hover:text-ink',
-                  )}
+                  key={item.id}
+                  role="tab"
+                  aria-selected={tab === item.id}
+                  onClick={() => setTab(item.id)}
                 >
-                  {value === 'mocha' ? 'Mocha' : value === 'dark' ? 'Dark' : 'Light'}
+                  {item.icon}
+                  {item.label}
                 </button>
               ))}
             </div>
-          </div>
+          ))}
+        </nav>
 
-          <div>
-            <SliderRow
-              label="Font size app"
-              value={fontScale}
-              min={0.8}
-              max={1.4}
-              step={0.01}
-              format={(value) => `${Math.round(value * 100)}%`}
-              onChange={setFontScale}
-            />
-            <SliderRow
-              label="Font size context"
-              value={contextScale}
-              min={0.8}
-              max={1.4}
-              step={0.01}
-              format={(value) => `${Math.round(value * 100)}%`}
-              onChange={setContextScale}
-            />
-            <div className="mt-1 flex items-center justify-between">
-              <p className="text-[11px] text-faint">
-                App scales everything except the chat; context scales the conversation and composer only.
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  setFontScale(1);
-                  setContextScale(1);
-                }}
-                className="inline-flex shrink-0 items-center gap-1 text-[11px] text-muted transition-colors hover:text-ink"
-              >
-                <RotateCcw className="h-3 w-3" aria-hidden="true" />
-                Reset
-              </button>
+        <div className="set-content">
+          {tab === 'appearance' && (
+            <div className="set-panel">
+              <div className="set-head">
+                <h3>Appearance</h3>
+                <p>Theme, accent, and the workspace feel.</p>
+              </div>
+              <div className="set-sec">
+                <div className="lab">Theme</div>
+                <div className="themes" role="radiogroup" aria-label="Theme">
+                  {THEME_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={theme === option.value}
+                      onClick={(event) => setTheme(option.value, event)}
+                      className="thc"
+                    >
+                      {option.preview}
+                      <span>{option.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="set-sec">
+                <div className="lab">Accent</div>
+                <div className="swatches" role="radiogroup" aria-label="Accent">
+                  {ACCENT_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={accent === option.value}
+                      aria-label={option.label}
+                      data-accent={option.value}
+                      onClick={() => setAccent(option.value)}
+                      className="swt"
+                    />
+                  ))}
+                </div>
+              </div>
+              <div className="set-sec">
+                <div className="lab">Interface</div>
+                <div className="set-row">
+                  <div className="min0">
+                    <b>Font</b>
+                    <span>Inter, System UI, or JetBrains Mono.</span>
+                  </div>
+                  <SegControl label="Font" value={fontFamily} options={FONT_SEG} onChange={setFontFamily} />
+                </div>
+                <div className="set-row">
+                  <div className="min0">
+                    <b>Density</b>
+                    <span>Row height and spacing.</span>
+                  </div>
+                  <SegControl label="Density" value={density} options={DENSITY_SEG} onChange={setDensity} />
+                </div>
+                <div className="set-row">
+                  <div className="min0">
+                    <b>Reduce motion</b>
+                    <span>Follows your OS until changed.</span>
+                  </div>
+                  <Toggle
+                    hideLabel
+                    label="Reduce motion"
+                    checked={isMotionReduced(reduceMotion)}
+                    onChange={setReduceMotion}
+                  />
+                </div>
+                <div className="set-row">
+                  <div className="min0">
+                    <b>Ambient glow</b>
+                    <span>Soft drifting light behind the app.</span>
+                  </div>
+                  <Toggle hideLabel label="Ambient glow" checked={ambient} onChange={setAmbient} />
+                </div>
+                <div className="set-row">
+                  <div className="min0">
+                    <b>Confirm before delete</b>
+                    <span>Otherwise delete instantly.</span>
+                  </div>
+                  <Toggle hideLabel label="Confirm before delete" checked={confirmDel} onChange={setConfirmDel} />
+                </div>
+              </div>
+              <div className="set-sec">
+                <div className="lab">Scale</div>
+                <SliderRow
+                  label="Font size app"
+                  value={fontScale}
+                  min={0.8}
+                  max={1.4}
+                  step={0.01}
+                  format={(value) => `${Math.round(value * 100)}%`}
+                  onChange={setFontScale}
+                />
+                <SliderRow
+                  label="Font size context"
+                  value={contextScale}
+                  min={0.8}
+                  max={1.4}
+                  step={0.01}
+                  format={(value) => `${Math.round(value * 100)}%`}
+                  onChange={setContextScale}
+                />
+                <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <p style={{ margin: 0, fontSize: 11, color: 'var(--faint)' }}>
+                    App scales everything except the chat; context scales the conversation and composer only.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFontScale(1);
+                      setContextScale(1);
+                    }}
+                    className="nav"
+                    style={{ height: 'auto', flexShrink: 0, padding: 0, fontSize: 11, gap: 4 }}
+                  >
+                    <RotateCcw className="ic" style={{ width: 12, height: 12 }} aria-hidden="true" />
+                    Reset
+                  </button>
+                </div>
+              </div>
             </div>
-          </div>
+          )}
 
-          <div>
-            <p className="field-label">Font style</p>
-            <div className="grid grid-cols-3 gap-2">
-              {FONT_OPTIONS.map((option) => (
+          {tab === 'mcp' && (
+            <div className="set-panel">
+              <div className="set-head">
+                <h3>MCP servers</h3>
+                <p>Register tool servers (local command or remote URL) the model may call when Use MCP is on. Enable the toggle in Configuration → Tools.</p>
+              </div>
+              <McpServersCard />
+            </div>
+          )}
+
+          {tab === 'storage' && (
+            <div className="set-panel">
+              <div className="set-head">
+                <h3>Storage</h3>
+                <p>Everything lives in one folder on this machine — chats, providers, images, agent state.</p>
+              </div>
+              <StorageLocationSection />
+            </div>
+          )}
+
+          {tab === 'conversations' && (
+            <div className="set-panel">
+              <div className="set-head">
+                <h3>Conversations</h3>
+                <p>Portability for your chats.</p>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+                <div>
+                  <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: 'rgb(var(--c-ink))' }}>Export conversations</p>
+                  <p style={{ margin: '2px 0 0', fontSize: 11.5, color: 'var(--muted)' }}>
+                    Download all {conversationCount} conversation(s) as a JSON bundle.
+                  </p>
+                </div>
                 <button
-                  key={option.value}
                   type="button"
-                  onClick={() => setFontFamily(option.value)}
-                  aria-pressed={fontFamily === option.value}
-                  className={cx(
-                    'rounded-control border px-3 py-2.5 text-left transition-colors',
-                    fontFamily === option.value
-                      ? 'border-accent/60 bg-accent-soft'
-                      : 'border-hairline hover:border-accent/40',
-                  )}
+                  className="btn ghost sm"
+                  style={{ flexShrink: 0 }}
+                  onClick={() => void exportAll()}
                 >
-                  <span className="block text-[13px] font-medium text-ink" style={{ fontFamily: option.stack }}>
-                    {option.label}
-                  </span>
-                  <span className="mt-0.5 block text-[11px] text-muted" style={{ fontFamily: option.stack }}>
-                    Aa Bb 123
-                  </span>
+                  <Download className="ic" aria-hidden="true" />
+                  Export
                 </button>
-              ))}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+                <div>
+                  <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: 'rgb(var(--c-ink))' }}>Import conversations</p>
+                  <p style={{ margin: '2px 0 0', fontSize: 11.5, color: 'var(--muted)' }}>
+                    Restore from a Moriko export bundle (.json). Replaces current chats.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn ghost sm"
+                  style={{ flexShrink: 0 }}
+                  onClick={() => fileRef.current?.click()}
+                >
+                  <Upload className="ic" aria-hidden="true" />
+                  Import
+                </button>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="application/json,.json"
+                  hidden
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    event.target.value = '';
+                    if (file) void importBundle(file, async () => {});
+                  }}
+                />
+              </div>
+              <div className="set-sec" style={{ marginTop: 4 }}>
+                <div className="lab" style={{ color: 'rgb(var(--c-danger))' }}>Danger zone</div>
+                <div style={{ border: '1px solid rgb(var(--c-danger) / 0.4)', borderRadius: 'var(--r-lg)', padding: '12px 16px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+                    <div>
+                      <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: 'rgb(var(--c-ink))' }}>Clear all conversations</p>
+                      <p style={{ margin: '2px 0 0', fontSize: 11.5, color: 'var(--muted)' }}>
+                        Permanently removes every chat from this device.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleClear}
+                      className="btn danger sm"
+                      style={{
+                        flexShrink: 0,
+                        background: confirmClear ? 'rgb(var(--c-danger) / 0.1)' : 'transparent',
+                        borderColor: confirmClear ? 'rgb(var(--c-danger))' : 'rgb(var(--c-danger) / 0.4)',
+                      }}
+                    >
+                      {confirmClear ? 'Click again to confirm' : 'Clear'}
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-        </Section>
-
-        <Section
-          title="MCP servers"
-          description="Register tool servers (local command or remote URL) the model may call when Use MCP is on. Enable the toggle in Configuration → Tools."
-        >
-          <McpServersCard />
-        </Section>
-
-        <Section
-          title="Data"
-          description="Everything lives in one folder on this machine — chats, providers, images, agent state."
-        >
-          <StorageLocationSection />
-        </Section>
-
-        <Section title="Conversations" description="Portability for your chats.">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <p className="text-[13px] font-medium text-ink">Export conversations</p>
-              <p className="mt-0.5 text-[11.5px] text-muted">
-                Download all {conversationCount} conversation(s) as a JSON bundle.
-              </p>
-            </div>
-            <button
-              type="button"
-              className="pill-button shrink-0 border border-hairline text-muted hover:text-ink"
-              onClick={() => void exportAll()}
-            >
-              <Download className="h-4 w-4" aria-hidden="true" />
-              Export
-            </button>
-          </div>
-
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <p className="text-[13px] font-medium text-ink">Import conversations</p>
-              <p className="mt-0.5 text-[11.5px] text-muted">
-                Restore from a Moriko export bundle (.json). Replaces current chats.
-              </p>
-            </div>
-            <button
-              type="button"
-              className="pill-button shrink-0 border border-hairline text-muted hover:text-ink"
-              onClick={() => fileRef.current?.click()}
-            >
-              <Upload className="h-4 w-4" aria-hidden="true" />
-              Import
-            </button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="application/json,.json"
-              className="hidden"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                event.target.value = '';
-                if (file) void importBundle(file, async () => {});
-              }}
-            />
-          </div>
-
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <p className="text-[13px] font-medium text-ink">Clear all conversations</p>
-              <p className="mt-0.5 text-[11.5px] text-muted">
-                Permanently removes every chat from this device.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={handleClear}
-              className={cx(
-                'pill-button shrink-0 border transition-colors',
-                confirmClear
-                  ? 'border-danger bg-danger/10 text-danger'
-                  : 'border-danger/40 text-danger hover:bg-danger/10',
-              )}
-            >
-              {confirmClear ? 'Click again to confirm' : 'Clear'}
-            </button>
-          </div>
-        </Section>
+          )}
+        </div>
       </div>
     </Modal>
   );

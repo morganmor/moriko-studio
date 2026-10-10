@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { ImagePlus, Loader2, Trash2 } from './icons';
 
 import { useStore } from '../store/useStore';
-import { cx } from './ui';
+import './ui';
 
 /**
  * The Image Studio session picker: the dropdown that lists every generation
@@ -27,27 +27,29 @@ export function ImageSessionPicker({ onClose }: { onClose: () => void }) {
     <div
       role="menu"
       aria-label="Image Studio sessions"
-      className="w-72 rounded-card border border-hairline bg-surface p-2 shadow-xl"
+      className="pop open"
+      style={{ width: 288, padding: 8, transformOrigin: 'top left' }}
     >
       <button
         type="button"
         onClick={() => void createImageSession()}
-        className="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-left text-[13px] font-medium text-ink transition-colors hover:bg-elevated/60"
+        className="mi"
+        style={{ fontWeight: 500, fontSize: 13 }}
       >
-        <ImagePlus className="h-4 w-4 text-accent" aria-hidden="true" />
+        <ImagePlus className="ic" style={{ color: 'rgb(var(--c-accent))' }} aria-hidden="true" />
         New session
       </button>
 
-      <div className="my-1 h-px bg-hairline" />
+      <div className="sep" />
 
       {sessions.length === 0 ? (
-        <p className="px-2.5 py-3 text-[12px] leading-relaxed text-faint">
+        <p style={{ padding: '12px 10px', fontSize: 12, lineHeight: 1.625, color: 'var(--faint)' }}>
           No sessions yet. Generate an image — a session is created automatically.
         </p>
       ) : (
-        <ul className="max-h-72 space-y-0.5 overflow-y-auto">
+        <ul style={{ maxHeight: 288, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2, padding: 0, margin: 0, listStyle: 'none' }}>
           {sessions.map((session) => (
-            <li key={session.id} className="group relative">
+            <li key={session.id} style={{ position: 'relative' }} className="pk-row">
               <button
                 type="button"
                 onClick={() => {
@@ -55,20 +57,24 @@ export function ImageSessionPicker({ onClose }: { onClose: () => void }) {
                   onClose();
                 }}
                 aria-current={session.id === activeId ? 'true' : undefined}
-                className={cx(
-                  'flex w-full flex-col items-start gap-0.5 rounded-control px-2.5 py-2 pr-8 text-left transition-colors',
-                  session.id === activeId
-                    ? 'bg-elevated text-ink'
-                    : 'text-muted hover:bg-elevated/60 hover:text-ink',
-                )}
+                className="mi"
+                style={{
+                  flexDirection: 'column',
+                  alignItems: 'flex-start',
+                  gap: 2,
+                  padding: '8px 10px 8px 10px',
+                  paddingRight: 32,
+                  background: session.id === activeId ? 'rgb(var(--c-elev))' : undefined,
+                  color: session.id === activeId ? 'rgb(var(--c-ink))' : 'var(--muted)',
+                }}
               >
-                <span className="w-full truncate text-[13px] font-medium">{session.label}</span>
-                <span className="flex items-center gap-1.5 text-[11px] text-faint">
+                <span style={{ width: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, fontWeight: 500 }}>{session.label}</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--faint)' }}>
                   {session.items.length} image{session.items.length === 1 ? '' : 's'} ·{' '}
                   {new Date(session.updatedAt).toLocaleString()}
                   {generating && session.id === gen.sessionId ? (
-                    <span className="flex items-center gap-1 text-accent">
-                      <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'rgb(var(--c-accent))' }}>
+                      <Loader2 className="ic spin" aria-hidden="true" />
                       generating…
                     </span>
                   ) : null}
@@ -86,16 +92,17 @@ export function ImageSessionPicker({ onClose }: { onClose: () => void }) {
                   }
                 }}
                 aria-label={`Delete session "${session.label}"`}
-                className="icon-button absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                className="ib sm hdel"
+                style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)' }}
               >
-                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                <Trash2 className="ic" aria-hidden="true" />
               </button>
             </li>
           ))}
         </ul>
       )}
 
-      <p className="mt-1 border-t border-hairline px-2.5 pt-2 text-[11px] leading-relaxed text-faint">
+      <p style={{ margin: 0, borderTop: '1px solid var(--line)', padding: '8px 10px 0', fontSize: 11, lineHeight: 1.625, color: 'var(--faint)' }}>
         Temporary images auto-delete after the retention window. Images saved to the Gallery are
         permanent.
       </p>

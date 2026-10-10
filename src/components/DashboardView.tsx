@@ -2,18 +2,20 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
-  CheckCircle2,
+  Check,
   Cpu,
-  Database,
   Download,
-  KeyRound,
+  MessageSquare,
+  Plug,
+  RefreshCw,
   Upload,
 } from './icons';
 
 import { useStore } from '../store/useStore';
 import { exportAll, importBundle } from '../lib/exportImport';
+import { isMotionReduced } from '../lib/appearance';
 import { storage } from '../lib/storage';
-import { EmptyState, cx } from './ui';
+import { EmptyState } from './ui';
 import { UsageChart } from './UsageChart';
 
 /** Server-side ledger windows — the selector's options (1 day .. 12 months). */
@@ -27,6 +29,26 @@ const USAGE_WINDOW_LABELS: Record<string, string> = {
   '6mo': '6 months',
   '12mo': '12 months',
 };
+
+/** Design's range tabs are compact (1D / 7D / 3M) — long labels stay for prose. */
+const USAGE_TAB_LABELS: Record<string, string> = {
+  '1d': '1D',
+  '3d': '3D',
+  '7d': '7D',
+  '14d': '14D',
+  '30d': '30D',
+  '3mo': '3M',
+  '6mo': '6M',
+  '12mo': '12M',
+};
+
+/** Design's fmtN(): 12.4M / 340k / 950 — compact KPI and sumline numbers. */
+function fmtN(value: number): string {
+  if (value >= 1e9) return `${(value / 1e9).toFixed(2)}B`;
+  if (value >= 1e6) return `${(value / 1e6).toFixed(value >= 1e8 ? 0 : 1)}M`;
+  if (value >= 1e3) return `${(value / 1e3).toFixed(value >= 1e5 ? 0 : 1)}k`;
+  return String(Math.round(value));
+}
 
 interface UsageProvider {
   providerId: string;
@@ -59,7 +81,10 @@ function saveCheckedProviders(ids: string[]): void {
 }
 
 /**
- * Dashboard: environment health at a glance.
+ * Dashboard: environment health at a glance, laid out like
+ * design/dashboard/moriko-design-1-panel-dashboard.html — KPI cards with the
+ * count-up roll, a panel with range tabs over the grow-animated bar chart,
+ * the By provider / Provider status pair, and the on-device rows.
  *
  * The point is to answer "why can't I send a message?" without making the user
  * open a terminal.
@@ -76,7 +101,6 @@ export function DashboardView({ onOpenProviders }: { onOpenProviders: () => void
     return { turns };
   }, [conversations]);
 
-  // ── Usage ledger (server-side, per-provider, windowed) ──
   const [usage, setUsage] = useState<UsagePayload | null>(null);
   const [usageWindow, setUsageWindow] = useState<string>(() => storage.loadDashboardUsageWindow());
   const [checked, setChecked] = useState<string[]>(() => loadCheckedProviders());
@@ -85,8 +109,6 @@ export function DashboardView({ onOpenProviders }: { onOpenProviders: () => void
   const lastWindowRef = useRef(usageWindow);
   useEffect(() => {
     let cancelled = false;
-    // Only a WINDOW switch blanks the card; provider checkbox toggles refetch
-    // silently (the previous chart stays until the filtered series lands).
     if (lastWindowRef.current !== usageWindow) {
       lastWindowRef.current = usageWindow;
       setUsageLoading(true);
@@ -108,9 +130,6 @@ export function DashboardView({ onOpenProviders }: { onOpenProviders: () => void
   const providerLabel = (id: string): string =>
     providers.find((provider) => provider.id === id)?.label ?? id;
 
-  // Aggregation: every checked provider folds into the headline number; when
-  // nothing is checked (or all), the TOTAL is everything. The user can check
-  // any subset (provider A + B only, one provider, etc.).
   const selectedProviders = useMemo(() => {
     if (!usage) return [];
     if (checked.length === 0) return usage.providers;
@@ -141,7 +160,17 @@ export function DashboardView({ onOpenProviders }: { onOpenProviders: () => void
 
   const toggleChecked = (id: string) => {
     setChecked((previous) => {
-      const next = previous.includes(id) ? previous.filter((entry) => entry !== id) : [...previous, id];
+      let next: string[];
+      if (previous.length === 0) {
+        // Nothing stored = every row included (totals unfiltered). First click
+        // switches to an explicit subset that excludes exactly the clicked
+        // row, so the checkbox always reflects what the design promises.
+        next = (usage?.providers ?? [])
+          .map((entry) => entry.providerId)
+          .filter((providerId) => providerId !== id);
+      } else {
+        next = previous.includes(id) ? previous.filter((entry) => entry !== id) : [...previous, id];
+      }
       saveCheckedProviders(next);
       return next;
     });
@@ -149,19 +178,27 @@ export function DashboardView({ onOpenProviders }: { onOpenProviders: () => void
 
   const ready = providers.filter((provider) => provider.hasServerKey);
   const missing = providers.filter((provider) => !provider.hasServerKey);
+  const keyRatio = providers.length > 0 ? (ready.length / providers.length) * 100 : 0;
+
+  /** Design's .spot — an accent radial follows the pointer inside a KPI card. */
+  const handleSpotMove = (event: React.PointerEvent<HTMLDivElement>): void => {
+    const card = (event.target as HTMLElement).closest<HTMLElement>('.spot');
+    if (!card) return;
+    const box = card.getBoundingClientRect();
+    card.style.setProperty('--mx', `${event.clientX - box.left}px`);
+    card.style.setProperty('--my', `${event.clientY - box.top}px`);
+  };
 
   return (
-    <div className="mx-auto w-full max-w-3xl px-6 py-10">
-      <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
+    <div className="page wide view-enter">
+      <header className="page-head">
         <div>
-          <h2 className="text-2xl font-normal tracking-tight text-ink">Dashboard</h2>
-          <p className="mt-1 text-sm text-muted">
-            Local workspace status. Nothing here leaves your machine.
-          </p>
+          <h2>Dashboard</h2>
+          <p>Local workspace status. Nothing here leaves your machine.</p>
         </div>
-        <div className="flex gap-1.5">
-          <label className="pill-button cursor-pointer border border-hairline text-[12px] text-muted hover:text-ink">
-            <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+        <div className="acts">
+          <label className="btn ghost" style={{ cursor: 'pointer' }}>
+            <Upload className="ic" aria-hidden="true" />
             Import
             <input
               type="file"
@@ -177,263 +214,292 @@ export function DashboardView({ onOpenProviders }: { onOpenProviders: () => void
           <button
             type="button"
             onClick={() => void exportAll()}
-            className="pill-button border border-hairline text-[12px] text-muted hover:text-ink"
+            className="btn ghost"
           >
-            <Download className="h-3.5 w-3.5" aria-hidden="true" />
+            <Download className="ic" aria-hidden="true" />
             Export
           </button>
         </div>
       </header>
 
       {providersError ? (
-        <div className="mb-6 rounded-card border border-danger/40 bg-danger/5 p-4">
-          <div className="flex items-start gap-2.5">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-danger" aria-hidden="true" />
+        <div className="card" style={{ marginBottom: 24, padding: 16, borderColor: 'rgb(var(--c-danger) / 0.4)', background: 'rgb(var(--c-danger) / 0.05)' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+            <AlertTriangle className="ic" style={{ marginTop: 2, color: 'rgb(var(--c-danger))' }} aria-hidden="true" />
             <div>
-              <p className="text-sm font-medium text-danger">The local proxy is unreachable</p>
-              <p className="mt-1 text-[13px] text-muted">{providersError}</p>
-              <p className="mt-2 text-[12px] text-muted">
-                Start it with <code className="font-mono">npm run dev</code>, then reload.
+              <p style={{ margin: 0, fontSize: 14, fontWeight: 500, color: 'rgb(var(--c-danger))' }}>The local proxy is unreachable</p>
+              <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--muted)' }}>{providersError}</p>
+              <p style={{ margin: '8px 0 0', fontSize: 12, color: 'var(--muted)' }}>
+                Start it with <code style={{ fontFamily: 'var(--f-mono)' }}>npm run dev</code>, then reload.
               </p>
             </div>
           </div>
         </div>
       ) : null}
 
-      <div className="grid gap-3 sm:grid-cols-3">
-        <StatCard
-          icon={<Cpu className="h-4 w-4" />}
-          label="Providers ready"
-          value={`${ready.length}/${providers.length}`}
-          tone={ready.length > 0 ? 'ok' : 'warn'}
-        />
-        <StatCard
-          icon={<Database className="h-4 w-4" />}
-          label="Conversations"
-          value={String(conversations.length)}
-          hint={`${stats.turns} turns`}
-          tone="neutral"
-        />
-        <StatCard
-          icon={<Activity className="h-4 w-4" />}
-          label="Tokens used"
-          value={usageLoading ? '…' : selectedTotal.toLocaleString()}
-          hint={usage ? `${USAGE_WINDOW_LABELS[usage.window] ?? usageWindow} · ${selectedRequests} runs · persisted` : 'from the on-disk usage ledger'}
-          tone="neutral"
-        />
+      <div className="kpis" onPointerMove={handleSpotMove}>
+        <Kpi icon={<Plug className="ic" aria-hidden="true" />} label="Providers ready" hint={`of ${providers.length} configured`}>
+          <CountUp value={ready.length} />
+        </Kpi>
+        <Kpi icon={<MessageSquare className="ic" aria-hidden="true" />} label="Conversations" hint={`${stats.turns} turns stored`}>
+          <CountUp value={conversations.length} />
+        </Kpi>
+        <Kpi
+          icon={<Activity className="ic" aria-hidden="true" />}
+          label="Tokens"
+          hint={usage ? `last ${USAGE_WINDOW_LABELS[usage.window] ?? usageWindow} · persisted` : 'from the on-disk usage ledger'}
+        >
+          <CountUp value={selectedTotal} pending={usageLoading} format={fmtN} />
+        </Kpi>
+        <Kpi
+          icon={<RefreshCw className="ic" aria-hidden="true" />}
+          label="Runs"
+          hint={usage ? `${selectedProviders.length} provider${selectedProviders.length === 1 ? '' : 's'} included` : 'from the on-disk usage ledger'}
+        >
+          <CountUp value={selectedRequests} pending={usageLoading} />
+        </Kpi>
       </div>
 
-      {/* ── TOKEN ACCUMULATION — windowed, per-provider, flexible aggregation ── */}
-      <section className="mt-8">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-[13px] font-semibold text-ink">Token usage</h3>
-          <div className="flex flex-wrap gap-1" role="tablist" aria-label="Usage window">
+      <section className="panel">
+        <div className="ph">
+          <div>
+            <h3>Token usage</h3>
+            {usage && selectedProviders.length > 0 ? (
+              <p className="sumline">
+                {fmtN(selectedTotal)} tokens · {selectedRequests} runs · prompt {fmtN(selectedBreakdown.prompt)} · output {fmtN(selectedBreakdown.completion)}
+                {selectedBreakdown.cacheRead > 0 ? ` · cache ${fmtN(selectedBreakdown.cacheRead)}` : ''}
+              </p>
+            ) : null}
+          </div>
+          <div className="tabs" role="tablist" aria-label="Usage window">
             {(usage?.windows ?? Object.keys(USAGE_WINDOW_LABELS)).map((key) => (
               <button
                 key={key}
                 type="button"
-                aria-pressed={usageWindow === key}
+                role="tab"
+                aria-selected={usageWindow === key}
                 onClick={() => setUsageWindow(key)}
-                className={cx(
-                  'rounded px-2 py-0.5 text-[11px] font-medium transition-colors',
-                  usageWindow === key ? 'bg-accent text-on-accent' : 'text-faint hover:text-ink',
-                )}
+                className="tab"
               >
-                {USAGE_WINDOW_LABELS[key] ?? key}
+                {USAGE_TAB_LABELS[key] ?? key}
               </button>
             ))}
           </div>
         </div>
 
-        {usageLoading ? (
-          <p className="text-[12.5px] text-muted">Loading usage…</p>
+        {usageLoading && !usage ? (
+          <p className="hint2">Loading usage…</p>
         ) : !usage || usage.providers.length === 0 ? (
-          <p className="rounded-card border border-hairline bg-surface px-4 py-3 text-[12.5px] text-muted">
-            No usage recorded in this window yet. Every run reports usage here — per provider,
-            persisted on disk, surviving provider switches and chat clears.
-          </p>
-        ) : (
-          <div className="overflow-hidden rounded-card border border-hairline bg-surface">
-            {/* Headline: the SELECTED aggregation (all by default, or the
-                user's checked subset). */}
-            <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-hairline px-4 py-3">
-              <div>
-                <p className="text-2xl font-normal tabular-nums text-ink">{selectedTotal.toLocaleString()}</p>
-                <p className="text-[11px] text-faint">
-                  tokens · {selectedRequests} runs · {selectedProviders.length}/{usage.providers.length} providers
-                </p>
-              </div>
-              <div className="text-right text-[11px] tabular-nums text-faint">
-                <p>Prompt {selectedBreakdown.prompt.toLocaleString()} · Output {selectedBreakdown.completion.toLocaleString()}</p>
-                {selectedBreakdown.cacheRead > 0 ? <p>Cache hits {selectedBreakdown.cacheRead.toLocaleString()}</p> : null}
-              </div>
-            </div>
-
-            {}
-            {usage.daily && usage.daily.length > 0 ? <UsageChart days={usage.daily} /> : null}
-
-            {/* Per-provider rows with aggregation checkboxes. */}
-            <ul>
-              {usage.providers.map((entry) => (
-                <li
-                  key={entry.providerId}
-                  className="flex items-center gap-3 border-b border-hairline px-4 py-2.5 last:border-b-0"
-                >
-                  <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5">
-                    <input
-                      type="checkbox"
-                      checked={checked.includes(entry.providerId)}
-                      onChange={() => toggleChecked(entry.providerId)}
-                      className="h-3.5 w-3.5 shrink-0 accent-[rgb(var(--c-accent))]"
-                      aria-label={`Include ${providerLabel(entry.providerId)} in the total`}
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[12.5px] font-medium text-ink">
-                        {providerLabel(entry.providerId)}
-                      </span>
-                      <span className="block text-[10.5px] text-faint">
-                        {entry.requests} runs · prompt {entry.prompt.toLocaleString()} · output {entry.completion.toLocaleString()}
-                        {entry.cacheRead > 0 ? ` · cache ${entry.cacheRead.toLocaleString()}` : ''}
-                      </span>
-                    </span>
-                  </label>
-                  <span className="shrink-0 text-[13px] tabular-nums text-muted">{entry.total.toLocaleString()}</span>
-                </li>
-              ))}
-            </ul>
-            {checked.length > 0 && checked.length < usage.providers.length ? (
-              <p className="border-t border-hairline px-4 py-2 text-[10.5px] text-faint">
-                Total folds {checked.length} checked provider{checked.length === 1 ? '' : 's'} — uncheck all to include everything.
-              </p>
-            ) : null}
-          </div>
-        )}
-      </section>
-
-      <section className="mt-8">
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-[13px] font-semibold text-ink">Provider status</h3>
-          <button
-            type="button"
-            onClick={onOpenProviders}
-            className="text-[12px] font-medium text-accent hover:underline"
-          >
-            Manage
-          </button>
-        </div>
-
-        {providers.length === 0 ? (
           <EmptyState
-            icon={<Cpu className="h-5 w-5" />}
-            title="No providers loaded"
-            description="The proxy exposes built-in providers automatically. Check that it is running."
+            icon={<Activity className="ic" />}
+            title="No usage in this window yet"
+            description="Every run reports usage here — per provider, persisted on disk, surviving provider switches and chat clears."
           />
         ) : (
-          <ul className="space-y-1.5">
-            {providers.map((provider) => (
-              <li
-                key={provider.id}
-                className={cx(
-                  'flex items-center gap-3 rounded-card border bg-surface px-3.5 py-2.5',
-                  provider.id === providerId ? 'border-accent/50' : 'border-hairline',
-                )}
-              >
-                <span aria-hidden="true">
-                  {provider.hasServerKey ? (
-                    <CheckCircle2 className="h-4 w-4 text-success" />
-                  ) : (
-                    <KeyRound className="h-4 w-4 text-warning" />
-                  )}
-                </span>
-
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-[13px] font-medium text-ink">
-                    {provider.label}
-                    {provider.id === providerId ? (
-                      <span className="ml-2 text-[11px] font-normal text-accent">active</span>
-                    ) : null}
-                  </p>
-                  <p className="truncate font-mono text-[11px] text-faint">{provider.baseUrl}</p>
-                </div>
-
-                {}
-                <span
-                  className={cx(
-                    'shrink-0 rounded px-2 py-0.5 text-[11px]',
-                    provider.hasServerKey
-                      ? 'bg-success/15 text-success'
-                      : 'bg-warning/15 text-warning',
-                  )}
-                >
-                  {provider.hasServerKey ? 'Ready' : 'Key required'}
-                </span>
-              </li>
-            ))}
-          </ul>
+          <UsageChart days={usage.daily ?? []} />
         )}
-
-        {missing.length > 0 ? (
-          <div className="mt-4 rounded-card border border-hairline bg-surface p-4">
-            <p className="text-[13px] font-medium text-ink">
-              {missing.length} provider{missing.length === 1 ? '' : 's'} need a key
-            </p>
-            <p className="mt-1 text-[12.5px] leading-relaxed text-muted">
-              Add them to <code className="font-mono">.env</code> and restart the server, or paste a
-              key per browser in Configuration → Add key.
-            </p>
-          </div>
-        ) : null}
       </section>
 
-      <section className="mt-8">
-        <h3 className="mb-3 text-[13px] font-semibold text-ink">Device storage</h3>
-        <dl className="space-y-1.5 rounded-card border border-hairline bg-surface px-4 py-3 text-[12.5px]">
-          <Row label="Device store" value="On Your Computer" />
-          <Row label="Conversations" value={`${conversations.length} loaded`} />
-          <Row
-            label="Provider keys"
-            value={`${providers.filter((p) => p.hasServerKey).length} in the device vault`}
-          />
-          <Row label="Custom providers" value={`${providers.filter((p) => !p.builtIn).length} stored server-side`} />
-        </dl>
+      <div className="grid2">
+        <section className="panel">
+          <div className="ph">
+            <div>
+              <h3>By provider</h3>
+              <p>Toggle a provider to include it in totals.</p>
+            </div>
+          </div>
+          {usage && usage.providers.length > 0 ? (
+            <div>
+              {usage.providers.map((entry) => {
+                const included = checked.length === 0 || checked.includes(entry.providerId);
+                const maxTotal = Math.max(...usage.providers.map((row) => row.total));
+                return (
+                  <div
+                    key={entry.providerId}
+                    className={included ? 'urow' : 'urow off'}
+                    role="checkbox"
+                    tabIndex={0}
+                    aria-checked={included}
+                    onClick={() => toggleChecked(entry.providerId)}
+                    onKeyDown={(event) => {
+                      if (event.key === ' ' || event.key === 'Enter') {
+                        event.preventDefault();
+                        toggleChecked(entry.providerId);
+                      }
+                    }}
+                  >
+                    <span className="ck">
+                      <Check className="ic" aria-hidden="true" />
+                    </span>
+                    <span className="ub2">
+                      <b>{providerLabel(entry.providerId)}</b>
+                      <span className="ubar">
+                        <i
+                          style={
+                            { '--w': `${maxTotal > 0 ? (entry.total / maxTotal) * 100 : 0}%` } as React.CSSProperties
+                          }
+                        />
+                      </span>
+                      <small>
+                        {entry.requests} runs · prompt {fmtN(entry.prompt)} · output {fmtN(entry.completion)}
+                        {entry.cacheRead > 0 ? ` · cache ${fmtN(entry.cacheRead)}` : ''}
+                      </small>
+                    </span>
+                    <span className="uv">{fmtN(entry.total)}</span>
+                  </div>
+                );
+              })}
+              {checked.length > 0 && checked.length < usage.providers.length ? (
+                <p className="hint2">
+                  Total folds {checked.length} checked provider{checked.length === 1 ? '' : 's'} — uncheck all to include everything.
+                </p>
+              ) : null}
+            </div>
+          ) : (
+            <p className="hint2">No usage recorded in this window yet.</p>
+          )}
+        </section>
+
+        <section className="panel">
+          <div className="ph">
+            <div>
+              <h3>Provider status</h3>
+              <p>{ready.length} of {providers.length} ready</p>
+            </div>
+            <button type="button" onClick={onOpenProviders} className="btn xs ghost">
+              Manage
+            </button>
+          </div>
+
+          {providers.length === 0 ? (
+            <EmptyState
+              icon={<Cpu className="ic" />}
+              title="No providers loaded"
+              description="The proxy exposes built-in providers automatically. Check that it is running."
+            />
+          ) : (
+            <div>
+              {providers.map((provider) => (
+                <div key={provider.id} className="prow">
+                  <span className="pav" aria-hidden="true">{provider.label.slice(0, 2)}</span>
+                  <span className="min0">
+                    <b>{provider.label}</b>
+                    <span>{provider.baseUrl}</span>
+                  </span>
+                  {provider.id === providerId ? <span className="cap a">active</span> : null}
+                  {provider.hasServerKey ? (
+                    <span className="stat ok">Ready</span>
+                  ) : (
+                    <button type="button" className="stat req" onClick={onOpenProviders}>
+                      Key required
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {missing.length > 0 ? (
+            <p className="hint2">
+              {missing.length} provider{missing.length === 1 ? '' : 's'} need a key — add them to{' '}
+              <code>.env</code> and restart the server, or paste a key per browser in Configuration → Add key.
+            </p>
+          ) : null}
+        </section>
+      </div>
+
+      <section className="panel">
+        <div className="ph">
+          <div>
+            <h3>On this device</h3>
+            <p>Stored on your machine — nothing here leaves it.</p>
+          </div>
+        </div>
+        <div className="drow">
+          <span>Device store</span>
+          <b>On your computer</b>
+        </div>
+        <div className="drow">
+          <span>Conversations</span>
+          <b>{conversations.length} loaded</b>
+        </div>
+        <div className="drow">
+          <span>Provider keys</span>
+          <span className="meter">
+            <i style={{ '--w': `${keyRatio}%` } as React.CSSProperties} />
+          </span>
+          <b>{ready.length} / {providers.length}</b>
+        </div>
+        <div className="drow">
+          <span>Custom providers</span>
+          <b>{providers.filter((provider) => !provider.builtIn).length} stored</b>
+        </div>
       </section>
     </div>
   );
 }
 
-function StatCard({
+/** Design's KPI card: .kpi.spot with .kl label, .kv value, .ks hint. */
+function Kpi({
   icon,
   label,
-  value,
   hint,
-  tone,
+  children,
 }: {
   icon: React.ReactNode;
   label: string;
-  value: string;
-  hint?: string;
-  tone: 'ok' | 'warn' | 'neutral';
+  hint: string;
+  children: React.ReactNode;
 }) {
-  const toneClass =
-    tone === 'ok' ? 'text-success' : tone === 'warn' ? 'text-warning' : 'text-muted';
-
   return (
-    <div className="rounded-card border border-hairline bg-surface p-4">
-      <div className={cx('mb-2 flex items-center gap-2', toneClass)}>
-        <span aria-hidden="true">{icon}</span>
-        <span className="text-[11px] font-semibold uppercase tracking-wider">{label}</span>
-      </div>
-      <p className="text-2xl font-normal tabular-nums text-ink">{value}</p>
-      {hint ? <p className="mt-0.5 text-[11px] text-faint">{hint}</p> : null}
+    <div className="kpi spot">
+      <span className="kl">
+        {icon}
+        {label}
+      </span>
+      <b className="kv">{children}</b>
+      <span className="ks">{hint}</span>
     </div>
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex justify-between gap-3">
-      <dt className="text-faint">{label}</dt>
-      <dd className="text-right text-muted">{value}</dd>
-    </div>
-  );
+/**
+ * Design's countUp(): a 700ms ease-out-cubic roll from the previous value, so
+ * KPI numbers animate up when data (or the range) changes instead of jumping.
+ * Honors the reduce setting — an explicit choice or the OS preference.
+ */
+function CountUp({
+  value,
+  pending,
+  format,
+}: {
+  value: number;
+  pending?: boolean;
+  format?: (value: number) => string;
+}) {
+  const reduceMotion = useStore((state) => state.reduceMotion);
+  const formatValue = format ?? ((number: number) => Math.round(number).toLocaleString('en-US'));
+  const lastRef = useRef(0);
+  const [shown, setShown] = useState(0);
+
+  useEffect(() => {
+    if (pending) return;
+    const from = lastRef.current;
+    lastRef.current = value;
+    if (from === value || isMotionReduced(reduceMotion)) {
+      setShown(value);
+      return;
+    }
+    let frame = 0;
+    const start = performance.now();
+    const step = (now: number): void => {
+      const k = Math.min(1, (now - start) / 700);
+      setShown(from + (value - from) * (1 - Math.pow(1 - k, 3)));
+      if (k < 1) frame = requestAnimationFrame(step);
+    };
+    frame = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(frame);
+  }, [value, pending, reduceMotion]);
+
+  return <>{pending ? '…' : formatValue(shown)}</>;
 }

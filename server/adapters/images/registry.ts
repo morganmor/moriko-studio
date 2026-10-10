@@ -10,9 +10,9 @@
 
 import type { ImageAdapter, ImageCredentials } from './types.js';
 import { createDeclarativeAdapter, type DeclarativeImageConfig } from './declarative.js';
+import { comfyuiAdapter } from './comfyui.js';
 import { modelscopeAdapter } from './modelscope.js';
 import { openaiSyncAdapter } from './openaiSync.js';
-import { civitaiAdapter } from './civitai.js';
 
 const registry = new Map<string, ImageAdapter>();
 
@@ -28,9 +28,9 @@ export function listImageAdapterIds(): string[] {
   return [...registry.keys()];
 }
 
+registerImageAdapter(comfyuiAdapter);
 registerImageAdapter(modelscopeAdapter);
 registerImageAdapter(openaiSyncAdapter);
-registerImageAdapter(civitaiAdapter);
 
 /** Optional image-routing fields on a stored provider record. */
 export interface ImageProviderSelection {
@@ -43,7 +43,11 @@ export interface ImageProviderSelection {
  * async-task flow; every other gateway is assumed OpenAI-shaped (sync).
  */
 export function defaultAdapterIdFor(baseUrl: string): string {
-  return /modelscope/i.test(baseUrl) ? 'modelscope-async' : 'openai-sync';
+  if (/modelscope/i.test(baseUrl)) return 'modelscope-async';
+  // ComfyUI: localhost/127.0.0.1 on port 8188, or has "comfyui" in URL
+  if (/comfyui/i.test(baseUrl)) return 'comfyui-local';
+  if (/^https?:\/\/(127\.0\.0\.1|localhost):8188/i.test(baseUrl)) return 'comfyui-local';
+  return 'openai-sync';
 }
 
 /**

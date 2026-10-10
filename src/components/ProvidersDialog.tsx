@@ -2,15 +2,21 @@ import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Check,
+  Copy,
   Download,
+  Eye,
+  EyeOff,
   ExternalLink,
+  Loader2,
   Pencil,
   Plus,
   RefreshCw,
+  Search,
   Server,
   Trash2,
   Upload,
   X,
+  Zap,
 } from './icons';
 
 import {
@@ -98,8 +104,22 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
    * decides what lands instead of the fetch dumping every id in at once.
    */
   const [modelPicker, setModelPicker] = useState<{ models: string[]; target: 'draft' | 'builtin' } | null>(null);
+  /** Left pane: provider search query ("Cari provider"). */
+  const [query, setQuery] = useState('');
+  /** API key field reveal toggle (right pane). */
+  const [showKey, setShowKey] = useState(false);
+  /** "Test" connectivity probe result: Connected · N ms / Connection failed. */
+  const [testResult, setTestResult] = useState<{ ok: boolean; ms: number; error?: string } | null>(null);
+  const [testing, setTesting] = useState(false);
+  /** Base-URL copy feedback (icon flips to a check briefly). */
+  const [copied, setCopied] = useState(false);
+  /** API-key copy feedback (icon flips to a check briefly). */
+  const [keyCopied, setKeyCopied] = useState(false);
+  const activeModel = useStore((state) => state.model);
 
   const selected = providers.find((entry) => entry.id === selectedId);
+  /** Key currently typed in the field (built-ins keep their own draft). */
+  const keyValue = selected ? (selected.builtIn ? builtInKey : draft.apiKey) : '';
 
   useEffect(() => {
     if (!selected) return;
@@ -117,10 +137,60 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
     });
     setEditing(false);
     setConfirmDelete(false);
+    setShowKey(false);
+    setTestResult(null);
+    setCopied(false);
   }, [selected]);
 
   const refresh = async () => {
     await loadProviders();
+  };
+
+  /**
+   * Connectivity "Test": round-trips /models through the server proxy and
+   * measures the wall time — the right pane's "Connected · N ms" line.
+   */
+  const runTest = async () => {
+    if (!selected) return;
+    setTesting(true);
+    setTestResult(null);
+    const started = performance.now();
+    try {
+      await fetchRemoteModels(selected.id);
+      setTestResult({ ok: true, ms: Math.round(performance.now() - started) });
+    } catch (error) {
+      setTestResult({
+        ok: false,
+        ms: Math.round(performance.now() - started),
+        error: error instanceof Error ? error.message : undefined,
+      });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  /** Copies the selected provider's base URL; check icon for 1.6s. */
+  const copyUrl = async () => {
+    if (!selected) return;
+    try {
+      await navigator.clipboard.writeText(selected.baseUrl);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  /** Copies the typed API key; check icon for 1.6s. */
+  const copyKey = async () => {
+    if (!keyValue) return;
+    try {
+      await navigator.clipboard.writeText(keyValue);
+      setKeyCopied(true);
+      window.setTimeout(() => setKeyCopied(false), 1600);
+    } catch {
+      setKeyCopied(false);
+    }
   };
 
   /** Saves (or clears) the UI-supplied key, or edits model ids, for a built-in. */
@@ -269,8 +339,6 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
   const discoverModels = async () => {
     setLoadingModels(true);
     try {
-      // Draft-first: a draft with an endpoint probes statelessly (no save
-      // needed); a SAVED custom provider falls back to its stored id.
       const models = draft.baseUrl.trim()
         ? await probeRemoteModels({
             baseUrl: draft.baseUrl.trim(),
@@ -334,103 +402,140 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
       open={open}
       onClose={onClose}
       title="Providers"
-      description="Built-in providers take the API key you paste below; custom ones you add here are stored by the local server."
-      size="max-w-4xl"
+      description="Select or add provider"
+      size="wide"
       footer={
-        <>
-          <button
-            type="button"
-            className="pill-button text-muted hover:text-ink"
-            onClick={onClose}
-          >
-            Close
-          </button>
-          {editing ? (
-            <button
-              type="button"
-              onClick={save}
-              disabled={saving}
-              className="pill-button bg-accent text-accent-ink"
-            >
-              {saving ? 'Saving…' : 'Save provider'}
-            </button>
-          ) : selected && !selected.builtIn ? (
-            <button
-              type="button"
-              onClick={() => setEditing(true)}
-              className="pill-button bg-accent text-accent-ink"
-            >
-              <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
-              Edit
-            </button>
-          ) : null}
-        </>
+        <button type="button" className="btn ghost" onClick={onClose}>
+          Close
+        </button>
       }
     >
-      {/* 2B: the two panes scroll INDEPENDENTLY, each under its own ceiling.
-          (A grid-level max-h + overflow-hidden CLIPPED the content instead of
-          scrolling it — the row track stayed content-sized, so the inner
-          overflow never engaged and the bottom was unreachable.) */}
-      <div className="grid items-start gap-4 md:grid-cols-[220px_1fr]">
+      {}
+      <div className={cx('card', 'md:grid2col')} style={{ padding: 0, gap: 0 }}>
         {}
-        <div className="flex max-h-[70vh] flex-col gap-1.5">
+        {/* Kiri: sidebar katalog (referensi .side) — cari, grup, daftar, tambah. */}
+        <aside
+          className="prov-side"
+          style={{
+            display: 'flex',
+            maxHeight: '70vh',
+            minHeight: 0,
+            flexDirection: 'column',
+            gap: 10,
+            padding: 12,
+            minWidth: 0,
+          }}
+        >
+          {/* Search + refresh — baris atas (referensi: "Cari provider" + ikon) */}
+          <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+            <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+              <Search
+                className="ic"
+                aria-hidden="true"
+                style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--faint)', pointerEvents: 'none' }}
+              />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Cari provider"
+                aria-label="Cari provider"
+                className="field"
+                style={{ minWidth: 0, fontSize: 12.5, paddingLeft: 32, height: 36 }}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={refresh}
+              className="ib"
+              aria-label="Refresh provider list"
+              style={{ flexShrink: 0, width: 36, height: 36, border: '1px solid var(--line)', borderRadius: 'var(--r-sm)' }}
+            >
+              <RefreshCw className="ic" aria-hidden="true" />
+            </button>
+          </div>
+
+          {(() => {
+            const needle = query.trim().toLowerCase();
+            const visible = needle
+              ? providers.filter((provider) => provider.label.toLowerCase().includes(needle))
+              : providers;
+            const groups: Array<{ label: string; items: typeof providers }> = [
+              { label: 'Built-in', items: visible.filter((provider) => provider.builtIn) },
+              { label: 'Custom', items: visible.filter((provider) => !provider.builtIn) },
+            ];
+            return (
+              <ul style={{ minHeight: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 10, overflowY: 'auto', paddingRight: 2, margin: 0, listStyle: 'none' }}>
+                {groups.map((group) => (group.items.length > 0 ? (
+                  <li key={group.label} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <p style={{ margin: '4px 8px 4px', fontSize: 11, fontWeight: 500, color: 'var(--faint)' }}>
+                      {group.label}
+                    </p>
+                    {group.items.map((provider) => {
+                      const hasKey = providerHasKey(provider);
+                      return (
+                        <button
+                          key={provider.id}
+                          type="button"
+                          onClick={() => setSelectedId(provider.id)}
+                          className={cx('mi', provider.id === selectedId && 'on')}
+                          style={{
+                            alignItems: 'center',
+                            gap: 10,
+                            padding: '8px 10px',
+                            border: '1px solid',
+                            borderRadius: 'var(--r-sm)',
+                            borderColor: provider.id === selectedId ? 'var(--line)' : 'transparent',
+                            background: provider.id === selectedId ? 'rgb(var(--c-ink) / 0.05)' : undefined,
+                          }}
+                        >
+                          <span
+                            aria-hidden="true"
+                            style={{ flex: '0 0 auto', width: 8, height: 8, borderRadius: '50%', background: hasKey ? 'rgb(var(--c-ok))' : 'rgb(var(--c-warn))' }}
+                          />
+                          <span style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                            <b style={{ fontSize: 12.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {provider.label}
+                            </b>
+                            <small style={{ fontSize: 10.5, fontWeight: 400, color: 'var(--faint)' }}>
+                              {hasKey ? 'Ready' : 'Needs key'}
+                            </small>
+                          </span>
+                          {provider.id === providerId ? (
+                            <Check className="ic mck" style={{ opacity: 1, flexShrink: 0 }} aria-label="In use" />
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </li>
+                ) : null))}
+                {visible.length === 0 ? (
+                  <li style={{ padding: '10px 6px', fontSize: 12, color: 'var(--faint)', textAlign: 'center' }}>
+                    Tidak ada provider yang cocok.
+                  </li>
+                ) : null}
+              </ul>
+            );
+          })()}
+
           <button
             type="button"
             onClick={() => startNew()}
-            className="flex w-full shrink-0 items-center gap-2 rounded-control border border-dashed border-hairline px-3 py-2 text-[13px] font-medium text-muted transition-colors hover:border-accent/50 hover:text-ink"
+            className="btn ghost"
+            style={{ width: '100%', flexShrink: 0, justifyContent: 'center', height: 36, fontSize: 12.5, fontWeight: 500 }}
           >
-            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+            <Plus className="ic" aria-hidden="true" />
             Add provider
           </button>
-
-          <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-0.5">
-            {providers.map((provider) => (
-              <li key={provider.id}>
-                <button
-                  type="button"
-                  onClick={() => setSelectedId(provider.id)}
-                  className={cx(
-                    'flex w-full items-center gap-2 rounded-control px-3 py-2 text-left text-[13px] transition-colors',
-                    provider.id === selectedId
-                      ? 'bg-elevated font-medium text-ink'
-                      : 'text-muted hover:bg-elevated/60 hover:text-ink',
-                  )}
-                >
-                  <span className="min-w-0 flex-1 truncate">{provider.label}</span>
-                  {provider.id === providerId ? (
-                    <Check className="h-3.5 w-3.5 shrink-0 text-success" aria-label="In use" />
-                  ) : null}
-                  {}
-                  <span
-                    className={cx(
-                      'shrink-0 rounded px-1.5 py-0.5 text-[10px]',
-                      providerHasKey(provider)
-                        ? 'bg-success/15 text-success'
-                        : 'bg-warning/15 text-warning',
-                    )}
-                  >
-                    {providerHasKey(provider) ? 'key' : 'no key'}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-
-          <button
-            type="button"
-            onClick={refresh}
-            className="pill-button w-full shrink-0 justify-center py-1.5 text-[12px] text-muted hover:text-ink"
-          >
-            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
-            Refresh
-          </button>
-        </div>
+        </aside>
 
         {}
-        <div className="max-h-[70vh] min-w-0 overflow-y-auto rounded-card border border-hairline bg-canvas p-4">
+        <div className="card prov-pane" style={{ maxHeight: '70vh', minWidth: 0, overflowY: 'auto', padding: 22, border: 'none', borderRadius: 0 }}>
           {editing ? (
-            <div className="space-y-3.5">
-              <div className="flex flex-wrap gap-1.5">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <h3 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: 'rgb(var(--c-ink))' }}>
+                {selected ? `Edit ${draft.label}` : 'Add provider'}
+              </h3>
+              <div className="chipset">
                 {QUICK_TEMPLATES.map((template) => (
                   <button
                     key={template.label}
@@ -442,14 +547,15 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
                         id: current.id,
                       }))
                     }
-                    className="rounded-full border border-hairline px-2.5 py-1 text-[11px] text-muted transition-colors hover:border-accent/50 hover:text-ink"
+                    className="sc"
+                    style={{ fontSize: 11 }}
                   >
                     {template.label}
                   </button>
                 ))}
               </div>
 
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid2">
                 <Field label="Display name" htmlFor="draft-label">
                   <input
                     id="draft-label"
@@ -489,7 +595,8 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
                   onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })}
                   placeholder="https://api.example.com/v1"
                   spellCheck={false}
-                  className="field font-mono text-[12.5px]"
+                  className="field"
+                  style={{ fontFamily: 'var(--f-mono)', fontSize: 12.5 }}
                 />
               </Field>
 
@@ -509,7 +616,8 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
                   onChange={(event) => setDraft({ ...draft, apiKey: event.target.value })}
                   placeholder={providerHasKey(selected) ? '•••••••• (stored)' : 'sk-…'}
                   autoComplete="off"
-                  className="field font-mono text-[12.5px]"
+                  className="field"
+                  style={{ fontFamily: 'var(--f-mono)', fontSize: 12.5 }}
                 />
               </Field>
 
@@ -518,17 +626,18 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
                 <button
                   type="button"
                   onClick={() => void clearStoredKey()}
-                  className="inline-flex items-center gap-1.5 text-[11.5px] font-medium text-danger transition-colors hover:underline"
+                  className="mi danger"
+                  style={{ display: 'inline-flex', width: 'auto', minHeight: 0, padding: '4px 6px', gap: 6, fontSize: 11.5, fontWeight: 500, textDecoration: 'underline' }}
                 >
-                  <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                  <Trash2 className="ic" aria-hidden="true" />
                   Remove stored key
                 </button>
               ) : null}
 
-              <div className="rounded-control border border-hairline bg-surface p-3">
-                <p className="field-label mb-2">Image generation (optional)</p>
+              <div className="card" style={{ padding: 12 }}>
+                <p className="field-label" style={{ marginBottom: 8 }}>Image generation (optional)</p>
 
-                <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid2">
                   <Field
                     label="Adapter"
                     htmlFor="draft-image-adapter"
@@ -579,30 +688,32 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
     "failedValue": "DONE_BAD"
   }
 }`}
-                      className="field font-mono text-[11.5px] leading-relaxed"
+                      className="field"
+                      style={{ fontFamily: 'var(--f-mono)', fontSize: 11.5, lineHeight: 1.625 }}
                     />
                   </Field>
                 ) : null}
               </div>
 
               <div>
-                <div className="mb-1.5 flex items-center justify-between">
-                  <span className="field-label mb-0">Models</span>
+                <div style={{ marginBottom: 6, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span className="field-label" style={{ marginBottom: 0 }}>Models</span>
                   <button
                     type="button"
                     onClick={discoverModels}
                     disabled={loadingModels}
-                    className="inline-flex items-center gap-1 text-[11px] font-medium text-accent hover:underline disabled:opacity-50"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 500, color: 'rgb(var(--c-accent))', textDecoration: 'underline', opacity: loadingModels ? 0.5 : 1 }}
                   >
                     <RefreshCw
-                      className={cx('h-3 w-3', loadingModels && 'animate-spin')}
+                      className={cx('ic', loadingModels && 'spin')}
+                      style={{ width: 12, height: 12 }}
                       aria-hidden="true"
                     />
                     Fetch from provider
                   </button>
                 </div>
 
-                <div className="flex gap-1.5">
+                <div style={{ display: 'flex', gap: 6 }}>
                   <input
                     value={modelInput}
                     onChange={(event) => setModelInput(event.target.value)}
@@ -614,22 +725,24 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
                     }}
                     placeholder="model-id"
                     aria-label="Add a model id"
-                    className="field font-mono text-[12.5px]"
+                    className="field"
+                    style={{ fontFamily: 'var(--f-mono)', fontSize: 12.5 }}
                   />
                   <button
                     type="button"
                     onClick={addModel}
-                    className="pill-button shrink-0 border border-hairline text-muted hover:text-ink"
+                    className="btn ghost"
+                    style={{ flexShrink: 0 }}
                   >
                     Add
                   </button>
                 </div>
 
                 {draft.models.length > 0 ? (
-                  <ul className="mt-2 flex flex-wrap gap-1.5">
+                  <ul className="chipset" style={{ margin: '8px 0 0', listStyle: 'none' }}>
                     {draft.models.map((model) => (
                       <li key={model}>
-                        <span className="inline-flex items-center gap-1.5 rounded-full border border-hairline bg-surface px-2.5 py-1 font-mono text-[11px] text-muted">
+                        <span className="att-chip" style={{ borderRadius: 999, height: 26, fontFamily: 'var(--f-mono)', fontSize: 11 }}>
                           {model}
                           <button
                             type="button"
@@ -640,7 +753,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
                               })
                             }
                             aria-label={`Remove ${model}`}
-                            className="text-faint transition-colors hover:text-danger"
+                            style={{ color: 'var(--faint)' }}
                           >
                             ×
                           </button>
@@ -649,298 +762,428 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
                     ))}
                   </ul>
                 ) : (
-                  <p className="mt-2 text-[11px] text-faint">
+                  <p style={{ margin: '8px 0 0', fontSize: 11, color: 'var(--faint)' }}>
                     No models yet. Add ids manually, or save and fetch them from the provider.
                   </p>
                 )}
               </div>
+
+              {/* Aksi form (referensi: Cancel + Save di kanan) */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                <button type="button" className="btn ghost" onClick={() => setEditing(false)}>
+                  Cancel
+                </button>
+                <button type="button" className="btn primary" onClick={() => void save()} disabled={saving}>
+                  {saving ? 'Saving…' : selected ? 'Save changes' : 'Add provider'}
+                </button>
+              </div>
             </div>
           ) : selected ? (
-            <div className="space-y-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <h3 className="text-sm font-semibold text-ink">{selected.label}</h3>
-                  <p className="mt-0.5 break-all font-mono text-[11.5px] text-faint">
-                    {selected.baseUrl}
-                  </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {/* Top: judul + badge + URL di kiri, aksi (Test/Edit/Use) di kanan */}
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <h3 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: 'rgb(var(--c-ink))' }}>{selected.label}</h3>
+                    <span
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 500,
+                        padding: '2px 8px',
+                        borderRadius: 6,
+                        color: providerHasKey(selected) ? 'rgb(var(--c-ok))' : 'rgb(var(--c-warn))',
+                        background: providerHasKey(selected) ? 'rgb(var(--c-ok) / 0.12)' : 'rgb(var(--c-warn) / 0.12)',
+                      }}
+                    >
+                      {providerHasKey(selected) ? 'Ready' : 'Needs key'}
+                    </span>
+                    {selected.id === providerId ? (
+                      <span
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 500,
+                          padding: '2px 8px',
+                          borderRadius: 6,
+                          color: 'rgb(var(--c-accent))',
+                          background: 'rgb(var(--c-accent) / 0.14)',
+                        }}
+                      >
+                        In use
+                      </span>
+                    ) : null}
+                  </div>
+                  {/* Base URL + copy (monospace, satu baris) */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 6 }}>
+                    <p style={{ margin: 0, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 320, fontFamily: 'var(--f-mono)', fontSize: 12, color: 'var(--muted)' }}>
+                      {selected.baseUrl}
+                    </p>
+                    <button
+                      type="button"
+                      className="ib"
+                      onClick={() => void copyUrl()}
+                      aria-label="Copy base URL"
+                      style={{ flexShrink: 0, width: 28, height: 28, background: 'transparent', border: 'none' }}
+                    >
+                      {copied
+                        ? <Check className="ic" style={{ color: 'rgb(var(--c-ok))' }} aria-hidden="true" />
+                        : <Copy className="ic" aria-hidden="true" />}
+                    </button>
+                    {selected.docsUrl ? (
+                      <a href={selected.docsUrl} target="_blank" rel="noopener noreferrer" className="ib" aria-label="Provider docs" style={{ width: 28, height: 28 }}>
+                        <ExternalLink className="ic" aria-hidden="true" />
+                      </a>
+                    ) : null}
+                  </div>
                 </div>
-                <span
-                  className={cx(
-                    'shrink-0 rounded px-2 py-0.5 text-[11px]',
-                    providerHasKey(selected)
-                      ? 'bg-success/15 text-success'
-                      : 'bg-warning/15 text-warning',
-                  )}
-                >
-                  {providerHasKey(selected) ? 'Ready' : 'Key required'}
-                </span>
+
+                {/* Aksi kanan (referensi: Test / Edit / Use this provider) */}
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className="btn sm ghost"
+                    onClick={() => void runTest()}
+                    disabled={testing}
+                  >
+                    {testing
+                      ? <Loader2 className="ic spin" aria-hidden="true" />
+                      : <Zap className="ic" aria-hidden="true" />}
+                    Test
+                  </button>
+                  {!selected.builtIn ? (
+                    <button type="button" className="btn sm ghost" onClick={() => setEditing(true)}>
+                      <Pencil className="ic" aria-hidden="true" />
+                      Edit
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProvider(selected.id);
+                      showNotice('provider.nowUsing', { label: selected.label });
+                    }}
+                    className={selected.id === providerId ? 'btn sm ghost' : 'btn sm primary'}
+                  >
+                    {selected.id === providerId ? <Check className="ic" aria-hidden="true" /> : null}
+                    {selected.id === providerId ? 'In use' : 'Use this provider'}
+                  </button>
+                </div>
               </div>
 
               {selected.note ? (
-                <p className="text-[12.5px] leading-relaxed text-muted">{selected.note}</p>
+                <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.625, color: 'var(--muted)' }}>{selected.note}</p>
               ) : null}
 
-              {}
-              {selected.builtIn ? (
-              <div className="rounded-control border border-hairline bg-surface p-3">
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <p className="field-label">API key</p>
+              {/* Status koneksi: Testing… / Connected · N ms / Connection failed */}
+              {testing ? (
+                <p
+                  role="status"
+                  style={{
+                    margin: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    fontSize: 13,
+                    color: 'var(--muted)',
+                  }}
+                >
+                  Testing connection…
+                </p>
+              ) : testResult ? (
+                <p
+                  role="status"
+                  style={{
+                    margin: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    fontSize: 13,
+                    fontWeight: 500,
+                    color: testResult.ok ? 'rgb(var(--c-ok))' : 'rgb(var(--c-danger))',
+                  }}
+                >
+                  {testResult.ok
+                    ? <Check className="ic" style={{ width: 14, height: 14 }} aria-hidden="true" />
+                    : <X className="ic" style={{ width: 14, height: 14 }} aria-hidden="true" />}
+                  {testResult.ok
+                    ? `Connected · ${testResult.ms} ms`
+                    : `Connection failed${testResult.error ? ` — ${testResult.error}` : ''}`}
+                </p>
+              ) : null}
+
+              {/* API key: input (eye toggle) + save + caption + remove */}
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                  <p className="field-label" style={{ margin: 0 }}>API key</p>
                   {selected.docsUrl ? (
-                    <a
-                      href={selected.docsUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-[11.5px] font-medium text-accent transition-colors hover:underline"
-                    >
+                    <a href={selected.docsUrl} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, fontWeight: 500, color: 'rgb(var(--c-accent))' }}>
                       How to get one
-                      <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                      <ExternalLink className="ic" style={{ width: 12, height: 12 }} aria-hidden="true" />
                     </a>
                   ) : null}
                 </div>
-                <div className="flex gap-1.5">
+                <div style={{ display: 'flex', gap: 6 }}>
                   <input
-                    type="password"
-                    value={builtInKey}
-                    onChange={(event) => setBuiltInKey(event.target.value)}
-                    placeholder={
-                      providerHasKey(selected) ? '•••••••• (stored)' : 'Paste your API key…'
-                    }
+                    type={showKey ? 'text' : 'password'}
+                    value={selected.builtIn ? builtInKey : draft.apiKey}
+                    onChange={(event) => {
+                      if (selected.builtIn) setBuiltInKey(event.target.value);
+                      else setDraft({ ...draft, apiKey: event.target.value });
+                    }}
+                    placeholder={providerHasKey(selected) ? '•••••••••••• (stored)' : selected.builtIn ? 'Paste your API key...' : 'sk-...'}
                     autoComplete="off"
                     spellCheck={false}
-                    className="field font-mono text-[12.5px]"
+                    aria-label="API key"
+                    className="field"
+                    style={{ flex: 1, minWidth: 0, fontFamily: 'var(--f-mono)', fontSize: 12.5 }}
                   />
                   <button
                     type="button"
-                    disabled={!builtInKey.trim() || saving}
-                    onClick={() => void patchBuiltIn({ apiKey: builtInKey.trim() }, `Key saved for ${selected.label}.`)}
-                    className="inline-flex shrink-0 items-center gap-1.5 rounded-control bg-accent px-3 py-2 text-[12px] font-medium text-canvas transition-opacity disabled:opacity-40"
+                    className="ib"
+                    onClick={() => setShowKey((value) => !value)}
+                    aria-label={showKey ? 'Hide API key' : 'Show API key'}
+                    style={{ flexShrink: 0, border: '1px solid var(--line)', borderRadius: 'var(--r-sm)', background: 'rgb(var(--c-field))' }}
                   >
-                    <Check className="h-3.5 w-3.5" aria-hidden="true" />
-                    Save
+                    {showKey ? <EyeOff className="ic" aria-hidden="true" /> : <Eye className="ic" aria-hidden="true" />}
                   </button>
-                </div>
-                <div className="mt-2 flex items-center justify-between gap-2">
-                  <p className="text-[11px] text-faint">
-                    Stored in ~/.moriko/api-keys.json — never sent to the browser.
-                  </p>
-                  {providerHasKey(selected) ? (
+                  <button
+                    type="button"
+                    className="ib"
+                    onClick={() => void copyKey()}
+                    aria-label="Copy API key"
+                    disabled={!keyValue}
+                    style={{ flexShrink: 0, border: '1px solid var(--line)', borderRadius: 'var(--r-sm)', background: 'rgb(var(--c-field))', opacity: keyValue ? 1 : 0.45 }}
+                  >
+                    {keyCopied
+                      ? <Check className="ic" style={{ color: 'rgb(var(--c-ok))' }} aria-hidden="true" />
+                      : <Copy className="ic" aria-hidden="true" />}
+                  </button>
+                  {keyValue ? (
                     <button
                       type="button"
+                      className="btn primary sm"
+                      style={{ flexShrink: 0 }}
                       disabled={saving}
-                      onClick={() => void patchBuiltIn({ apiKey: '' }, `Stored key removed from ${selected.label}.`)}
-                      className="inline-flex shrink-0 items-center gap-1 text-[11.5px] font-medium text-danger transition-colors hover:underline"
+                      onClick={() => {
+                        if (selected.builtIn) void patchBuiltIn({ apiKey: builtInKey.trim() }, `Key saved for ${selected.label}.`);
+                        else void save();
+                      }}
                     >
-                      <Trash2 className="h-3 w-3" aria-hidden="true" />
-                      Remove
+                      Save
                     </button>
                   ) : null}
                 </div>
 
-                {}
-                <div className="mt-3 border-t border-hairline pt-3">
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <p className="field-label">Model ids</p>
-                    {}
-                    {selected.builtIn && selected.kind === 'openai' ? (
+                <div style={{ marginTop: 6 }}>
+                  <p style={{ margin: 0, fontSize: 12, color: 'var(--faint)' }}>
+                    Stored in ~/.moriko/api-keys.json
+                  </p>
+                </div>
+              </div>
+
+              {/* Default model: chip aktif = accent solid + check (sesuai referensi) */}
+              <div>
+                <p className="field-label" style={{ marginBottom: 8 }}>Default model</p>
+                {selected.models.length > 0 ? (
+                  <ul className="chipset" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+                    {selected.models.map((name) => {
+                      const isActive = selected.id === providerId && name === activeModel;
+                      return (
+                        <li key={name}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setProvider(selected.id, name);
+                              showNotice('provider.modelSetTo', { model: name });
+                            }}
+                            className="sc"
+                            aria-pressed={isActive}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 6,
+                              height: 32,
+                              padding: '0 12px',
+                              borderRadius: 8,
+                              fontFamily: 'var(--f-mono)',
+                              fontSize: 13,
+                            }}
+                          >
+                            {isActive
+                              ? <Check className="ic" style={{ width: 12, height: 12 }} aria-hidden="true" />
+                              : null}
+                            {name}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : (
+                  <p style={{ margin: 0, fontSize: 12.5, color: 'var(--faint)' }}>
+                    Belum ada model. Tambahkan lewat Edit.
+                  </p>
+                )}
+              </div>
+
+              {/* Details: sel terpisah (referensi .grid3/.cell) */}
+              <div>
+                <p className="field-label" style={{ marginBottom: 8 }}>Details</p>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
+                  {(
+                    [
+                      ['Format', selected.kind],
+                      ['Origin', selected.builtIn ? 'Built-in' : 'Custom'],
+                      ['Image adapter', `${selected.imageAdapter || 'auto'}${selected.imageCapabilities ? ` · ${selected.imageCapabilities.execution}` : ''}`],
+                    ] as Array<[string, string]>
+                  ).map(([label, value]) => (
+                    <div
+                      key={label}
+                      style={{ minWidth: 0, padding: '10px 12px', borderRadius: 'var(--r-sm)', background: 'rgb(var(--c-field))' }}
+                    >
+                      <p style={{ margin: 0, fontSize: 12, color: 'var(--faint)' }}>{label}</p>
+                      <p style={{ margin: '4px 0 0', overflowWrap: 'break-word', fontSize: 13, color: 'rgb(var(--c-ink))' }}>{value}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+
+              {/* Model ids — manajemen katalog built-in (tetap ada) */}
+              {selected.builtIn ? (
+                <div className="card" style={{ padding: 12 }}>
+                  <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                    <p className="field-label" style={{ margin: 0 }}>Model ids</p>
+                    {selected.kind === 'openai' ? (
                       <button
                         type="button"
                         disabled={saving || fetchingModels}
                         onClick={() => void fetchLiveModels()}
-                        className="inline-flex items-center gap-1 text-[11.5px] font-medium text-accent transition-colors hover:underline disabled:opacity-40"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, fontWeight: 500, color: 'rgb(var(--c-accent))', textDecoration: 'underline', opacity: saving || fetchingModels ? 0.4 : 1 }}
                       >
-                        <RefreshCw className={cx('h-3 w-3', fetchingModels && 'animate-spin')} aria-hidden="true" />
+                        <RefreshCw className={cx('ic', fetchingModels && 'spin')} style={{ width: 12, height: 12 }} aria-hidden="true" />
                         Fetch latest models
                       </button>
                     ) : null}
                   </div>
-                  <div className="flex gap-1.5">
+                  <div style={{ display: 'flex', gap: 6 }}>
                     <input
                       value={builtInModelInput}
                       onChange={(event) => setBuiltInModelInput(event.target.value)}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter') {
                           event.preventDefault();
-                          const ids = builtInModelInput
-                            .split(/[,\n]/)
-                            .map((id) => id.trim())
-                            .filter(Boolean);
-                          if (ids.length > 0) {
-                            void patchBuiltIn({ addModels: ids }, 'Model ids added.');
-                          }
+                          const ids = builtInModelInput.split(/[,\n]/).map((id) => id.trim()).filter(Boolean);
+                          if (ids.length > 0) void patchBuiltIn({ addModels: ids }, 'Model ids added.');
                         }
                       }}
-                      placeholder="model-id-1, model-id-2, …"
+                      placeholder="model-id-1, model-id-2, ..."
                       autoComplete="off"
                       spellCheck={false}
-                      className="field font-mono text-[12.5px]"
+                      aria-label="Add model ids"
+                      className="field"
+                      style={{ fontFamily: 'var(--f-mono)', fontSize: 12.5 }}
                     />
                     <button
                       type="button"
                       disabled={!builtInModelInput.trim() || saving}
                       onClick={() => {
-                        const ids = builtInModelInput
-                          .split(/[,\n]/)
-                          .map((id) => id.trim())
-                          .filter(Boolean);
-                        if (ids.length > 0) {
-                          void patchBuiltIn({ addModels: ids }, 'Model ids added.');
-                        }
+                        const ids = builtInModelInput.split(/[,\n]/).map((id) => id.trim()).filter(Boolean);
+                        if (ids.length > 0) void patchBuiltIn({ addModels: ids }, 'Model ids added.');
                       }}
-                      className="inline-flex shrink-0 items-center gap-1.5 rounded-control bg-elevated px-3 py-2 text-[12px] font-medium text-ink transition-colors hover:bg-accent-soft disabled:opacity-40"
+                      className="btn sm"
+                      style={{ flexShrink: 0 }}
                     >
-                      <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                      <Plus className="ic" aria-hidden="true" />
                       Add
                     </button>
                   </div>
-                  <p className="mt-2 text-[11px] leading-relaxed text-faint">
-                    {selected.kind === 'openai' ? (
-                      <>&quot;Fetch latest models&quot; opens a picker of ids the catalogue does NOT have yet — you choose what to add; existing ids are never touched. Added ids merge and appear in the chat model picker.</>
-                    ) : (
-                      <>Added ids merge with the built-in list and appear in Image Studio&apos;s picker. For Tensor.Art: the number in a model page URL. For Civitai: a full AIR URN from a model page.</>
-                    )}
+                  <p style={{ margin: '8px 0 0', fontSize: 11, lineHeight: 1.625, color: 'var(--faint)' }}>
+                    {selected.kind === 'openai'
+                      ? '"Fetch latest models" opens a picker of ids the catalogue does NOT have yet — you choose what to add; existing ids are never touched. Added ids merge and appear in the chat model picker.'
+                      : <>Added ids merge with the built-in list and appear in Image Studio&apos;s picker.</>}
                   </p>
                 </div>
-              </div>
               ) : null}
 
-              <dl className="space-y-1.5 rounded-control border border-hairline bg-surface px-3 py-2.5 text-[12px]">
-                <div className="flex justify-between gap-3">
-                  <dt className="text-faint">Format</dt>
-                  <dd className="font-mono text-muted">{selected.kind}</dd>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <dt className="text-faint">Origin</dt>
-                  <dd className="text-muted">{selected.builtIn ? 'Built-in' : 'Custom'}</dd>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <dt className="text-faint">Key source</dt>
-                  <dd className="text-muted">
-                    {selected.hasServerKey
-                      ? selected.builtIn && !selected.userSuppliedKey
-                        ? '.env'
-                        : '~/.moriko/api-keys.json'
-                      : 'not configured'}
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <dt className="text-faint">Models</dt>
-                  <dd className="tabular-nums text-muted">{selected.models.length}</dd>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <dt className="text-faint">Image adapter</dt>
-                  <dd className="font-mono text-muted">
-                    {selected.imageAdapter ?? 'auto'}
-                    {selected.imageCapabilities
-                      ? ` · ${selected.imageCapabilities.execution}`
-                      : ''}
-                  </dd>
-                </div>
-              </dl>
-
-              <div className="flex flex-wrap gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setProvider(selected.id);
-                    showNotice('provider.nowUsing', { label: selected.label });
-                  }}
-                  className={cx(
-                    'pill-button border border-hairline text-[12px]',
-                    selected.id === providerId ? 'text-success' : 'text-muted hover:text-ink',
-                  )}
-                >
-                  <Check className="h-3.5 w-3.5" aria-hidden="true" />
-                  {selected.id === providerId ? 'In use' : 'Use this provider'}
-                </button>
-
-                {selected.docsUrl ? (
-                  <a
-                    href={selected.docsUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="pill-button border border-hairline text-[12px] text-muted hover:text-ink"
-                  >
-                    <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-                    Docs
-                  </a>
-                ) : null}
-              </div>
-
-              {selected.models.length > 0 ? (
-                <div>
-                  <p className="field-label">Suggested models</p>
-                  <ul className="flex flex-wrap gap-1.5">
-                    {selected.models.map((model) => (
-                      <li key={model}>
+              {/* Danger zone (referensi .zone): teks kiri + aksi merah kanan, konfirmasi inline */}
+              {!selected.builtIn || providerHasKey(selected) ? (
+                <div style={{ marginTop: 12, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
+                  {confirmDelete ? (
+                    <div
+                      style={{
+                        background: 'rgb(var(--c-danger) / 0.1)',
+                        border: '1px solid rgb(var(--c-danger) / 0.4)',
+                        borderRadius: 'var(--r-sm)',
+                        padding: '12px 14px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 12,
+                        flexWrap: 'wrap',
+                        fontSize: 13,
+                        color: 'rgb(var(--c-danger))',
+                      }}
+                    >
+                      <span>
+                        {selected.builtIn
+                          ? `Delete the saved key for ${selected.label}?`
+                          : `Delete ${selected.label} and its key? This action cannot be undone.`}
+                      </span>
+                      <span style={{ display: 'flex', gap: 8 }}>
+                        <button type="button" onClick={() => setConfirmDelete(false)} className="btn ghost sm">Cancel</button>
                         <button
                           type="button"
                           onClick={() => {
-                            setProvider(selected.id, model);
-                            showNotice('provider.modelSetTo', { model });
+                            if (selected.builtIn) {
+                              void patchBuiltIn({ apiKey: '' }, `Stored key removed from ${selected.label}.`);
+                              setConfirmDelete(false);
+                            } else {
+                              void remove().finally(() => setConfirmDelete(false));
+                            }
                           }}
-                          className="rounded-full border border-hairline bg-surface px-2.5 py-1 font-mono text-[11px] text-muted transition-colors hover:border-accent/50 hover:text-ink"
+                          className="btn sm"
+                          style={{ background: 'rgb(var(--c-danger))', color: '#fff', borderColor: 'transparent' }}
                         >
-                          {model}
+                          {selected.builtIn ? 'Remove' : 'Delete'}
                         </button>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-
-              {!selected.builtIn ? (
-                <div className="border-t border-hairline pt-3">
-                  {confirmDelete ? (
-                    <div className="flex items-center gap-2">
-                      <p className="flex-1 text-[12px] text-danger">
-                        Delete “{selected.label}”? This cannot be undone.
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => setConfirmDelete(false)}
-                        className="pill-button py-1 text-[12px] text-muted hover:text-ink"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={remove}
-                        className="pill-button bg-danger py-1 text-[12px] text-white"
-                      >
-                        Delete
-                      </button>
+                      </span>
                     </div>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={() => setConfirmDelete(true)}
-                      className="pill-button border border-danger/40 py-1 text-[12px] text-danger"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                      Delete provider
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', fontSize: 13, color: 'var(--muted)' }}>
+                      <span>
+                        {selected.builtIn
+                          ? 'Delete key from this device.'
+                          : 'Delete this provider from list.'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDelete(true)}
+                        className="btn sm ghost"
+                        style={{ color: 'rgb(var(--c-danger))', borderColor: 'rgb(var(--c-danger) / 0.45)' }}
+                      >
+                        <Trash2 className="ic" aria-hidden="true" />
+                        {selected.builtIn ? 'Remove key' : 'Delete provider'}
+                      </button>
+                    </div>
                   )}
                 </div>
               ) : null}
             </div>
           ) : (
-            <div className="flex h-full min-h-[220px] flex-col items-center justify-center text-center">
-              <Server className="mb-3 h-8 w-8 text-faint" aria-hidden="true" />
-              <p className="text-[13px] font-medium text-ink">Select a provider</p>
-              <p className="mt-1 max-w-xs text-[12px] text-muted">
-                Pick one from the list to see its configuration, or add your own.
-              </p>
-              <div className="mt-4 flex gap-1.5">
+            <div className="empty" style={{ minHeight: 220 }}>
+              <Server className="ic" style={{ width: 32, height: 32, color: 'var(--faint)', marginBottom: 12 }} aria-hidden="true" />
+              <b>Select a provider</b>
+              <p>Pick one from the list to see its configuration, or add your own.</p>
+              <div className="chipset" style={{ marginTop: 16 }}>
                 <button
                   type="button"
                   onClick={() => startNew()}
-                  className="pill-button bg-accent text-[12px] text-accent-ink"
+                  className="btn primary sm"
                 >
-                  <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                  <Plus className="ic" aria-hidden="true" />
                   Add provider
                 </button>
-                <label className="pill-button cursor-pointer border border-hairline text-[12px] text-muted hover:text-ink">
-                  <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+                <label className="btn ghost sm" style={{ cursor: 'pointer' }}>
+                  <Upload className="ic" aria-hidden="true" />
                   Import
                   <input
                     type="file"
@@ -956,9 +1199,9 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
                 <button
                   type="button"
                   onClick={() => exportAll()}
-                  className="pill-button border border-hairline text-[12px] text-muted hover:text-ink"
+                  className="btn ghost sm"
                 >
-                  <Download className="h-3.5 w-3.5" aria-hidden="true" />
+                  <Download className="ic" aria-hidden="true" />
                   Export
                 </button>
               </div>
@@ -1037,24 +1280,22 @@ function ModelPickerOverlay({
     return () => document.removeEventListener('keydown', onKey, true);
   }, [onClose]);
 
-  // PORTAL to document.body — same reason as Modal: #root's transform makes
-  // this overlay a descendant of a lower stacking context, so its z-[60]
-  // loses to the body-level dialog backdrop (z-50) and renders behind it.
   return createPortal(
     <div
       role="dialog"
       aria-modal="true"
       aria-label="Select models to add"
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+      className="modal open"
+      style={{ zIndex: 80 }}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div className="flex max-h-[82vh] w-full max-w-2xl flex-col overflow-hidden rounded-card border border-hairline bg-surface shadow-popover">
-        <div className="flex items-start justify-between gap-3 border-b border-hairline px-4 py-3">
-          <div>
-            <p className="text-sm font-medium text-ink">Select models</p>
-            <p className="mt-0.5 text-[11.5px] text-muted">
+      <div className="mpanel" style={{ maxWidth: 672 }}>
+        <div className="mh">
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <p style={{ margin: 0, fontSize: 14, fontWeight: 500, color: 'rgb(var(--c-ink))' }}>Select models</p>
+            <p style={{ margin: '2px 0 0', fontSize: 11.5, color: 'var(--muted)' }}>
               Fetched from the provider. Already-added ids are hidden — they can't be touched from here.
             </p>
           </div>
@@ -1062,13 +1303,13 @@ function ModelPickerOverlay({
             type="button"
             onClick={onClose}
             aria-label="Close model picker"
-            className="shrink-0 text-faint transition-colors hover:text-ink"
+            className="ib"
           >
-            <X className="h-4 w-4" aria-hidden="true" />
+            <X className="ic" aria-hidden="true" />
           </button>
         </div>
 
-        <div className="px-4 pt-3">
+        <div style={{ padding: '12px 16px 0' }}>
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
@@ -1081,68 +1322,69 @@ function ModelPickerOverlay({
             placeholder="Search models…"
             aria-label="Search fetched models"
             autoFocus
-            className="field font-mono text-[12.5px]"
+            className="field"
+            style={{ fontFamily: 'var(--f-mono)', fontSize: 12.5 }}
           />
         </div>
 
-        <div className="flex items-center gap-1.5 px-4 pb-2 pt-2">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px' }}>
           <button
             type="button"
             onClick={() => setAllFiltered(true)}
             disabled={filtered.length === 0 || allFilteredPicked}
-            className="pill-button border border-hairline py-1 text-[11.5px] text-muted hover:text-ink disabled:opacity-40"
+            className="btn ghost xs"
           >
-            <Check className="h-3 w-3" aria-hidden="true" />
+            <Check className="ic" aria-hidden="true" />
             Select all{query.trim() ? ' (shown)' : ''}
           </button>
           <button
             type="button"
             onClick={() => setAllFiltered(false)}
             disabled={filtered.length === 0}
-            className="pill-button border border-hairline py-1 text-[11.5px] text-muted hover:text-ink disabled:opacity-40"
+            className="btn ghost xs"
           >
-            <X className="h-3 w-3" aria-hidden="true" />
+            <X className="ic" aria-hidden="true" />
             Deselect all{query.trim() ? ' (shown)' : ''}
           </button>
-          <span className="ml-auto text-[11px] text-faint">{filtered.length} shown</span>
+          <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--faint)' }}>{filtered.length} shown</span>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-1">
+        <div style={{ minHeight: 0, flex: 1, overflowY: 'auto', padding: '0 8px 4px' }}>
           {filtered.length === 0 ? (
-            <p className="px-4 py-8 text-center text-[12px] text-faint">
+            <p className="pop-empty">
               No models match &quot;{query.trim()}&quot;.
             </p>
           ) : (
             filtered.map((model) => (
               <label
                 key={model}
-                className="flex cursor-pointer items-center gap-2.5 rounded-control px-2.5 py-1.5 transition-colors hover:bg-surface"
+                style={{ display: 'flex', cursor: 'pointer', alignItems: 'center', gap: 10, padding: '6px 10px', borderRadius: 'var(--r-sm)' }}
               >
                 <input
                   type="checkbox"
                   checked={picked.has(model)}
                   onChange={() => toggle(model)}
-                  className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-accent"
+                  style={{ accentColor: 'rgb(var(--c-accent))' }}
                 />
-                <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-muted">{model}</span>
+                <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--f-mono)', fontSize: 11.5, color: 'var(--muted)' }}>{model}</span>
               </label>
             ))
           )}
         </div>
 
-        <div className="flex items-center justify-between gap-2 border-t border-hairline px-4 py-3">
-          <span className="text-[11.5px] text-faint">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, borderTop: '1px solid var(--line)', padding: '12px 16px' }}>
+          <span style={{ fontSize: 11.5, color: 'var(--faint)' }}>
             {picked.size} of {models.length} selected
           </span>
-          <div className="flex gap-1.5">
-            <button type="button" onClick={onClose} className="pill-button text-muted hover:text-ink">
+          <div className="acts">
+            <button type="button" onClick={onClose} className="btn ghost">
               Cancel
             </button>
             <button
               type="button"
               disabled={picked.size === 0 || busy}
               onClick={() => onApply([...picked])}
-              className="pill-button bg-accent text-accent-ink disabled:opacity-40"
+              className="btn primary"
             >
               Add {picked.size} model{picked.size === 1 ? '' : 's'}
             </button>
@@ -1153,5 +1395,3 @@ function ModelPickerOverlay({
     document.body,
   );
 }
-
-

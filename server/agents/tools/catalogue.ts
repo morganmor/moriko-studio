@@ -9,6 +9,8 @@
  */
 import type { AgentToolDef } from './shared.js';
 import { listAddonToolDefs } from '../../addons/registry.js';
+import { registeredTools } from './registry.js';
+import './registered.js';
 
 export function listAgentToolDefs(): AgentToolDef[] {
   const defs: AgentToolDef[] = [
@@ -388,6 +390,38 @@ export function listAgentToolDefs(): AgentToolDef[] {
       inputSchema: { type: 'object', properties: {} },
     },
     {
+      wireName: 'agent__image',
+      description:
+        'Generate or edit an image with the configured image model (default = the user\'s saved Image Studio model). YOU compose the final prompt; pass reference image paths for edits.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          prompt: {
+            type: 'string',
+            description:
+              'The FINAL image prompt you composed — subject, style, composition, lighting. For edits: a precise instruction describing the change.',
+          },
+          referencePaths: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              '0-8 reference images to EDIT: workspace/attachment paths (see the attachment list), /api/images/local/... URLs from previous results, data: URLs or public URLs. Omit for pure text-to-image.',
+          },
+          model: { type: 'string', description: 'Optional model override — only when the user names a model (see agent__image_models).' },
+          providerId: { type: 'string', description: 'Optional provider override for the named model.' },
+          aspectRatio: { type: 'string', description: 'Optional preset like "16:9" or "1:1".' },
+          width: { type: 'number', description: 'Optional pixel width (64-4096; with height).' },
+          height: { type: 'number', description: 'Optional pixel height (64-4096; with width).' },
+        },
+        required: ['prompt'],
+      },
+    },
+    {
+      wireName: 'agent__image_models',
+      description: 'List the available image-generation models (provider, modes, reference capacity) and the saved default.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
       wireName: 'agent__explain_error',
       description: 'Annotate a pasted stack trace; workspace frames come back with read receipts.',
       inputSchema: {
@@ -398,7 +432,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__search',
-      description: 'Semantic BM25 search by meaning; follow with read_file.',
+      description: 'Lexical BM25 search (camelCase-aware) by keywords/meaning; follow with read_file.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -550,7 +584,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__test_run',
-      description: 'Run tests (node --import tsx --test) with parsed per-file results.',
+      description: 'Run tests (auto-detects vitest/jest/pytest/cargo/go, default node --test) with parsed per-file results.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -558,6 +592,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
           pattern: { type: 'string', description: 'Discovery glob (default "**/*.test.ts").' },
           cwd: { type: 'string', description: 'Working dir.' },
           timeoutSec: { type: 'number', description: 'Per-file timeout (default 120, max 600).' },
+          runner: { type: 'string', enum: ['node', 'vitest', 'jest', 'pytest', 'cargo', 'go'], description: 'Force a runner (default: auto-detect).' },
         },
       },
     },
@@ -596,15 +631,17 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__lsp_symbols',
-      description: 'TS Language Service: definition / references / symbols / rename.',
+      description: 'TS Language Service: definition / references / symbols / rename / hover / diagnostics / implementations / type_definition / call_hierarchy.',
       inputSchema: {
         type: 'object',
         properties: {
           path: { type: 'string', description: 'File to inspect.' },
-          mode: { type: 'string', enum: ['definition', 'references', 'symbols', 'rename'], description: 'Mode (default "symbols").' },
+          mode: { type: 'string', enum: ['definition', 'references', 'symbols', 'rename', 'hover', 'diagnostics', 'implementations', 'type_definition', 'call_hierarchy'], description: 'Mode (default "symbols").' },
           line: { type: 'number', description: '1-based line.' },
           column: { type: 'number', description: '1-based column.' },
           newName: { type: 'string', description: 'New symbol name.' },
+          direction: { type: 'string', enum: ['incoming', 'outgoing'], description: 'call_hierarchy direction (default "incoming").' },
+          depth: { type: 'number', description: 'call_hierarchy depth 1-3 (default 1).' },
         },
         required: ['path', 'mode'],
       },
@@ -658,7 +695,8 @@ export function listAgentToolDefs(): AgentToolDef[] {
       wireName: 'agent__render_visual',
       description:
         'Render a standalone HTML visual inline for the user (sandboxed, inline everything). ' +
-        'Pass "id" of an earlier render_visual to UPDATE that card in place; pass "variants" (1..3) for a frontend preview.',
+        'Pass "id" of an earlier render_visual to UPDATE that card in place; pass "variants" (1..3) for a frontend preview. ' +
+        'libs: ["three","pixi","matter","moriko-gl"] injects a local vendor library into the iframe.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -676,6 +714,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
           },
           title: { type: 'string', description: 'Card caption.' },
           height: { type: 'number', description: '120-2000 (default 360).' },
+          libs: { type: 'array', items: { type: 'string', enum: ['three', 'three-addons-orbit', 'pixi', 'matter', 'moriko-gl'] }, description: 'Vendor libraries injected client-side (window.THREE / PIXI / Matter / MORIKO_GL).' },
         },
       },
     },
@@ -1305,8 +1344,8 @@ export function listAgentToolDefs(): AgentToolDef[] {
       },
     },
   ];
-  // FASE 5 — addon tools merged into the catalogue so the adapter sees them.
   const addonDefs = listAddonToolDefs();
   if (addonDefs.length > 0) defs.push(...addonDefs);
+  defs.push(...registeredTools().map((tool) => tool.def));
   return defs;
 }

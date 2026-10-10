@@ -67,14 +67,23 @@ export interface VisualPayload {
   /** Preferred render height in CSS px (clamped 120–2000). */
   height: number;
   /**
+   * F5.1 — vendor library ids the CLIENT injects into the iframe head before
+   * srcDoc (fetched same-origin from /api/visual-vendor/:lib, cached in memory
+   * per lib). Only NAMES ride the payload — bundles never enter the chat.
+   */
+  libs?: string[];
+  /**
    * VISUAL v2 — replaced candidates carried by an edit-in-place. The client
    * re-binds EVERY live card with this id to the new payload and the thread
    * folds it into the LAST render_visual segment for the audit trail.
    */
   replaces?: true;
   /** Frontend-preview candidates (1..3), present when the call used `variants`. */
-  variants?: Array<{ id: string; html: string; title: string; height: number }>;
+  variants?: Array<{ id: string; html: string; title: string; height: number; libs?: string[] }>;
 }
+
+/** F5.1 — allowed vendor lib ids (validated server-side). */
+export const VISUAL_LIBS = new Set(['three', 'three-addons-orbit', 'pixi', 'matter', 'moriko-gl']);
 
 /** Reads a finite number out of an arbitrary per-variant object. */
 function variantHeight(source: unknown): number | undefined {
@@ -119,7 +128,6 @@ export function renderVisualTool(args: Record<string, unknown>, ctx: AgentToolCo
     return renderPreview(args, rawVariants, title);
   }
 
-  // ── EDIT-IN-PLACE + NEW (single source) ────────────────────────────────
   const source = str(args, 'source').trim();
   if (!source) {
     return {
@@ -144,6 +152,18 @@ export function renderVisualTool(args: Record<string, unknown>, ctx: AgentToolCo
   }
 
   const height = clampHeight(num(args, 'height'));
+  // F5.1 — vendor libs: validate ids; client injects the same-origin bundles.
+  const rawLibs = Array.isArray(args.libs) ? args.libs : [];
+  const libs = [...new Set(rawLibs.filter((l): l is string => typeof l === 'string' && VISUAL_LIBS.has(l)))];
+  const badLibs = rawLibs.filter((l) => typeof l === 'string' && !VISUAL_LIBS.has(l));
+  if (badLibs.length > 0) {
+    return {
+      ok: false,
+      isError: true,
+      errorCode: 'schema_error',
+      text: `Unknown lib(s): ${badLibs.join(', ')}. Available: ${[...VISUAL_LIBS].join(', ')}.`,
+    };
+  }
   visualSeq += 1;
   const requestedId = str(args, 'id').trim();
   const editing = requestedId.length > 0;
@@ -183,6 +203,7 @@ export function renderVisualTool(args: Record<string, unknown>, ctx: AgentToolCo
     html: source,
     title: title || (editing ? 'Visual (edited)' : 'Visual'),
     height,
+    ...(libs.length > 0 ? { libs } : {}),
     ...(editing ? { replaces: true as const } : {}),
   };
 
@@ -195,10 +216,11 @@ export function renderVisualTool(args: Record<string, unknown>, ctx: AgentToolCo
       ok: true,
       isError: false,
       text: truncateOutput(
-        `Visual rendered: "${visual.title}" (${height}px tall, ${(bytes / 1024).toFixed(1)} KB). ` +
+        `Visual rendered: "${visual.title}" (${height}px tall, ${(bytes / 1024).toFixed(1)} KB` +
+          `${libs.length > 0 ? `, libs: ${libs.join(', ')}` : ''}). ` +
           `Id: ${visual.id}. The user sees it live in the thread. To change it, call render_visual ` +
           `again with the SAME id ("id": "${visual.id}") — the card updates in place, no new card. ` +
-          'Network access is disabled inside the sandbox: inline styles/scripts only.',
+          'Network access is disabled inside the sandbox: inline styles/scripts only; vendor libs are injected client-side from the harness origin.',
       ),
       visual,
     };

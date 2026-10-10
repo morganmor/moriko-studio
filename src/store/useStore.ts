@@ -6,10 +6,12 @@ import type {
   AskAnswer,
   AskUserRequest,
   AgentWorkspaceInfo,
+  Accent,
   ChatSettings,
   Conversation,
   ConversationCompaction,
   ConversationSummary,
+  Density,
   FontFamily,
   Goal,
   ImageSession,
@@ -21,10 +23,12 @@ import type {
   TreeIgnoreRules,
   TreeNodeInfo,
   TreeViewInfo,
+  ThemeMode,
   Turn,
   TurnPatch,
   ViewId,
 } from '../types';
+import { transitionAppearance } from '../lib/appearance';
 import { clearLegacyConversations, readLegacyConversations, storage, uid } from '../lib/storage';
 import { stripReasoning } from '../lib/compaction';
 import { setWebAccessRemote } from '../lib/api';
@@ -54,7 +58,6 @@ export const DEFAULT_SETTINGS: ChatSettings = {
   maxContextTokens: null,
   autoCompact: true,
   compactThresholdTokens: null,
-  compactKeepRecentTurns: 2,
   compactThresholdRatio: 0.95,
   summarizerEnabled: false,
   summarizerProviderId: null,
@@ -183,7 +186,18 @@ interface AppState {
    * normal"). Transient — not device-persisted.
    */
   diffDockWidth: number;
-  theme: 'dark' | 'light' | 'mocha';
+  theme: ThemeMode;
+  /** Theme mechanism (design theme-mechanism): accent swatch, row density. */
+  accent: Accent;
+  density: Density;
+  /** Ambient glow behind the app (design's .no-amb gate). */
+  ambient: boolean;
+  /** Tri-state like the design: null = follow prefers-reduced-motion. */
+  reduceMotion: boolean | null;
+  /** Panel-settings: gate chat deletion behind a confirm dialog. */
+  confirmDel: boolean;
+  /** Chat id waiting on that confirm dialog (null = none). */
+  pendingConfirmDelete: string | null;
   /** App chrome zoom: everything except the chat context. 1 = default. */
   fontScale: number;
   /** Chat-context zoom: the thread and composer only. 1 = default. */
@@ -282,6 +296,13 @@ interface AppState {
    * moves it. This is a per-message selector, not a persisted setting.
    */
   composerRole: 'user' | 'operator' | 'admin';
+  /**
+   * TREE ATTACH (right-dock design): files picked from the project tree ride
+   * this transient queue into the composer's normal attachment pipeline
+   * (caps, upload, dataRefs). Never persisted — File handles die with the
+   * tab, exactly like the composer's own local attachment state.
+   */
+  composerQueuedFiles: File[];
 
   loadProviders: () => Promise<void>;
   /**
@@ -301,9 +322,13 @@ interface AppState {
     pixelHeight?: string;
   }) => void;
   loadGallery: () => Promise<void>;
+  /** Optimistic local append (agent__image results) — no server round-trip. */
+  pushGalleryUrls: (urls: string[]) => void;
   addToGallery: (urls: string[]) => Promise<void>;
   removeFromGallery: (url: string) => Promise<void>;
   moveGalleryImage: (url: string, direction: -1 | 1) => Promise<void>;
+  /** Gallery drag & drop: move the image at `from` to index `to` (design drop-handler). */
+  reorderGalleryImages: (from: number, to: number) => Promise<void>;
 
   loadImageSessions: () => Promise<void>;
   createImageSession: (label?: string) => Promise<string>;
@@ -352,6 +377,10 @@ interface AppState {
   }) => string;
   selectConversation: (id: string) => void;
   deleteConversation: (id: string) => void;
+  /** Internal: performs the actual deletion (deleteConversation may gate on confirmDel). */
+  executeDeleteConversation: (id: string) => void;
+  confirmPendingDelete: () => void;
+  cancelPendingDelete: () => void;
   renameConversation: (id: string, title: string) => void;
   /** Stores (or clears) the conversation's compaction summary. */
   setCompaction: (id: string, compaction: ConversationCompaction | undefined) => void;
@@ -440,16 +469,30 @@ interface AppState {
   imagePickerWanted: boolean;
   requestImagePicker: () => void;
   consumeImagePickerRequest: () => void;
+  /** Prompt pre-fill for the /image slash command — ImageStudio consumes it on
+   *  mount, so the draft survives the view switch without a new store slice. */
+  imageStudioPromptWanted: string | null;
+  requestImageStudioPrompt: (prompt: string) => void;
+  consumeImageStudioPromptRequest: () => void;
   /** Opens the Diff Panel on the given turn (tab + dock + scope in one call). */
   openDiffPanel: (turnId: string | null) => void;
   setDiffPanelTurnId: (turnId: string | null) => void;
   setDiffDockWidth: (width: number) => void;
-  setTheme: (theme: 'dark' | 'light' | 'mocha') => void;
+  setTheme: (theme: ThemeMode, ev?: { clientX: number; clientY: number }) => void;
+  setAccent: (accent: Accent) => void;
+  setDensity: (density: Density) => void;
+  setAmbient: (ambient: boolean) => void;
+  /** null = follow prefers-reduced-motion. */
+  setReduceMotion: (reduceMotion: boolean | null) => void;
+  /** Panel-settings: confirm-before-delete toggle. */
+  setConfirmDel: (confirmDel: boolean) => void;
   setFontScale: (scale: number) => void;
   setContextScale: (scale: number) => void;
   setFontFamily: (family: FontFamily) => void;
   setSearchQuery: (query: string) => void;
   setComposerRole: (role: 'user' | 'operator' | 'admin') => void;
+  queueComposerFiles: (files: File[]) => void;
+  clearComposerQueuedFiles: () => void;
   /** THE ONLY door to the Notice Center. `id` must be a registered catalog
    *  key — a raw string is a type error (Fase A #4.2 enforcement). */
   showNotice: (
@@ -481,6 +524,36 @@ interface AppState {
 }
 
 /**
+ * ONE-TIME HEAL for records written by the frozen-progress bug: a tool segment
+ * whose summary is a live progress line ("Waiting for the provider… Ns …") and
+ * which never received its real tool_result. Clearing the fake summary lets
+ * the card render as still-running instead of a frozen terminal state, and the
+ * next detail fetch (or an agent retry) can finally pair the real result.
+ */
+const FROZEN_PROGRESS_RE = /Waiting for the provider…\s*\d+s\s*\((?:PENDING|RUNNING|QUEUED)\)/;
+
+function healFrozenImageSegments(turns: Turn[]): Turn[] {
+  let changed = false;
+  const healed = turns.map((turn) => {
+    if (!turn.segments?.some((segment) => segment.type === 'tool' && segment.summary !== undefined && FROZEN_PROGRESS_RE.test(segment.summary))) {
+      return turn;
+    }
+    changed = true;
+    return {
+      ...turn,
+      segments: turn.segments.map((segment) => {
+        if (segment.type !== 'tool' || segment.summary === undefined || !FROZEN_PROGRESS_RE.test(segment.summary)) {
+          return segment;
+        }
+        const { summary: _frozen, ...rest } = segment;
+        return rest as typeof segment;
+      }),
+    };
+  });
+  return changed ? healed : turns;
+}
+
+/**
  * THE DUPLICATE-TURN GUARD — the reported "sampah/bekas turn" bug.
  *
  * A replay racing a body-adopt once appended the SAME run's turn twice (two
@@ -492,6 +565,7 @@ interface AppState {
  * wins (patches/upserts carry the newest paint), order is preserved.
  */
 function dedupeTurns(turns: Turn[]): Turn[] {
+  turns = healFrozenImageSegments(turns);
   const seen = new Set<string>();
   let dirty = false;
   for (const turn of turns) {
@@ -801,9 +875,6 @@ function computeSyncBatch(snapshot: Conversation[]): {
   const turnPatches: TurnPatch[] = [];
   const turnDeletions: Array<{ conversationId: string; turnId: string }> = [];
 
-  // Deletions ride EVERY batch (before the turn patches, so the server never
-  // sees the resurrection window) — a full upsert would cover the settled
-  // case, but only these patches reach the server while the chat streams.
   for (const [conversationId, ids] of pendingTurnDeletions) {
     if (!snapshot.some((entry) => entry.id === conversationId)) continue;
     for (const turnId of ids) {
@@ -820,9 +891,6 @@ function computeSyncBatch(snapshot: Conversation[]): {
       }
       continue;
     }
-    // SETTINGS-DURING-RUN: a settings edit made while this chat streams must
-    // still reach the server — the flag forces ONE full-record upsert so the
-    // change survives a reload (turn patches carry turns only).
     if (settingsDirtyIds.has(conversation.id)) {
       upsert.push(conversation);
       continue;
@@ -880,8 +948,6 @@ async function doServerSync(): Promise<void> {
   }
   serverKnownIds.clear();
   for (const summary of summaries) serverKnownIds.add(summary.id);
-  // The acknowledged upserts shipped the settings change — clear the flag so
-  // the next syncs can go back to turn-patches-only for that chat.
   for (const id of batch.upsert) settingsDirtyIds.delete(id.id);
   await foldServerSummaries(summaries, batch.upsert, snapshot);
 }
@@ -1179,6 +1245,26 @@ export function bootConversationSync(): Promise<void> {
   return initConversationSync().finally(() => markConversationsReady());
 }
 
+/** Re-pulls the shared list — after a trash RESTORE the server holds a chat
+ *  this browser has never seen. New ids merge as summary shells (hydration
+ *  fetches the body on demand); rows this browser already has are untouched. */
+export async function refreshConversationList(): Promise<void> {
+  if (typeof window === 'undefined') return;
+  try {
+    const resp = await fetch('/api/conversations');
+    if (!resp.ok) return;
+    const summaries = ((await resp.json()) as { conversations: ConversationSummary[] }).conversations;
+    const state = useStore.getState();
+    const known = new Set(state.conversations.map((entry) => entry.id));
+    const fresh = summaries.filter((entry) => !known.has(entry.id)).map(shellForSummary);
+    if (fresh.length > 0) {
+      useStore.getState().replaceConversations([...state.conversations, ...fresh]);
+    }
+  } catch {
+    // device unreachable — the next boot reconcile picks the restore up
+  }
+}
+
 if (typeof window !== 'undefined') {
   window.addEventListener('pagehide', () => {
     flushPersist();
@@ -1251,16 +1337,21 @@ export const useStore = create<AppState>((set, get) => ({
   sidebarCollapsed: storage.loadSidebarCollapsed(),
   sidebarWidth: storage.loadSidebarWidth(),
   settingsWidth: storage.loadSettingsWidth(),
-  // G1: restored when the user has been here before; first-run falls back to
-  // the old matchMedia default (open on wide screens).
   settingsOpen:
     storage.loadSettingsOpen() ??
     (typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches),
   rightPanelMode: storage.loadRightPanelMode(),
   imagePickerWanted: false,
+  imageStudioPromptWanted: null,
   diffPanelTurnId: storage.loadDiffPanelTurnId(),
   diffDockWidth: storage.loadDiffDockWidth(),
   theme: storage.loadTheme(),
+  accent: storage.loadAccent(),
+  density: storage.loadDensity(),
+  ambient: storage.loadAmbient(),
+  reduceMotion: storage.loadReduceMotion(),
+  confirmDel: storage.loadConfirmDel(),
+  pendingConfirmDelete: null,
   fontScale: storage.loadFontScale(),
   contextScale: storage.loadContextScale(),
   fontFamily: storage.loadFontFamily(),
@@ -1270,6 +1361,7 @@ export const useStore = create<AppState>((set, get) => ({
   noticeHistory: [],
   noticeHistoryExpanded: false,
   composerRole: 'user',
+  composerQueuedFiles: [],
   genRunning: storage.loadGenRunning(),
   genStartedAt: storage.loadGenStartedAt(),
   compactingId: null,
@@ -1402,6 +1494,15 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
+  /** Optimistic local append — the browser that generated sees the new image
+   *  instantly, without waiting for the SSE bus round-trip. */
+  pushGalleryUrls: (urls) => {
+    if (urls.length === 0) return;
+    const current = get().galleryImages;
+    const next = [...current, ...urls.filter((url) => !current.includes(url))];
+    set({ galleryImages: next });
+  },
+
   addToGallery: async (urls) => {
     const current = get().galleryImages;
     const next = [...current, ...urls.filter((url) => !current.includes(url))];
@@ -1433,6 +1534,20 @@ export const useStore = create<AppState>((set, get) => ({
     const target = index + direction;
     if (index === -1 || target < 0 || target >= current.length) return;
     [current[index], current[target]] = [current[target], current[index]];
+    set({ galleryImages: current });
+    try {
+      const { saveGallery } = await import('../lib/api');
+      await saveGallery(current);
+    } catch {
+      get().showNotice('gallery.reorderFailed');
+    }
+  },
+
+  reorderGalleryImages: async (from, to) => {
+    const current = [...get().galleryImages];
+    if (from < 0 || to < 0 || from >= current.length || to >= current.length || from === to) return;
+    const [moved] = current.splice(from, 1);
+    current.splice(to, 0, moved);
     set({ galleryImages: current });
     try {
       const { saveGallery } = await import('../lib/api');
@@ -1498,7 +1613,6 @@ export const useStore = create<AppState>((set, get) => ({
     if (!trimmed) return;
     const { renameImageSession: renameSession } = await import('../lib/api');
     const previous = get().imageSessions.find((session) => session.id === id);
-    // Optimistic — the sidebar input is already closed; revert on failure.
     set({
       imageSessions: get().imageSessions.map((session) =>
         session.id === id ? { ...session, label: trimmed } : session,
@@ -1724,8 +1838,6 @@ export const useStore = create<AppState>((set, get) => ({
     const { setActiveAgentWorkspace: setActive } = await import('../lib/api');
     await setActive(id, sessionId);
     set({ activeAgentWorkspaceId: id });
-    // 6A: remember which workspace THIS chat is bound to, so the sidebar's
-    // Workspace dropdown can group sessions under their workspace.
     if (sessionId) {
       const conversation = get().conversations.find((entry) => entry.id === sessionId);
       if (conversation && conversation.workspaceId !== id) {
@@ -1975,10 +2087,6 @@ export const useStore = create<AppState>((set, get) => ({
     storage.saveActiveId(conversation.id);
     storage.saveView('playground');
     // 2026-10 BUGFIX: the '+' picker set only conversation.workspaceId — the
-    // composer's workspace pill (activeAgentWorkspaceId) and the server's
-    // per-session binding stayed EMPTY, so the input panel showed "Pick
-    // workspace". Bind both here (setActiveAgentWorkspace also re-patches
-    // conversation.workspaceId — a no-op since it is already set).
     if (options?.workspaceId) {
       void get().setActiveAgentWorkspace(options.workspaceId, conversation.id);
     }
@@ -2004,6 +2112,14 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   deleteConversation: (id) => {
+    // Panel-settings' confirmDel: park the request until the dialog confirms.
+    if (get().confirmDel) {
+      set({ pendingConfirmDelete: id });
+      return;
+    }
+    get().executeDeleteConversation(id);
+  },
+  executeDeleteConversation: (id) => {
     pendingDeletions.add(id);
     const next = get().conversations.filter((conversation) => conversation.id !== id);
     const activeId = get().activeId === id ? newestConversationId(next) : get().activeId;
@@ -2011,6 +2127,13 @@ export const useStore = create<AppState>((set, get) => ({
     persist(next);
     storage.saveActiveId(activeId);
   },
+  confirmPendingDelete: () => {
+    const id = get().pendingConfirmDelete;
+    if (!id) return;
+    set({ pendingConfirmDelete: null });
+    get().executeDeleteConversation(id);
+  },
+  cancelPendingDelete: () => set({ pendingConfirmDelete: null }),
 
   renameConversation: (id, title) => {
     withLoadedBody(id, () => {
@@ -2068,10 +2191,7 @@ export const useStore = create<AppState>((set, get) => ({
     const turns = conversation.turns.filter((turn) => !drop.has(turn.id));
     if (turns.length === conversation.turns.length) return;
     markTurnsTombstone([...drop]);
-    // The dropped ids must also reach the SERVER — a drop during a live run
-    // ships turn patches only, which used to leave the old turn on disk (the
     // regenerate→second-tab→two-replies bug). The sync batch turns these into
-    // `turn: null` deletion patches.
     rememberTurnDeletion(conversationId, [...drop]);
     // on every sync (the reported hapus→muncul-lagi bug).
     const next = get().conversations.map((entry) =>
@@ -2147,7 +2267,6 @@ export const useStore = create<AppState>((set, get) => ({
       const current = get().conversations.find((conversation) => conversation.id === id);
       if (!fullRaw || !current) return;
       if (current.turnsLoaded !== false) return;
-      // Guard the dup-id poison at the door: a corrupted device record must
       // never enter the render path (the stale-DOM ghosts bug).
       const full = { ...fullRaw, turns: dedupeTurns(fullRaw.turns) };
       const next = get().conversations.map((conversation) =>
@@ -2198,8 +2317,6 @@ export const useStore = create<AppState>((set, get) => ({
     const safeTurn: Turn = { ...turn, content: typeof turn.content === 'string' ? turn.content : '' };
     const next = get().conversations.map((conversation) => {
       if (conversation.id !== conversationId) return conversation;
-      // Duplicate-id guard: a replay racing an adopt must REPLACE, never
-      // double-append — a dup id poisons the keyed diff (stale DOM ghosts).
       if (conversation.turns.some((entry) => entry.id === safeTurn.id)) {
         return {
           ...conversation,
@@ -2263,6 +2380,13 @@ export const useStore = create<AppState>((set, get) => ({
     );
     set({ conversations: next });
     persist(next);
+    // 2026-10 BUGFIX: "Move to workspace" dari pill TopBar dulu hanya mem-
+    // patch workspaceId — activeAgentWorkspaceId tetap lama, jadi pill masih
+    // "No workspace" padahal menu sudah mencentang Owl. Aktifkan juga di
+    // server (per-session) + store agar pill/tree/agent seluruhnya ikut.
+    if (patch.workspaceId) {
+      void get().setActiveAgentWorkspace(patch.workspaceId, conversationId).catch(() => {});
+    }
   },
 
   setConversationGoals: (conversationId, goals) => {
@@ -2297,8 +2421,6 @@ export const useStore = create<AppState>((set, get) => ({
         ? { ...entry, settings: { ...entry.settings, ...patch }, rev: (entry.rev ?? 0) + 1 }
         : entry,
     );
-    // SETTINGS-DURING-RUN: this chat's next sync must ship the FULL record
-    // (turn patches alone never carry settings), or the change dies on reload.
     settingsDirtyIds.add(conversation.id);
     set({
       conversations: next,
@@ -2306,9 +2428,6 @@ export const useStore = create<AppState>((set, get) => ({
     });
     persist(next);
 
-    // WEB ACCESS KILL-SWITCH — the toggle drives the shared browser runtime:
-    // off broadcasts shutdown to every open panel (they close their own
-    // windows) and tears the Edge context down, so nothing keeps running.
     if ('webAccess' in patch) {
       void setWebAccessRemote(patch.webAccess === true);
     }
@@ -2340,8 +2459,6 @@ export const useStore = create<AppState>((set, get) => ({
     storage.saveRightPanelMode(mode);
   },
   requestImagePicker: () => {
-    // Docked on the Configuration tab, opened, and the picker flagged — the
-    // panel consumes the flag when it mounts.
     set({ settingsOpen: true, rightPanelMode: 'config', imagePickerWanted: true });
     storage.saveSettingsOpen(true);
     storage.saveRightPanelMode('config');
@@ -2349,11 +2466,14 @@ export const useStore = create<AppState>((set, get) => ({
   consumeImagePickerRequest: () => {
     if (get().imagePickerWanted) set({ imagePickerWanted: false });
   },
+  requestImageStudioPrompt: (prompt) => set({ imageStudioPromptWanted: prompt }),
+  consumeImageStudioPromptRequest: () => {
+    if (get().imageStudioPromptWanted !== null) set({ imageStudioPromptWanted: null });
+  },
   openDiffPanel: (turnId) => {
     set({
       diffPanelTurnId: turnId,
       rightPanelMode: 'diff',
-      // Badge click from a closed dock: open it so the panel is visible.
       settingsOpen: true,
     });
     storage.saveRightPanelMode('diff');
@@ -2365,9 +2485,46 @@ export const useStore = create<AppState>((set, get) => ({
     storage.saveDiffPanelTurnId(turnId);
   },
   setDiffDockWidth: (width) => set({ diffDockWidth: width }),
-  setTheme: (theme) => {
-    set({ theme });
-    storage.saveTheme(theme);
+  setTheme: (theme, ev) => {
+    if (get().theme === theme) return;
+    const state = get();
+    // Design mechanism: the circular reveal wraps BOTH the store write and the
+    // DOM apply, so the View Transition captures real old/new frames.
+    transitionAppearance(
+      {
+        theme,
+        accent: state.accent,
+        density: state.density,
+        ambient: state.ambient,
+        fontFamily: state.fontFamily,
+        reduceMotion: state.reduceMotion,
+      },
+      () => {
+        set({ theme });
+        storage.saveTheme(theme);
+      },
+      ev,
+    );
+  },
+  setAccent: (accent) => {
+    set({ accent });
+    storage.saveAccent(accent);
+  },
+  setDensity: (density) => {
+    set({ density });
+    storage.saveDensity(density);
+  },
+  setAmbient: (ambient) => {
+    set({ ambient });
+    storage.saveAmbient(ambient);
+  },
+  setReduceMotion: (reduceMotion) => {
+    set({ reduceMotion });
+    storage.saveReduceMotion(reduceMotion);
+  },
+  setConfirmDel: (confirmDel) => {
+    set({ confirmDel });
+    storage.saveConfirmDel(confirmDel);
   },
   setFontScale: (fontScale) => {
     const safe = Math.min(1.4, Math.max(0.8, fontScale));
@@ -2385,6 +2542,9 @@ export const useStore = create<AppState>((set, get) => ({
   },
   setSearchQuery: (searchQuery) => set({ searchQuery }),
   setComposerRole: (composerRole) => set({ composerRole }),
+  queueComposerFiles: (files) =>
+    set((state) => ({ composerQueuedFiles: [...state.composerQueuedFiles, ...files] })),
+  clearComposerQueuedFiles: () => set({ composerQueuedFiles: [] }),
 
   markRunStopped: (id) =>
     set((state) => ({ stoppedRuns: { ...state.stoppedRuns, [id]: true } })),
@@ -2413,10 +2573,6 @@ export const useStore = create<AppState>((set, get) => ({
   setGenRunning: (id, running) => {
     const next = { ...useStore.getState().genRunning };
     if (running) {
-      // PRESERVE the existing start stamp. Re-stamping here reset the live
-      // timer to 00.00.00 whenever the flag FLAPPED mid-run (reconnect,
-      // mid-run compaction, probation continue: false → true within the SAME
-      // run) — that is the "timer restarts" the user kept seeing.
       next[id] = true;
     } else {
       delete next[id];

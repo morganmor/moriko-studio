@@ -1,96 +1,210 @@
-import { useState } from 'react';
-import { ChevronLeft, ChevronRight, ImageIcon, LayoutPanelLeft, Trash2 } from './icons';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { Download, Wand2 } from './icons';
+import { brandEmptyDownloadSvg } from '../lib/brandAssets';
 import { useStore } from '../store/useStore';
 import { ImageLightbox } from './ImageLightbox';
+import { cx } from './ui';
+
+/** Design's download filename: moriko-<prompt-slug>.jpg */
+const downloadImage = (url: string, prompt: string) => {
+  const slug =
+    prompt
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 40) || 'image';
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `moriko-${slug}.jpg`;
+  anchor.click();
+};
 
 /**
- * Gallery — the persistent, user-ordered image collection.
+ * Gallery — the design's card grid (design/image-viewer.html): a
+ * page-head with a live count, a drag (or Alt+←/→) reorderable card grid,
+ * and the shared lightbox with prev/next through the whole collection.
  *
  * Every entry lives server-side, so the collection survives reloads and is
- * shared by every browser that talks to this proxy. Hover a tile to move it
- * within the collection or remove it; click to view it full-size.
+ * shared by every browser that talks to this proxy.
  */
 export function Gallery() {
   const images = useStore((state) => state.galleryImages);
+  const sessions = useStore((state) => state.imageSessions);
   const removeFromGallery = useStore((state) => state.removeFromGallery);
   const moveGalleryImage = useStore((state) => state.moveGalleryImage);
+  const reorderGalleryImages = useStore((state) => state.reorderGalleryImages);
+  const setView = useStore((state) => state.setView);
+  const requestImageStudioPrompt = useStore((state) => state.requestImageStudioPrompt);
+  /** Refetch on every mount — the view may be showing a stale store cache
+   *  from before another tab (or the agent) appended new images. */
+  const loadGallery = useStore((state) => state.loadGallery);
+  useEffect(() => {
+    void loadGallery();
+  }, [loadGallery]);
   const [lightbox, setLightbox] = useState<string | null>(null);
+  /** HTML5 drag: which tile is being dragged + which one is the drop target. */
+  const dragIdRef = useRef<string | null>(null);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
+
+  /** Viewer info: the prompt + session label each gallery image came from. */
+  const infoByUrl = useMemo(() => {
+    const map = new Map<string, { prompt: string; label: string }>();
+    for (const session of sessions) {
+      for (const item of session.items) {
+        if (!map.has(item.url)) map.set(item.url, { prompt: item.prompt, label: session.label });
+      }
+    }
+    return map;
+  }, [sessions]);
+
+  // Removing the open image (lightbox save) shrinks the list — close it.
+  useEffect(() => {
+    if (lightbox && !images.includes(lightbox)) setLightbox(null);
+  }, [images, lightbox]);
+
+  const dropOn = (target: string) => {
+    const from = dragIdRef.current;
+    if (!from || from === target) return;
+    void reorderGalleryImages(images.indexOf(from), images.indexOf(target));
+  };
+
+  const clearDrag = () => {
+    dragIdRef.current = null;
+    setDragId(null);
+    setOverId(null);
+  };
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-6 py-8">
-      <header className="mb-5">
-        <h1 className="flex items-center gap-2 text-lg font-semibold text-ink">
-          <LayoutPanelLeft className="h-5 w-5 text-accent" aria-hidden="true" />
-          Gallery
-        </h1>
-        <p className="mt-1 text-[13px] leading-relaxed text-muted">
-          Saved images from every session. Hover a tile to reorder or remove it; click to view
-          it full-size.
-        </p>
-      </header>
+    <div className="page view-enter">
+      <div className="page-head">
+        <div>
+          <h2>Gallery</h2>
+          <p>{images.length} saved · drag (or Alt ←/→) to reorder</p>
+        </div>
+        <div className="acts">
+          <button type="button" className="btn ghost" onClick={() => setView('imagestudio')}>
+            <Wand2 className="ic" aria-hidden="true" />
+            Open studio
+          </button>
+        </div>
+      </div>
 
       {images.length === 0 ? (
-        <div className="rounded-card border border-dashed border-hairline px-4 py-16 text-center">
-          <ImageIcon className="mx-auto h-7 w-7 text-faint" aria-hidden="true" />
-          <p className="mt-3 text-[13px] text-muted">Your collection is empty.</p>
-          <p className="mt-1 text-[12px] leading-relaxed text-faint">
-            Generate something in Image Studio, then use the + button (or Save all) to pin
+        <div className="empty">
+          <div className="eic">
+            <span
+              className="ic"
+              aria-hidden="true"
+              dangerouslySetInnerHTML={{ __html: brandEmptyDownloadSvg }}
+            />
+          </div>
+          <b>Your collection is empty</b>
+          <p>
+            Generate something in Image Studio, then press the save icon (or Save all) to pin
             results here.
           </p>
         </div>
       ) : (
-        <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          {images.map((url, index) => (
-            <li key={url} className="group relative">
-              <button
-                type="button"
-                onClick={() => setLightbox(url)}
-                aria-label="Open full-size image"
-                className="block aspect-square w-full overflow-hidden rounded-card border border-hairline"
-              >
-                <img
-                  src={url}
-                  alt="Gallery image"
-                  loading="lazy"
-                  className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
-                />
-              </button>
-              <div className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-1 bg-black/45 p-1.5 opacity-0 backdrop-blur-sm transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-                <button
-                  type="button"
-                  onClick={() => moveGalleryImage(url, -1)}
-                  disabled={index === 0}
-                  aria-label="Move earlier"
-                  className="rounded p-1.5 text-white/80 transition-colors hover:text-white disabled:opacity-30"
+        <ul
+          className="icards"
+          style={{ listStyle: 'none', padding: 0, margin: 0 }}
+          onDragOver={(event) => {
+            if (!dragIdRef.current) return;
+            event.preventDefault();
+          }}
+          onDrop={(event) => {
+            const tile = (event.target as HTMLElement).closest<HTMLElement>('.icard');
+            const target = tile?.dataset.img;
+            if (target) {
+              event.preventDefault();
+              dropOn(target);
+            }
+            clearDrag();
+          }}
+          onDragEnd={clearDrag}
+        >
+          {images.map((url) => {
+            const info = infoByUrl.get(url);
+            const prompt = info?.prompt ?? '';
+            return (
+              <li key={url}>
+                <div
+                  className={cx('icard', dragId === url && 'drag', overId === url && 'over')}
+                  data-img={url}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={prompt || 'Gallery image'}
+                  draggable
+                  onClick={() => setLightbox(url)}
+                  onKeyDown={(event) => {
+                    if (event.altKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+                      event.preventDefault();
+                      void moveGalleryImage(url, event.key === 'ArrowLeft' ? -1 : 1);
+                    } else if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      setLightbox(url);
+                    }
+                  }}
+                  onDragStart={(event) => {
+                    dragIdRef.current = url;
+                    setDragId(url);
+                    event.dataTransfer.effectAllowed = 'move';
+                    event.dataTransfer.setData('text/plain', url);
+                  }}
+                  onDragEnter={() => {
+                    if (dragIdRef.current && dragIdRef.current !== url) setOverId(url);
+                  }}
+                  onDragOver={(event) => {
+                    if (!dragIdRef.current) return;
+                    event.preventDefault();
+                  }}
+                  onDrop={(event) => {
+                    event.stopPropagation();
+                    event.preventDefault();
+                    dropOn(url);
+                  }}
                 >
-                  <ChevronLeft className="h-4 w-4" aria-hidden="true" />
-                </button>
-                <span className="text-[11px] tabular-nums text-white/60">{index + 1}</span>
-                <button
-                  type="button"
-                  onClick={() => removeFromGallery(url)}
-                  aria-label="Remove from Gallery"
-                  className="rounded p-1.5 text-white/80 transition-colors hover:text-danger"
-                >
-                  <Trash2 className="h-4 w-4" aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => moveGalleryImage(url, 1)}
-                  disabled={index === images.length - 1}
-                  aria-label="Move later"
-                  className="rounded p-1.5 text-white/80 transition-colors hover:text-white disabled:opacity-30"
-                >
-                  <ChevronRight className="h-4 w-4" aria-hidden="true" />
-                </button>
-              </div>
-            </li>
-          ))}
+                  <img src={url} alt="" loading="lazy" draggable={false} />
+                  <div className="tov">
+                    <div className="tbtns">
+                      <button
+                        type="button"
+                        aria-label="Download"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          downloadImage(url, prompt);
+                        }}
+                      >
+                        <Download className="ic" aria-hidden="true" />
+                      </button>
+                    </div>
+                    <span className="tcap">{prompt || 'Gallery image'}</span>
+                  </div>
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
 
-      {lightbox ? <ImageLightbox url={lightbox} onClose={() => setLightbox(null)} /> : null}
+      {lightbox ? (
+        <ImageLightbox
+          url={lightbox}
+          urls={images}
+          onNavigate={setLightbox}
+          title={infoByUrl.get(lightbox)?.label}
+          prompt={infoByUrl.get(lightbox)?.prompt}
+          onUsePrompt={(value) => {
+            requestImageStudioPrompt(value);
+            setView('imagestudio');
+          }}
+          saved
+          onToggleSave={() => void removeFromGallery(lightbox)}
+          onClose={() => setLightbox(null)}
+        />
+      ) : null}
     </div>
   );
 }

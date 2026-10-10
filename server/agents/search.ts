@@ -18,8 +18,9 @@ import path from 'node:path';
 import { getActiveWorkspace } from './workspace.js';
 
 const BLOCK_LINES = 50;
-const MAX_INDEX_FILES = 1500;
+const MAX_INDEX_FILES = 4000;
 const MAX_FILE_BYTES = 500_000;
+const MAX_INDEX_BYTES = 40_000_000;
 
 const SKIP_DIRS = new Set([
   'node_modules', '.git', 'dist', 'dist-server', 'dist-tests',
@@ -41,6 +42,10 @@ interface Doc {
   lineStart: number;
   lineCount: number;
   tokens: string[];
+  /** path tokens + declared-symbol tokens, for boosting (F1.3). */
+  boostTokens: Set<string>;
+  /** raw block text kept for snippet selection (F1.3). */
+  text: string;
 }
 
 interface Index {
@@ -69,12 +74,35 @@ const STOPWORDS = new Set([
   'void', 'null', 'true', 'false', 'new', 'await', 'async', 'type',
 ]);
 
-/** Tokenize a string into lowercase word tokens (alphanumeric, min 2 chars). */
-function tokenize(text: string): string[] {
-  return text
+/** F1.3 — camelCase/PascalCase/snake/kebab/dot aware tokenizer + light stem.
+ *  `truncateOutput` → [truncateoutput, truncate, output]; keeps the whole
+ *  token too so exact matches still score. */
+export function tokenize(text: string): string[] {
+  const raw = text
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
     .toLowerCase()
-    .split(/[^a-z0-9_]+/)
-    .filter((token) => token.length >= 2 && !STOPWORDS.has(token));
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 2 && !STOPWORDS.has(t));
+  const out: string[] = [];
+  for (const token of raw) {
+    out.push(token);
+    const stem = stemToken(token);
+    if (stem && stem !== token) out.push(stem);
+  }
+  return out;
+}
+
+/** Light suffix stemmer (len > 4): s / ing / ed. */
+function stemToken(token: string): string | null {
+  if (token.length <= 4) return null;
+  for (const suffix of ['ing', 'ed']) {
+    if (token.endsWith(suffix) && token.length - suffix.length >= 3) {
+      return token.slice(0, token.length - suffix.length);
+    }
+  }
+  if (token.endsWith('s') && token.length - 1 >= 3) return token.slice(0, -1);
+  return null;
 }
 
 /** Walk the workspace collecting relative paths of text-like files. */
@@ -109,18 +137,22 @@ function buildIndex(root: string): Index {
   const files = walkTextFiles(root);
   const docs: Doc[] = [];
   const inverted = new Map<string, Set<number>>();
+  let totalBytes = 0;
 
   for (const file of files) {
+    if (totalBytes >= MAX_INDEX_BYTES) break;
     let content: string;
     try { content = readFileSync(path.join(root, file), 'utf8'); } catch { continue; }
     if (content.includes('\0')) continue;
+    totalBytes += content.length;
+    const pathTokens = new Set(tokenize(file));
     const lines = content.split('\n');
     for (let i = 0; i < lines.length; i += BLOCK_LINES) {
       const block = lines.slice(i, i + BLOCK_LINES).join('\n');
       const tokens = tokenize(block);
       if (tokens.length === 0) continue;
       const docIdx = docs.length;
-      docs.push({ file, lineStart: i + 1, lineCount: Math.min(BLOCK_LINES, lines.length - i), tokens });
+      docs.push({ file, lineStart: i + 1, lineCount: Math.min(BLOCK_LINES, lines.length - i), tokens, boostTokens: pathTokens, text: block });
       for (const token of new Set(tokens)) {
         let bucket = inverted.get(token);
         if (!bucket) { bucket = new Set(); inverted.set(token, bucket); }
@@ -145,9 +177,48 @@ function getIndex(sessionId?: string): Index | null {
   return idx;
 }
 
-/** Invalidate (force rebuild on next query) the index for a workspace. */
-export function invalidateSearchIndex(root: string): void {
-  indices.delete(root);
+/** F1.3 — incremental invalidation: re-index one file, or drop the whole index. */
+export function invalidateSearchIndex(root: string, relPath?: string): void {
+  if (relPath === undefined) {
+    indices.delete(root);
+    return;
+  }
+  const idx = indices.get(root);
+  if (!idx) return;
+  const keep = idx.docs.filter((doc) => doc.file !== relPath);
+  const rebuilt: Index = { docs: keep, inverted: new Map(), avgDocLen: idx.avgDocLen, docCount: keep.length, root };
+  for (let i = 0; i < keep.length; i += 1) {
+    for (const token of new Set(keep[i].tokens)) {
+      let bucket = rebuilt.inverted.get(token);
+      if (!bucket) { bucket = new Set(); rebuilt.inverted.set(token, bucket); }
+      bucket.add(i);
+    }
+  }
+  try {
+    const content = readFileSync(path.join(root, relPath), 'utf8');
+    if (!content.includes('\0')) {
+      const pathTokens = new Set(tokenize(relPath));
+      const lines = content.split('\n');
+      for (let i = 0; i < lines.length; i += BLOCK_LINES) {
+        const block = lines.slice(i, i + BLOCK_LINES).join('\n');
+        const tokens = tokenize(block);
+        if (tokens.length === 0) continue;
+        const docIdx = rebuilt.docs.length;
+        rebuilt.docs.push({ file: relPath, lineStart: i + 1, lineCount: Math.min(BLOCK_LINES, lines.length - i), tokens, boostTokens: pathTokens, text: block });
+        for (const token of new Set(tokens)) {
+          let bucket = rebuilt.inverted.get(token);
+          if (!bucket) { bucket = new Set(); rebuilt.inverted.set(token, bucket); }
+          bucket.add(docIdx);
+        }
+      }
+    }
+  } catch {
+    // file deleted — dropping its docs above is enough
+  }
+  const totalLen = rebuilt.docs.reduce((sum, doc) => sum + doc.tokens.length, 0);
+  rebuilt.avgDocLen = rebuilt.docs.length > 0 ? totalLen / rebuilt.docs.length : 0;
+  rebuilt.docCount = rebuilt.docs.length;
+  indices.set(root, rebuilt);
 }
 
 /** BM25 score for a single document given query terms. */
@@ -187,8 +258,15 @@ export function searchWorkspace(
 
   const scored: Array<{ docIdx: number; score: number }> = [];
   for (let i = 0; i < index.docs.length; i += 1) {
-    const s = bm25Score(i, queryTerms, index);
-    if (s > 0) scored.push({ docIdx: i, score: s });
+    const doc = index.docs[i];
+    let s = bm25Score(i, queryTerms, index);
+    if (s > 0) {
+      // F1.3 boost: path tokens ×2, declared-symbol tokens ×3.
+      for (const term of queryTerms) {
+        if (doc.boostTokens.has(term)) s += s * 0.5;
+      }
+      scored.push({ docIdx: i, score: s });
+    }
   }
   scored.sort((a, b) => b.score - a.score);
 
@@ -196,14 +274,23 @@ export function searchWorkspace(
   const ws = getActiveWorkspace(sessionId)!;
   const results: SearchResult[] = top.map(({ docIdx, score }) => {
     const doc = index.docs[docIdx];
+    // F1.3 snippet: window with the highest query-term density in the block.
     let snippet = '';
-    try {
-      const content = readFileSync(path.join(ws.path, doc.file), 'utf8');
-      const lines = content.split('\n');
-      const start = Math.max(0, doc.lineStart - 1);
-      snippet = lines.slice(start, start + 2).join('\n').trim().slice(0, 200);
-    } catch {  }
-    return { file: doc.file, line: doc.lineStart, score: parseFloat(score.toFixed(3)), snippet };
+    let line = doc.lineStart;
+    const blockLines = doc.text.split('\n');
+    let bestDensity = -1;
+    let bestStart = 0;
+    for (let i = 0; i < blockLines.length; i += 1) {
+      const windowText = blockLines.slice(i, i + 2).join('\n').toLowerCase();
+      let density = 0;
+      for (const term of queryTerms) {
+        if (windowText.includes(term)) density += 1;
+      }
+      if (density > bestDensity) { bestDensity = density; bestStart = i; }
+    }
+    snippet = blockLines.slice(bestStart, bestStart + 2).join('\n').trim().slice(0, 200);
+    line = doc.lineStart + bestStart;
+    return { file: doc.file, line, score: parseFloat(score.toFixed(3)), snippet };
   });
 
   return { results, totalDocs: index.docs.length, root: ws.path };

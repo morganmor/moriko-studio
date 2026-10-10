@@ -83,7 +83,6 @@ for (const [providerId, provider] of Object.entries(catalog)) {
   for (const [modelId, model] of Object.entries(provider.models ?? {})) {
     const options = model.reasoning_options ?? [];
     const efforts = options.find((option) => option.type === 'effort')?.values ?? null;
-    // CAPABILITY-ONLY rows: fields nothing reads are deliberately not written.
     out[`${providerId}/${modelId}`] = {
       name: model.name ?? null,
       reasoning: Boolean(model.reasoning),

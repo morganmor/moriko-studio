@@ -41,8 +41,6 @@ export async function writeTool(args: Record<string, unknown>, ctx: AgentToolCon
   }
 
   if (exists && overwrite) {
-    // Overwrite still honours read-before-edit: the caller must have seen the file.
-    // Reuse the shared gate by loading through a lightweight check below.
     const loaded = await loadForOverwrite(absolute, relative, ctx, args);
     if (!loaded.ok) return loaded.result;
   }

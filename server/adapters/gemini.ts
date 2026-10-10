@@ -390,10 +390,6 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
 
     const steered = drainSteers(params.sessionId);
     for (const entry of steered) onEvent({ type: 'steer', id: entry.id, text: steerTextOf(entry), parts: entry.parts });
-    // DSH-STYLE STEER: drained steers ride as an ORDINARY user message — the
-    // generic parts flow through the same toGeminiParts mapping as user input.
-    // Wire refs resolve at this seam — the steer buffer bypasses /api/chat's
-    // resolveWireRefs, so the provider would otherwise receive a dead URL.
     const steerParts = steersToUserParts(steered);
     resolveSteerPartRefs(steerParts);
     if (steered.length > 0) {

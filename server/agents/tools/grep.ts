@@ -20,6 +20,7 @@ import {
 import { walkFiles } from './list.js';
 import { recordRead } from '../read-policy.js';
 import { sha256 } from '../edit-diagnostics.js';
+import { enclosingSymbol } from '../ts-ast.js';
 
 const GENERIC_KEYWORDS = new Set([
   'done', 'error', 'finish', 'end', 'start', 'stop', 'run', 'ok', 'test',
@@ -42,7 +43,7 @@ const ARG_ALIASES: Record<string, string> = {
 };
 const ALLOWED_ARGS = new Set([
   'pattern', 'patterns', 'glob', 'globs', 'subpath', 'subpaths',
-  'caseSensitive', 'maxResults', 'context', 'wholeLines', 'sort', 'continueFrom',
+  'caseSensitive', 'maxResults', 'context', 'wholeLines', 'sort', 'continueFrom', 'enclosing',
 ]);
 
 function normalizeArgs(raw: Record<string, unknown>): {
@@ -329,6 +330,25 @@ export async function grepTool(rawArgs: Record<string, unknown>, ctx: AgentToolC
     return `${displayPath}:${lineNo}: ${cut ? `${trimmed.slice(0, MAX_LINE_CHARS)}…` : trimmed}`;
   };
 
+  // F2.3 — enclosing symbol annotation for TS/JS hits (default ON when ≤ 50 results).
+  const enclosingOn = args.enclosing === undefined ? true : bool(args, 'enclosing');
+  const wantEnclosing = enclosingOn && totalMatches <= 50;
+  const enclosingCache = new Map<string, string | null>();
+  const enclosingFor = (scan: FileScan, lineNo: number): string | null => {
+    if (!wantEnclosing) return null;
+    if (!/\.(ts|tsx|js|jsx|mts|cts)$/.test(scan.displayPath)) return null;
+    let sym = enclosingCache.get(scan.displayPath);
+    if (sym === undefined) {
+      sym = enclosingSymbol(scan.content, scan.displayPath, lineNo);
+      enclosingCache.set(scan.displayPath, sym);
+    }
+    return sym;
+  };
+  const enclosingSuffix = (scan: FileScan, lineNo: number): string => {
+    const sym = enclosingFor(scan, lineNo);
+    return sym ? `  ⟨in ${sym}⟩` : '';
+  };
+
   if (multiPattern) {
     const perPatternBudget = Math.max(2_000, Math.floor(MAX_OUTPUT_CHARS / patterns.length));
     let usedChars = 0;
@@ -341,7 +361,7 @@ export async function grepTool(rawArgs: Record<string, unknown>, ctx: AgentToolC
         for (const hit of scan.hits) {
           if (!hit.matched.includes(r)) continue;
           groupCount += 1;
-          const row = flatLine(scan.displayPath, hit.lineNo, scan.view[hit.lineNo - 1] ?? '');
+          const row = flatLine(scan.displayPath, hit.lineNo, scan.view[hit.lineNo - 1] ?? '') + enclosingSuffix(scan, hit.lineNo);
           if (row.length + 1 <= groupBudget) {
             rows.push(row);
             groupBudget -= row.length + 1;
@@ -358,7 +378,7 @@ export async function grepTool(rawArgs: Record<string, unknown>, ctx: AgentToolC
   } else if (!receiptMode) {
     for (const scan of scans) {
       for (const hit of scan.hits) {
-        const row = flatLine(scan.displayPath, hit.lineNo, scan.view[hit.lineNo - 1] ?? '');
+        const row = flatLine(scan.displayPath, hit.lineNo, scan.view[hit.lineNo - 1] ?? '') + enclosingSuffix(scan, hit.lineNo);
         if (row.length + 1 > budget) {
           budgetStopped = true;
           break;

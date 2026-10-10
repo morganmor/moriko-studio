@@ -130,7 +130,7 @@ function resizeRect(
       maxW = 1 - start.x;
       maxH = bottom;
       break;
-    default: // 'sw'
+    default:
       w = right - px;
       h = py - start.y;
       originX = right;
@@ -174,7 +174,7 @@ function resizeRect(
 
 /**
  * Client-side image editor: rotate / flip / crop (free or locked ratio) /
- * resize, exported as a data URL under the 3 MB reference cap. Works for ANY
+ * resize, exported as a data URL under the 15 MB reference cap. Works for ANY
  * model — the result lands in the reference tray; whether it is SENT to the
  * provider is decided by the model's capabilities (the server strips
  * references from text-to-image models), so editing is never gated on
@@ -203,7 +203,6 @@ export function ImageEditorModal({
   const wrapRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
 
-  // Reset everything whenever a different image opens.
   useEffect(() => {
     if (!open) return;
     setImg(null);
@@ -226,8 +225,6 @@ export function ImageEditorModal({
     };
   }, [open, src, showNotice]);
 
-  // Oriented working copy: flips act in DISPLAY space (translate → scale →
-  // rotate → draw), so mirroring always mirrors what the user currently sees.
   const oriented = useMemo(() => {
     if (!img) return null;
     const swapped = ((rot % 360) + 360) % 180 !== 0;
@@ -264,9 +261,7 @@ export function ImageEditorModal({
     else if (op === 'flip-h') setFlipH((value) => !value);
     else setFlipV((value) => !value);
     setCrop((current) => {
-      // Flips keep both axes — even a locked rect stays at its ratio.
       if (op === 'flip-h' || op === 'flip-v') return transformCrop(current, op);
-      // A 90° turn inverts the locked pixel ratio — refit; free crops move.
       if (ratio !== 'free' && oriented) {
         return fitCrop(ratio, oriented.height, oriented.width);
       }
@@ -353,15 +348,15 @@ export function ImageEditorModal({
       onClose={onClose}
       title="Edit image"
       description="Crop, rotate or resize — the result joins your reference tray."
-      size="max-w-3xl"
+      size="wide"
       footer={
         <>
-          <button type="button" className="pill-button border border-hairline text-muted hover:text-ink" onClick={onClose}>
+          <button type="button" className="btn ghost sm" onClick={onClose}>
             Cancel
           </button>
           <button
             type="button"
-            className="pill-button bg-accent text-accent-ink hover:brightness-110"
+            className="btn primary sm"
             onClick={apply}
             disabled={!oriented}
           >
@@ -370,42 +365,38 @@ export function ImageEditorModal({
         </>
       }
     >
-      <div className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-center gap-1.5">
-          <button type="button" className="icon-button" aria-label="Rotate counter-clockwise" onClick={() => reorient('rot-ccw')}>
-            <RotateCcw className="h-4 w-4" aria-hidden="true" />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+          <button type="button" className="ib" aria-label="Rotate counter-clockwise" onClick={() => reorient('rot-ccw')}>
+            <RotateCcw className="ic" aria-hidden="true" />
           </button>
-          <button type="button" className="icon-button" aria-label="Rotate clockwise" onClick={() => reorient('rot-cw')}>
-            <RotateCw className="h-4 w-4" aria-hidden="true" />
+          <button type="button" className="ib" aria-label="Rotate clockwise" onClick={() => reorient('rot-cw')}>
+            <RotateCw className="ic" aria-hidden="true" />
           </button>
-          <button type="button" className="icon-button" aria-label="Flip horizontally" onClick={() => reorient('flip-h')}>
-            <FlipHorizontal className="h-4 w-4" aria-hidden="true" />
+          <button type="button" className="ib" aria-label="Flip horizontally" onClick={() => reorient('flip-h')}>
+            <FlipHorizontal className="ic" aria-hidden="true" />
           </button>
-          <button type="button" className="icon-button" aria-label="Flip vertically" onClick={() => reorient('flip-v')}>
-            <FlipVertical className="h-4 w-4" aria-hidden="true" />
+          <button type="button" className="ib" aria-label="Flip vertically" onClick={() => reorient('flip-v')}>
+            <FlipVertical className="ic" aria-hidden="true" />
           </button>
 
-          <span className="mx-1 h-4 w-px bg-hairline" aria-hidden="true" />
+          <span style={{ width: 1, height: 16, margin: '0 4px', background: 'var(--line)' }} aria-hidden="true" />
 
           {RATIOS.map((entry) => (
             <button
               key={entry.id}
               type="button"
               onClick={() => pickRatio(entry.id)}
-              className={cx(
-                'rounded-full border px-2.5 py-1 text-[11.5px] transition-colors',
-                ratio === entry.id
-                  ? 'border-accent/60 bg-accent-soft text-ink'
-                  : 'border-hairline bg-surface text-muted hover:border-accent/50 hover:text-ink',
-              )}
+              className={cx('sc', ratio === entry.id && 'on')}
+              style={{ fontSize: 11.5 }}
             >
               {entry.label}
             </button>
           ))}
 
-          <span className="min-w-1 flex-1" />
+          <span style={{ minWidth: 4, flex: 1 }} />
 
-          <label className="flex items-center gap-1.5 text-[12px] text-muted">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)' }}>
             Long edge
             <input
               type="number"
@@ -413,49 +404,48 @@ export function ImageEditorModal({
               max={OUT_MAX}
               value={longEdge}
               onChange={(event) => setLongEdge(event.target.value)}
-              className="field w-20 px-2 py-1 text-center text-[12px] tabular-nums"
+              className="field"
+              style={{ width: 80, padding: '4px 8px', textAlign: 'center', fontSize: 12, fontVariantNumeric: 'tabular-nums' }}
               aria-label="Output long edge in pixels"
             />
-            <span className="text-faint">px</span>
+            <span style={{ color: 'var(--faint)' }}>px</span>
           </label>
         </div>
 
-        <div className="flex min-h-[200px] justify-center overflow-hidden rounded-control border border-hairline bg-canvas p-3">
+        <div style={{ display: 'flex', minHeight: 200, justifyContent: 'center', overflow: 'hidden', borderRadius: 'var(--r-md)', border: '1px solid var(--line)', background: 'rgb(var(--c-canvas))', padding: 12 }}>
           <div
             ref={wrapRef}
-            className="relative inline-block max-w-full touch-none"
+            style={{ position: 'relative', display: 'inline-block', maxWidth: '100%', touchAction: 'none' }}
             onPointerMove={onDragMove}
             onPointerUp={endDrag}
             onPointerCancel={endDrag}
           >
             <canvas
               ref={previewRef}
-              className="block max-h-[46vh] max-w-full rounded-control border border-hairline"
-              style={{ height: 'auto', width: 'auto' }}
+              style={{ display: 'block', maxHeight: '46vh', maxWidth: '100%', borderRadius: 'var(--r-md)', border: '1px solid var(--line)', height: 'auto', width: 'auto' }}
             />
             {oriented ? (
-              <div className="absolute inset-0">
+              <div style={{ position: 'absolute', inset: 0 }}>
                 <div
                   role="presentation"
-                  className="absolute cursor-move"
-                  style={cropStyle}
+                  style={{ ...cropStyle, position: 'absolute', cursor: 'move' }}
                   onPointerDown={(event) => startDrag(event, 'move')}
                 >
-                  <div className="absolute inset-0 border border-accent" style={{ boxShadow: '0 0 0 9999px rgb(0 0 0 / 0.55)' }} />
-                  <div className={cx(handleClass, '-left-1.5 -top-1.5 cursor-nwse-resize')} onPointerDown={(event) => startDrag(event, 'nw')} />
-                  <div className={cx(handleClass, '-right-1.5 -top-1.5 cursor-nesw-resize')} onPointerDown={(event) => startDrag(event, 'ne')} />
-                  <div className={cx(handleClass, '-left-1.5 -bottom-1.5 cursor-nesw-resize')} onPointerDown={(event) => startDrag(event, 'sw')} />
-                  <div className={cx(handleClass, '-right-1.5 -bottom-1.5 cursor-nwse-resize')} onPointerDown={(event) => startDrag(event, 'se')} />
+                  <div style={{ position: 'absolute', inset: 0, border: '1px solid rgb(var(--c-accent))', boxShadow: '0 0 0 9999px rgb(0 0 0 / 0.55)' }} />
+                  <div className={cx(handleClass)} style={{ position: 'absolute', left: -6, top: -6, cursor: 'nwse-resize' }} onPointerDown={(event) => startDrag(event, 'nw')} />
+                  <div className={cx(handleClass)} style={{ position: 'absolute', right: -6, top: -6, cursor: 'nesw-resize' }} onPointerDown={(event) => startDrag(event, 'ne')} />
+                  <div className={cx(handleClass)} style={{ position: 'absolute', left: -6, bottom: -6, cursor: 'nesw-resize' }} onPointerDown={(event) => startDrag(event, 'sw')} />
+                  <div className={cx(handleClass)} style={{ position: 'absolute', right: -6, bottom: -6, cursor: 'nwse-resize' }} onPointerDown={(event) => startDrag(event, 'se')} />
                 </div>
               </div>
             ) : (
-              <div className="absolute inset-0 flex items-center justify-center text-[12.5px] text-faint">Loading…</div>
+              <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12.5, color: 'var(--faint)' }}>Loading…</div>
             )}
           </div>
         </div>
 
-        <p className="text-[11.5px] text-faint">
-          {oriented ? `${oriented.width}×${oriented.height} px source` : 'Reading image…'} — output stays under the 3 MB reference cap automatically.
+        <p style={{ margin: 0, fontSize: 11.5, color: 'var(--faint)' }}>
+          {oriented ? `${oriented.width}×${oriented.height} px source` : 'Reading image…'} — output stays under the {MAX_REFERENCE_BYTES / (1024 * 1024)} MB reference cap automatically.
         </p>
       </div>
     </Modal>

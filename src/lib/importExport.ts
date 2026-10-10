@@ -78,11 +78,6 @@ function sanitizeSettings(value: unknown): ChatSettings {
       raw.compactThresholdTokens === null || raw.compactThresholdTokens === undefined
         ? null
         : clamp(Math.round(asNumber(raw.compactThresholdTokens, 0)), 1024, 10_000_000) || null,
-    compactKeepRecentTurns: clamp(
-      Math.round(asNumber(raw.compactKeepRecentTurns, DEFAULT_SETTINGS.compactKeepRecentTurns)),
-      1,
-      20,
-    ),
     compactThresholdRatio: clamp(
       asNumber(raw.compactThresholdRatio, DEFAULT_SETTINGS.compactThresholdRatio),
       0.5,
@@ -385,7 +380,6 @@ function sanitizeTurn(value: unknown, index: number): Turn | null {
     ...(kind === 'probation' && raw.outputFrozenMeta
       ? { outputFrozenMeta: { content: asString(raw.outputFrozenMeta.content) } }
       : {}),
-    // RESTORE marker: per-file restore points + the restore's own diff.
     ...(kind === 'restore' && raw.restoreMeta
       ? {
           restoreMeta: {

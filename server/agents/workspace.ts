@@ -335,7 +335,6 @@ export function isInsideAllowedDir(absolute: string): boolean {
 export function isAttachmentPath(absolute: string): boolean {
   const rel = path.relative(conversationDir, absolute);
   if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return false;
-  // conversation/<chat-folder>/attachment/<file>
   const parts = rel.split(path.sep);
   return parts.length >= 3 && parts[0].startsWith('chat-') && parts[1] === 'attachment';
 }

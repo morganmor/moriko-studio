@@ -55,7 +55,6 @@ export function parseUnifiedDiff(diff: string): ParsedDiffFile[] {
   let hunk: DiffHunk | null = null;
   let beforeNo = 0;
   let afterNo = 0;
-  // Expected/seen row counts per open hunk — closeHunk() derives `truncated`.
   let expectedBefore = 0;
   let expectedAfter = 0;
   let seenBefore = 0;
@@ -115,7 +114,6 @@ export function parseUnifiedDiff(diff: string): ParsedDiffFile[] {
       seenBefore += 1;
       seenAfter += 1;
     } else {
-      // Not a diff line (defensive) — surface it instead of dropping it.
       hunk.rows.push({ kind: 'note', text: raw.trim() });
     }
   }

@@ -79,7 +79,6 @@ export async function editBetweenTool(args: Record<string, unknown>, ctx: AgentT
     };
   }
 
-  // No-op guard: replacing the region with identical text is a guaranteed no-op.
   const rawLines = normContent.split('\n');
   const view = rawLines.length > 1 && rawLines[rawLines.length - 1] === '' ? rawLines.slice(0, -1) : rawLines;
   const regionText = view.slice(from - 1, to).join('\n');

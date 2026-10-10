@@ -24,7 +24,9 @@ export const RAW_BODY_PATHS = new Set<string>([
   '/api/attachments/store',
 ]);
 
-const JSON_BODY_LIMIT = '30mb';
+/** JSON body cap: reference images ride the submit body as data URLs —
+ *  15 MB × up to 8 refs (base64 ≈ 160 MB) must still parse. */
+const JSON_BODY_LIMIT = '200mb';
 
 /**
  * The app's global JSON parser, skipping the raw-body routes above. Mounted

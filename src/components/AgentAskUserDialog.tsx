@@ -48,7 +48,6 @@ export function AgentAskUserDialog() {
         ];
         state.setPendingAskUser(merged);
       } catch {
-        // Device unreachable — keep whatever is on screen; never CLEAR on failure.
       }
     };
     void sync();
@@ -77,8 +76,6 @@ export function AgentAskUserDialog() {
         void extendAgentQuestion(entry.id, 10 * 60 * 1000).catch(() => undefined);
       }
     };
-    // Visibility-AWARE: hidden later (tab switch after the card opened) must
-    // start the heartbeat too, not only a hidden mount.
     const start = () => {
       if (heartbeat !== null) return;
       extendAll();
@@ -148,15 +145,15 @@ export function AgentAskUserDialog() {
       open
       onClose={() => void skipAll()}
       title="The agent has a question"
-      size="max-w-lg"
+      size=""
       footer={
         <>
-          <span className="mr-auto text-[11px] text-faint">
+          <span style={{ marginRight: 'auto', fontSize: 11, color: 'var(--faint)' }}>
             The agent is paused until you answer. Blank questions are skipped.
           </span>
           <button
             type="button"
-            className="pill-button text-muted hover:text-ink"
+            className="btn ghost sm"
             onClick={() => void skipAll()}
             disabled={submitting}
           >
@@ -164,49 +161,49 @@ export function AgentAskUserDialog() {
           </button>
           <button
             type="button"
-            className="pill-button bg-accent text-accent-ink hover:brightness-110"
+            className="btn primary sm"
             onClick={() => void submit()}
             disabled={submitting}
           >
             {submitting ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              <Loader2 className="ic spin" aria-hidden="true" />
             ) : (
-              <Send className="h-3.5 w-3.5" aria-hidden="true" />
+              <Send className="ic" aria-hidden="true" />
             )}
             Send answers
           </button>
         </>
       }
     >
-      <div className="flex items-start gap-3">
-        <span className="mt-0.5 rounded-control bg-accent/10 p-2">
-          <CircleHelp className="h-5 w-5 text-accent" aria-hidden="true" />
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        <span style={{ marginTop: 2, borderRadius: 'var(--r-md)', background: 'rgb(var(--c-accent) / 0.1)', padding: 8 }}>
+          <CircleHelp className="ic" style={{ width: 20, height: 20, color: 'rgb(var(--c-accent))' }} aria-hidden="true" />
         </span>
-        <div className="min-w-0">
-          <p className="text-sm font-medium text-ink">
+        <div style={{ minWidth: 0 }}>
+          <p style={{ margin: 0, fontSize: 14, fontWeight: 500, color: 'rgb(var(--c-ink))' }}>
             {request.questions.length === 1
               ? 'The agent needs one answer to continue.'
               : `The agent needs ${request.questions.length} answers to continue.`}
           </p>
-          <p className="mt-1 text-[13px] text-muted">
-            It asked via <code className="rounded bg-elevated px-1 py-0.5 text-[12px]">agent__ask_user</code> —
+          <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--muted)' }}>
+            It asked via <code style={{ borderRadius: 4, background: 'rgb(var(--c-elev))', padding: '1px 4px', fontSize: 12 }}>agent__ask_user</code> —
             reply below, or leave a question blank to skip it.
           </p>
         </div>
       </div>
 
-      <div className="mt-4 space-y-4">
+      <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>
         {request.questions.map((question, qIndex) => (
-          <div key={question.id} className="rounded-control border border-hairline bg-elevated/40 p-3">
+          <div key={question.id} className="card" style={{ borderRadius: 'var(--r-md)', padding: 12, background: 'rgb(var(--c-elev) / 0.4)' }}>
             <label
               htmlFor={`ask-${question.id}`}
-              className="block text-[13px] font-medium text-ink"
+              style={{ display: 'block', fontSize: 13, fontWeight: 500, color: 'rgb(var(--c-ink))' }}
             >
               {qIndex + 1}. {question.question}
             </label>
 
             {question.type === 'choice' ? (
-              <div className="mt-2 space-y-1.5" role="radiogroup" aria-label={question.question}>
+              <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }} role="radiogroup" aria-label={question.question}>
                 {question.choices.map((choice, cIndex) => {
                   const active = selected[question.id] === cIndex;
                   return (
@@ -216,11 +213,15 @@ export function AgentAskUserDialog() {
                       role="radio"
                       aria-checked={active}
                       onClick={() => setSelected((prev) => ({ ...prev, [question.id]: cIndex }))}
-                      className={`w-full rounded-control border px-2.5 py-1.5 text-left text-[13px] transition-colors ${
-                        active
-                          ? 'border-accent bg-accent-soft text-ink'
-                          : 'border-hairline text-muted hover:border-accent/40 hover:text-ink'
-                      }`}
+                      className="btn ghost sm"
+                      style={{
+                        justifyContent: 'flex-start',
+                        fontSize: 13,
+                        fontWeight: 400,
+                        borderColor: active ? 'rgb(var(--c-accent))' : 'var(--line)',
+                        background: active ? 'var(--c-accent-soft)' : 'transparent',
+                        color: active ? 'rgb(var(--c-ink))' : 'var(--muted)',
+                      }}
                     >
                       {choice}
                     </button>
@@ -233,7 +234,8 @@ export function AgentAskUserDialog() {
               <input
                 id={`ask-${question.id}`}
                 type="text"
-                className="mt-2 w-full rounded-control border border-hairline bg-elevated px-2.5 py-1.5 text-[13px] text-ink outline-none focus:border-accent/60"
+                className="field"
+                style={{ marginTop: 8, width: '100%', fontSize: 13 }}
                 placeholder={question.type === 'choice' ? 'Or type your own answer...' : 'Your answer...'}
                 value={texts[question.id] ?? ''}
                 onChange={(event) => setTexts((prev) => ({ ...prev, [question.id]: event.target.value }))}
@@ -244,8 +246,8 @@ export function AgentAskUserDialog() {
       </div>
 
       {submitting ? (
-        <div className="mt-3 flex items-center gap-2 text-[12px] text-muted" role="status">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--muted)' }} role="status">
+          <Loader2 className="ic spin" aria-hidden="true" />
           Sending answers...
         </div>
       ) : null}

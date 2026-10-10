@@ -1,9 +1,12 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en" class="dark" data-accent="ember" data-font="inter" data-density="comfy">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#191919" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta
       name="description"
       content="Moriko Studio — an AI chat workspace with system instructions, thinking levels, tools, and custom providers."
@@ -15,7 +18,14 @@
       (function applyStoredTheme() {
         try {
           var stored = JSON.parse(localStorage.getItem('nova.theme.v1') || '"dark"');
-          var theme = stored === 'light' ? 'light' : stored === 'mocha' ? 'mocha' : 'dark';
+          var theme =
+            stored === 'light' || stored === 'mocha'
+              ? stored
+              : stored === 'system'
+                ? matchMedia('(prefers-color-scheme: dark)').matches
+                  ? 'dark'
+                  : 'light'
+                : 'dark';
           document.documentElement.classList.toggle('dark', theme !== 'light');
           document.documentElement.classList.toggle('mocha', theme === 'mocha');
           document.documentElement.style.colorScheme = theme === 'light' ? 'light' : 'dark';

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { FolderOpen, Loader2, ShieldAlert, SquareTerminal } from './icons';
 
 import { useStore } from '../store/useStore';
@@ -8,12 +8,12 @@ import { Modal } from './ui';
  * SANDBOX PERMISSION dialog.
  *
  * When the agent wants to operate on paths OUTSIDE the active workspace, the
- * server pauses that tool call and emits a permission_request. This dialog is
- * the user's decision point: Deny, Allow once, or Allow for this session
- * (the exact paths are remembered in server memory only, cleared on restart).
- *
- * Deliberately not dismissible via Escape/backdrop: the agent is blocked
- * waiting, and an undecided request auto-denies after 2 minutes.
+ * server pauses that tool call and emits a permission_request. Decision UI:
+ * an INLINE .ask box inside the turn's run pill (desain Design2) — pill yang
+ * menunggu render kotak ask sendiri; dialog modal ini HANYA fallback bila
+ * pill turn yang menunggu tidak terlihat (turn sudah discroll jauh ke atas /
+ * thread tidak merender pill). Not dismissible: agent is blocked waiting,
+ * dan keputusan kosong auto-deny setelah 2 menit.
  */
 export function AgentPermissionDialog() {
   const requests = useStore((state) => state.pendingPermissions);
@@ -31,23 +31,36 @@ export function AgentPermissionDialog() {
     }
   };
 
+  /** Mekanisme Design2: approval utama INLINE di run pill turn yang
+   *  menunggu; modal ini hanya fallback. Pill merender kotak ask pada
+   *  mount pertamanya, jadi fallback menunggu satu frame agar tidak
+   *  kedip-putus (flush) ketika pill langsung menyediakan kotaknya. */
+  const [pillMounted, setPillMounted] = useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setPillMounted(true), 120);
+    return () => window.clearTimeout(timer);
+  }, []);
   if (!request) return null;
+  if (pillMounted && typeof document !== 'undefined') {
+    const scope = document.querySelector(`[data-waiting-permission="${request.id}"]`);
+    if (scope) return null;
+  }
 
   return (
     <Modal
       open
       onClose={() => undefined}
       title="Sandbox permission required"
-      size="max-w-lg"
+      size=""
       footer={
         <>
-          <span className="mr-auto text-[11px] text-faint">
+          <span style={{ marginRight: 'auto', fontSize: 11, color: 'var(--faint)' }}>
             {requests.length > 1 ? `${requests.length} request(s) pending · ` : ''}
             Without a decision, this is automatically denied after 2 minutes.
           </span>
           <button
             type="button"
-            className="pill-button border border-danger/40 text-danger hover:bg-danger/10"
+            className="btn danger sm"
             onClick={() => void decidingNow(false, false)}
             disabled={deciding}
           >
@@ -55,7 +68,7 @@ export function AgentPermissionDialog() {
           </button>
           <button
             type="button"
-            className="pill-button bg-accent text-accent-ink hover:brightness-110"
+            className="btn primary sm"
             onClick={() => void decidingNow(true, false)}
             disabled={deciding}
           >
@@ -63,7 +76,8 @@ export function AgentPermissionDialog() {
           </button>
           <button
             type="button"
-            className="pill-button border border-accent/40 bg-accent-soft text-ink hover:brightness-105"
+            className="btn sm"
+            style={{ borderColor: 'rgb(var(--c-accent) / 0.4)', background: 'var(--c-accent-soft)', color: 'rgb(var(--c-ink))' }}
             onClick={() => void decidingNow(true, true)}
             disabled={deciding}
           >
@@ -72,28 +86,28 @@ export function AgentPermissionDialog() {
         </>
       }
     >
-      <div className="flex items-start gap-3">
-        <span className="mt-0.5 rounded-control bg-warning/10 p-2">
-          <ShieldAlert className="h-5 w-5 text-warning" aria-hidden="true" />
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        <span style={{ marginTop: 2, borderRadius: 'var(--r-md)', background: 'rgb(var(--c-warn) / 0.1)', padding: 8 }}>
+          <ShieldAlert className="ic" style={{ width: 20, height: 20, color: 'rgb(var(--c-warn))' }} aria-hidden="true" />
         </span>
-        <div className="min-w-0">
+        <div style={{ minWidth: 0 }}>
           {request.command ? (
             <>
-              <p className="text-sm font-medium text-ink">
+              <p style={{ margin: 0, fontSize: 14, fontWeight: 500, color: 'rgb(var(--c-ink))' }}>
                 The agent wants to run a command.
               </p>
-              <p className="mt-1 text-[13px] text-muted">
-                Tool <code className="rounded bg-elevated px-1 py-0.5 text-[12px]">{request.tool}</code>{' '}
+              <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--muted)' }}>
+                Tool <code style={{ borderRadius: 4, background: 'rgb(var(--c-elev))', padding: '1px 4px', fontSize: 12 }}>{request.tool}</code>{' '}
                 will run the following command inside the workspace — review it before approving:
               </p>
             </>
           ) : (
             <>
-              <p className="text-sm font-medium text-ink">
+              <p style={{ margin: 0, fontSize: 14, fontWeight: 500, color: 'rgb(var(--c-ink))' }}>
                 The agent wants to access outside the workspace.
               </p>
-              <p className="mt-1 text-[13px] text-muted">
-                Tool <code className="rounded bg-elevated px-1 py-0.5 text-[12px]">{request.tool}</code>{' '}
+              <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--muted)' }}>
+                Tool <code style={{ borderRadius: 4, background: 'rgb(var(--c-elev))', padding: '1px 4px', fontSize: 12 }}>{request.tool}</code>{' '}
                 will touch the following paths — outside the workspace root, so your approval is required:
               </p>
             </>
@@ -102,31 +116,32 @@ export function AgentPermissionDialog() {
       </div>
 
       {request.command ? (
-        <div className="mt-3 flex items-start gap-2 break-all rounded-control border border-warning/30 bg-warning/5 px-2.5 py-2 font-mono text-[12.5px] text-ink">
-          <SquareTerminal className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" aria-hidden="true" />
-          <span className="min-w-0 break-all">{request.command}</span>
+        <div className="card" style={{ marginTop: 12, display: 'flex', alignItems: 'flex-start', gap: 8, overflowWrap: 'break-word', borderRadius: 'var(--r-md)', padding: '8px 10px', fontFamily: 'var(--f-mono)', fontSize: 12.5, color: 'rgb(var(--c-ink))', borderColor: 'rgb(var(--c-warn) / 0.3)', background: 'rgb(var(--c-warn) / 0.05)' }}>
+          <SquareTerminal className="ic" style={{ marginTop: 2, width: 14, height: 14, flexShrink: 0, color: 'rgb(var(--c-warn))' }} aria-hidden="true" />
+          <span style={{ minWidth: 0, overflowWrap: 'break-word' }}>{request.command}</span>
         </div>
       ) : (
-        <ul className="mt-3 space-y-1">
+        <ul style={{ margin: '12px 0 0', padding: 0, display: 'flex', flexDirection: 'column', gap: 4, listStyle: 'none' }}>
           {request.paths.map((path) => (
             <li
               key={path}
-              className="flex items-center gap-2 break-all rounded-control border border-warning/30 bg-warning/5 px-2.5 py-2 font-mono text-[12px] text-ink"
+              className="card"
+              style={{ display: 'flex', alignItems: 'center', gap: 8, overflowWrap: 'break-word', borderRadius: 'var(--r-md)', padding: '8px 10px', fontFamily: 'var(--f-mono)', fontSize: 12, color: 'rgb(var(--c-ink))', borderColor: 'rgb(var(--c-warn) / 0.3)', background: 'rgb(var(--c-warn) / 0.05)' }}
             >
-              <FolderOpen className="h-3.5 w-3.5 shrink-0 text-warning" aria-hidden="true" />
+              <FolderOpen className="ic" style={{ width: 14, height: 14, flexShrink: 0, color: 'rgb(var(--c-warn))' }} aria-hidden="true" />
               {path}
             </li>
           ))}
         </ul>
       )}
 
-      <p className="mt-3 text-[11px] text-faint">
-        Workspace root: <span className="font-mono">{request.root}</span>
+      <p style={{ margin: '12px 0 0', fontSize: 11, color: 'var(--faint)' }}>
+        Workspace root: <span style={{ fontFamily: 'var(--f-mono)' }}>{request.root}</span>
       </p>
 
       {deciding ? (
-        <div className="mt-3 flex items-center gap-2 text-[12px] text-muted" role="status">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--muted)' }} role="status">
+          <Loader2 className="ic spin" aria-hidden="true" />
           Sending decision…
         </div>
       ) : null}
