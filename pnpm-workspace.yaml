@@ -1,5 +1,9 @@
 allowBuilds:
   esbuild: true
 # Security override (Dependabot GHSA-x5fp-wj9c-mxmx, GHSA-4mjr-xmp4-gh2g):
+# shell-quote GHSA-w7jw-789q-3c3m, source-map-js GHSA-5rqg-jm4f-cqx7 (Dependabot #5)
 overrides:
   qs: '>=6.16.0'
+  proxy-addr: '>=2.0.8'
+  shell-quote: '>=1.11.0'
+  source-map-js: '>=1.2.2'
