@@ -2,16 +2,22 @@
 
 ## Preview
 
-| Preview 1 | Preview 2 |
-| :---: | :---: |
-| <img src="./docs/preview1.PNG" alt="Preview 1" width="100%"/> | <img src="./docs/preview2.PNG" alt="Preview 2" width="100%"/> |
-| **Preview 3** | **Preview 4** |
-| <img src="./docs/preview3.PNG" alt="Preview 3" width="100%"/> | <img src="./docs/preview4.PNG" alt="Preview 4" width="100%"/> |
-
 <p align="center">
-  <b>Preview 5</b><br>
-  <img src="./docs/preview5.PNG" alt="Preview 5" width="75%"/>
+  <img src="./docs/preview1.PNG" alt="Main Preview" width="100%"/>
 </p>
+
+<details>
+  <summary><b>🔍 Lihat screenshot lainnya (Preview 2 - 5)</b></summary>
+  <br>
+
+  | Preview 2 | Preview 3 |
+  | :---: | :---: |
+  | <img src="./docs/preview2.PNG" width="100%"/> | <img src="./docs/preview3.PNG" width="100%"/> |
+
+  | Preview 4 | Preview 5 |
+  | :---: | :---: |
+  | <img src="./docs/preview4.PNG" width="100%"/> | <img src="./docs/preview5.PNG" width="100%"/> |
+</details>
 
 ---
 
