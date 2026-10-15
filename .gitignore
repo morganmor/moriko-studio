@@ -2,6 +2,7 @@ node_modules
 dist
 dist-server
 dist-tests
+.moriko-dat/
 
 # Local secrets and server-side data — NEVER commit.
 # `.data/` holds provider API keys and conversation snapshots.
