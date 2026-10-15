@@ -7,6 +7,8 @@
 
 /** A message on the cross-session addon bus (server → browser via SSE). */
 export interface AddonBusPayload {
+  /** v2 (A7): monotonic frame id — reconnect replay key. */
+  id?: number;
   topic: string;
   payload: Record<string, unknown>;
   addonId: string;

@@ -1,0 +1,56 @@
+{
+  "apiVersion": "2",
+  "id": "rsat",
+  "name": "RSA/T — Realtime Shared Achievement Tracker",
+  "shortName": "RSA/T",
+  "version": "1.6.0",
+  "kind": "mod",
+  "author": "Moriko",
+  "description": "Gamified multi-agent achievement board: shared PRD, scope guard, live sync, pixel UI (Minecraft-flavored, RSAT only).",
+  "main": "server/main.ts",
+  "client": "client/board.tsx",
+  "icon": "resources/icon.svg",
+  "permissions": [
+    "tools.register",
+    "commands",
+    "settings",
+    "store",
+    "bus",
+    "clock",
+    "ui.view",
+    "ui.notify",
+    "session.observe",
+    "session.inject",
+    "prompt.inject",
+    "fs.observe",
+    "tools.intercept",
+    "workspace.read",
+    "workspace.write:.moriko/rsat/**"
+  ],
+  "activation": ["onStartup"],
+  "contributes": {
+    "views": [
+      { "id": "overview", "title": "Base camp", "icon": "grid", "location": "sidebar", "component": "./client/board.tsx" },
+      { "id": "board", "title": "Quest board", "icon": "trophy", "location": "sidebar", "component": "./client/board.tsx" },
+      { "id": "tree", "title": "Skill tree", "icon": "tree", "location": "sidebar", "component": "./client/board.tsx" },
+      { "id": "interlinked", "title": "Interlinked", "icon": "nodes", "location": "sidebar", "component": "./client/board.tsx" },
+      { "id": "activity", "title": "Live feed", "icon": "activity", "location": "sidebar", "component": "./client/board.tsx" },
+      { "id": "files", "title": "Inventory", "icon": "folder", "location": "sidebar", "component": "./client/board.tsx" },
+      { "id": "settings", "title": "Options", "icon": "gear", "location": "sidebar", "component": "./client/board.tsx" },
+      { "id": "create", "title": "Create agent", "icon": "spark", "location": "sidebar", "component": "./client/board.tsx" }
+    ],
+    "settings": {
+      "title": "RSA/T",
+      "properties": {
+        "language": { "type": "string", "enum": ["en", "id"], "default": "", "title": "Board language", "description": "LangGate: RSAT stays closed until the user picks a language (en/id). Local language requires explicit consent.", "scope": "user" },
+        "guardMode": { "type": "string", "enum": ["off", "advisory", "strict"], "default": "advisory", "title": "Scope guard mode", "scope": "workspace" },
+        "showToast": { "type": "boolean", "default": true, "title": "Achievement pop-ups", "scope": "user" },
+        "sound": { "type": "boolean", "default": false, "title": "8-bit sound effects", "scope": "user" },
+        "ilQuality": { "type": "string", "enum": ["verylow", "low", "medium", "high"], "default": "high", "title": "Interlinked graphics quality", "description": "Very Low disables glows & heavy animations; High renders everything full.", "scope": "user" },
+        "claimTtlSec": { "type": "number", "default": 900, "minimum": 60, "maximum": 7200, "title": "Claim heartbeat timeout (seconds)", "scope": "workspace" }
+      }
+    },
+    "statusItems": [{ "id": "board" }],
+    "resources": { "i18n": "resources/i18n", "templates": "resources/templates" }
+  }
+}

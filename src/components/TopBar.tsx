@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bell,
   Check,
@@ -18,7 +18,7 @@ import { NoticeCenter, cx } from './ui';
 import { DIcon } from './designIcons';
 import { Popover } from './Popover';
 import { useStore } from '../store/useStore';
-
+import { isSubSession } from '../store/useStore';
 interface TopBarProps {
   title: string;
   onShare: () => void;
@@ -91,7 +91,7 @@ function EditableTitle({ title }: { title: string }) {
   }
 
   return (
-    <div style={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
+    <div style={{ minWidth: 0, overflow: 'hidden' }}>
       <button
         type="button"
         onClick={() => {
@@ -99,7 +99,7 @@ function EditableTitle({ title }: { title: string }) {
           setEditing(true);
         }}
         className="title"
-        style={{ minWidth: 0, flex: 1, maxWidth: 'min(340px, 50vw)', display: 'flex', alignItems: 'center', gap: 6, textAlign: 'left' }}
+        style={{ minWidth: 0, maxWidth: 'min(340px, 50vw)', display: 'flex', alignItems: 'center', gap: 6, textAlign: 'left' }}
       >
       <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
       <Pencil
@@ -112,6 +112,122 @@ function EditableTitle({ title }: { title: string }) {
   );
 }
 
+/**
+ * COUNCIL SWITCHER (Council Agent addon) — a transparent dropdown directly
+ * BELOW the title button. A council is one Main Session containing N Sub
+ * Sessions (one per RSAT agent); sub sessions are hidden from the sidebar and
+ * history, so this dropdown is the only way between them. The button shows the
+ * current member ("Main Session" / the sub's title); the popover lists the main
+ * session first, then every sub session, and opens the Council panel to add a
+ * member or dispatch another agent.
+ */
+function CouncilSwitcher() {
+  const activeId = useStore((state) => state.activeId);
+  const conversations = useStore((state) => state.conversations);
+  const selectConversation = useStore((state) => state.selectConversation);
+  const setView = useStore((state) => state.setView);
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLDivElement>(null);
+
+  const councilId = conversations.find((entry) => entry.id === activeId)?.councilId ?? null;
+  const members = useMemo(() => {
+    if (!councilId) return [];
+    return conversations
+      .filter((entry) => entry.councilId === councilId && !isSubSession(entry))
+      .concat(conversations.filter((entry) => isSubSession(entry) && entry.councilId === councilId))
+      .sort((a, b) => (a.councilRole === 'main' ? -1 : 1) - (b.councilRole === 'main' ? -1 : 1)
+        || a.createdAt - b.createdAt);
+  }, [conversations, councilId]);
+
+  // Not a council yet: offer the one-click conversion right under the title —
+  // the user should not have to open the addon panel for this.
+  if (!councilId) {
+    return (
+      <div className="council-switch-wrap">
+        <button
+          type="button"
+          className="council-switch"
+          onClick={() => window.dispatchEvent(new Event('moriko:council-create'))}
+        >
+          <Plus className="ic" aria-hidden="true" />
+          <span className="council-switch-label">Turn into council</span>
+        </button>
+      </div>
+    );
+  }
+  if (members.length === 0) return null;
+  const current = members.find((member) => member.id === activeId);
+  const label = current
+    ? (current.councilRole === 'main' ? 'Main Session' : current.title)
+    : 'Main Session';
+
+  return (
+    <div ref={anchorRef} className="council-switch-wrap">
+      <button
+        type="button"
+        className="council-switch"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="council-dot" aria-hidden="true" />
+        <span className="council-switch-label">{label}</span>
+        <ChevronDown className="ic" aria-hidden="true" />
+      </button>
+      <Popover
+        open={open}
+        onClose={() => setOpen(false)}
+        anchorRef={anchorRef}
+        label="Council sessions"
+        placement="bottom-start"
+        width={250}
+      >
+        <p className="pop-h">Council sessions</p>
+        {members.map((member, index) => (
+          <button
+            key={member.id}
+            type="button"
+            role="menuitemradio"
+            aria-checked={member.id === activeId}
+            className="mi"
+            onClick={() => {
+              selectConversation(member.id);
+              setOpen(false);
+            }}
+          >
+            {member.councilRole === 'main' ? <Folder className="ic" aria-hidden="true" /> : null}
+            <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {member.councilRole === 'main' ? 'Main Session' : (member.title || `Sub Session ${index}`)}
+            </span>
+            {member.id === activeId ? <Check className="ic mck" aria-hidden="true" /> : null}
+          </button>
+        ))}
+        <div className="sep" />
+        <button
+          type="button"
+          role="menuitem"
+          className="mi"
+          onClick={() => {
+            setOpen(false);
+            setView('addon:council/panel' as never);
+          }}
+        >
+          <Plus className="ic" aria-hidden="true" />
+          <span>Manage council…</span>
+        </button>
+      </Popover>
+    </div>
+  );
+}
+
+/**
+ * Sticky workspace header.
+ *
+ * The left edge carries the sidebar toggle (desktop) or the drawer opener
+ * (mobile); the right edge mirrors it for Run settings. Only the title area
+ * flexes; every control keeps a fixed 36px hit target so the row never
+ * reflows as the title grows or a panel toggles.
+ */
 /**
  * Sticky workspace header.
  *
@@ -142,6 +258,7 @@ export function TopBar({ title, onShare, onOpenNav, onPickWorkspace, workspaceLa
   const agentWorkspaces = useStore((state) => state.agentWorkspaces);
   const patchConversation = useStore((state) => state.patchConversation);
   const deleteConversation = useStore((state) => state.deleteConversation);
+  const setView = useStore((state) => state.setView);
   const [wsMenuOpen, setWsMenuOpen] = useState(false);
   const wsMenuRef = useRef<HTMLDivElement>(null);
 
@@ -247,10 +364,33 @@ export function TopBar({ title, onShare, onOpenNav, onPickWorkspace, workspaceLa
 
       {}
       {editableTitle ? (
-        <EditableTitle title={title} />
+        <div className="tb-title-col">
+          <EditableTitle title={title} />
+          <CouncilSwitcher />
+        </div>
       ) : (
-        <h1 style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 15, fontWeight: 600, color: 'rgb(var(--c-ink))' }}>{title}</h1>
+        <div className="tb-title-col">
+          <h1 style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 15, fontWeight: 600, color: 'rgb(var(--c-ink))' }}>{title}</h1>
+          <CouncilSwitcher />
+        </div>
       )}
+
+      {/* Buka RSA/T (addon:rsat/overview) — akses board langsung dari chat.
+          Icon = gem pixel yang sama dengan identitas addon di sidebar col-in. */}
+      {hasActiveChat ? (
+        <button
+          type="button"
+          className="ib"
+          onClick={() => setView('addon:rsat/overview' as never)}
+          aria-label="Open RSA/T board"
+        >
+          <span
+            className="rsat-gem-ic"
+            aria-hidden="true"
+            style={{ maskImage: 'url("/api/addons/rsat/client/resources/icon.svg")', WebkitMaskImage: 'url("/api/addons/rsat/client/resources/icon.svg")' }}
+          />
+        </button>
+      ) : null}
 
       {}
       <div ref={wsMenuRef} style={{ position: 'relative', marginLeft: 4, maxWidth: 220, flexShrink: 0 }}>

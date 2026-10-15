@@ -24,4 +24,6 @@ import './scaffold.js';
 import './game-probe.js';
 import './shader-check.js';
 import './asset-inspect.js';
+// Orchestration
+import './sub-agent.js';
 export {};

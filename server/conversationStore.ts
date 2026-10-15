@@ -321,6 +321,10 @@ export interface ConversationSummary {
   model?: string;
   /** 6A: the agent workspace this chat is bound to (sidebar grouping). */
   workspaceId?: string;
+  /** COUNCIL (Council Agent addon): sub sessions carry their container's id. */
+  councilId?: string;
+  councilRole?: 'main' | 'sub';
+  councilAgentId?: string;
   /** Monotonic client mutation counter — newer-wins tiebreak on merge. */
   rev?: number;
   turnCount: number;
@@ -349,6 +353,9 @@ export function summarizeConversation(entry: StoredConversation): ConversationSu
     providerId: typeof entry.providerId === 'string' ? entry.providerId : undefined,
     model: typeof entry.model === 'string' ? entry.model : undefined,
     workspaceId: typeof entry.workspaceId === 'string' ? entry.workspaceId : undefined,
+    councilId: typeof entry.councilId === 'string' ? entry.councilId : undefined,
+    councilRole: entry.councilRole === 'sub' ? 'sub' : entry.councilRole === 'main' ? 'main' : undefined,
+    councilAgentId: typeof entry.councilAgentId === 'string' ? entry.councilAgentId : undefined,
     rev: typeof entry.rev === 'number' && Number.isFinite(entry.rev) ? entry.rev : undefined,
     turnCount: turns.length,
     preview: latestPreview(turns),

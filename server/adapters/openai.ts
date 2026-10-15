@@ -3,11 +3,13 @@ import { coerceText } from '../textUtil.js';
 import { assertOk, iterateSse, type StreamHandler, type StreamParams } from '../sse.js';
 import { resolveSteerPartRefs } from '../attachmentStore.js';
 import { drainSteers, steerTextOf, steersToUserParts } from '../steer.js';
+import { drainInjections, injectionText } from '../addons/inject.js';
 import {
   createLoopGuard,
   estimateTokensFromChars,
   executeCalls,
   prepareTools,
+  repairPartialJson,
   toolCallSignature,
   wrapUpInstruction,
   type LoopStopReason,
@@ -305,12 +307,31 @@ export async function streamOpenAiCompatible(
       return;
     }
 
+    /**
+     * WIRE-SAFE ARGUMENTS — a truncated arguments stream (e.g.
+     * {"height":860,"variants":) executes fine via repairPartialJson, but the
+     * raw string poisons the wire: providers that JSON.parse tool-call
+     * arguments (Python backends) reject the WHOLE request. Repaired arguments
+     * ride the wire, the follow-up history, and the stored segments.
+     */
+    const wireSafeArguments = (raw: string): string => {
+      const trimmed = raw.trim();
+      if (!trimmed || trimmed === '{}') return '{}';
+      try {
+        JSON.parse(trimmed);
+        return trimmed;
+      } catch {
+        const repaired = repairPartialJson(trimmed);
+        return repaired ? JSON.stringify(repaired) : '{}';
+      }
+    };
+
     const toolRequests = pendingCalls.map((call, index) => {
       if (!call.id) call.id = `call_${iteration}_${index}`;
       return {
         id: call.id,
         type: 'function',
-        function: { name: call.name, arguments: call.arguments || '{}' },
+        function: { name: call.name, arguments: wireSafeArguments(call.arguments) },
       } as const;
     });
     convo.push({
@@ -330,6 +351,16 @@ export async function streamOpenAiCompatible(
     const steerParts = steersToUserParts(steered);
     resolveSteerPartRefs(steerParts);
     if (steerParts.length > 0) convo.push({ role: 'user', content: steerParts });
+
+    // Addon v2 (A3, Q2): queued addon notices ride the steer seam.
+    const injections = drainInjections(params.sessionId ?? undefined);
+    if (injections.length > 0) {
+      const injectParts: Array<{ type: 'text'; text: string }> = injections.map((entry) => {
+        onEvent({ type: 'steer', id: `addon-inject-${entry.id}`, text: `[${entry.addonId}] ${injectionText(entry)}` });
+        return { type: 'text', text: `System notice from the ${entry.addonId} addon:\n${injectionText(entry)}` };
+      });
+      convo.push({ role: 'user', content: injectParts });
+    }
 
     const executed = await executeCalls(
       toolRequests.map((call) => ({

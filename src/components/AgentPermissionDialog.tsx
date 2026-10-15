@@ -32,19 +32,48 @@ export function AgentPermissionDialog() {
   };
 
   /** Mekanisme Design2: approval utama INLINE di run pill turn yang
-   *  menunggu; modal ini hanya fallback. Pill merender kotak ask pada
-   *  mount pertamanya, jadi fallback menunggu satu frame agar tidak
-   *  kedip-putus (flush) ketika pill langsung menyediakan kotaknya. */
-  const [pillMounted, setPillMounted] = useState(false);
+   *  menunggu; modal ini hanya FALLBACK. Kotak inline dirender pill sebagai
+   *  `[data-waiting-permission="<id>"]` pada commit pertamanya. Modal tampil
+   *  HANYA bila kotak inline tidak ter-deteksi di DOM, dan deteksinya REAKTIF
+   *  via MutationObserver — kalau kotak inline baru muncul setelah modal
+   *  sempat render (pill mount belakangan), modal langsung menutup sehingga
+   *  tidak pernah dobel dengan kotak inline di run-live. */
+  const [inlineDetected, setInlineDetected] = useState(false);
+  const [graceDone, setGraceDone] = useState(false);
+
   useEffect(() => {
-    const timer = window.setTimeout(() => setPillMounted(true), 120);
-    return () => window.clearTimeout(timer);
-  }, []);
+    const id = request?.id;
+    if (!id) {
+      setInlineDetected(false);
+      setGraceDone(false);
+      return;
+    }
+    setInlineDetected(false);
+    setGraceDone(false);
+    const selector = `[data-waiting-permission="${id}"]`;
+    let cancelled = false;
+    const check = () => {
+      if (cancelled) return;
+      setInlineDetected(document.querySelector(selector) !== null);
+    };
+    check();
+    const observer = new MutationObserver(check);
+    observer.observe(document.body, { childList: true, subtree: true });
+    // Grace window singkat: beri pill waktu men-mount kotak inline di commit
+    // pertama, mencegah modal kedip sekilas sebelum deteksi sempat berjalan.
+    const timer = window.setTimeout(() => {
+      if (!cancelled) setGraceDone(true);
+    }, 150);
+    return () => {
+      cancelled = true;
+      observer.disconnect();
+      window.clearTimeout(timer);
+    };
+  }, [request]);
+
   if (!request) return null;
-  if (pillMounted && typeof document !== 'undefined') {
-    const scope = document.querySelector(`[data-waiting-permission="${request.id}"]`);
-    if (scope) return null;
-  }
+  if (inlineDetected) return null;
+  if (!graceDone) return null;
 
   return (
     <Modal

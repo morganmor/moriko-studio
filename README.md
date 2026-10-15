@@ -59,52 +59,6 @@ server/agents/tools/catalogue.ts
 
 ---
 
-## Architecture
-
-Moriko Studio is two parts that always run together:
-
-- **The app** — a React UI in your browser: chat, Image Studio, gallery,
-  history, settings.
-- **A small local server** — started for you by `npm run dev`. It holds your API
-  keys, talks to the AI providers on your behalf, and saves your chats and
-  images on disk under `~/.moriko-studio/`.
-
-The browser never sees your keys and never contacts a provider directly. It only
-ever talks to this local server; the server forwards each request to the right
-provider — OpenAI, Gemini, Anthropic, or any OpenAI-compatible endpoint you add —
-and streams the answer back to you live.
-
-> **Why a local server at all?** Two reasons. Your API keys stay on your own
-> machine instead of sitting inside browser JavaScript, and providers whose APIs
-> refuse browser requests (CORS) or speak a non-OpenAI dialect still work.
-
-### Layout
-
-```
-server/
-  index.ts            Express app: routes, agent harness endpoints, SSE
-  paths.ts            MORIKO_HOME resolution (default ~/.moriko-studio)
-  contracts.ts        Wire types shared with the client (mirrored in src/types.ts)
-  providers.ts        Built-in provider catalogue
-  store.ts            JSON-file store for custom providers
-  sse.ts              SSE frame parser + upstream error normalisation
-  adapters/           openai.ts, gemini.ts, anthropic.ts (+ images/ for Image Studio)
-  agents/             Agent mode: tools, spatial harness, permissions, vault
-  mcp/                Model Context Protocol client + tool loop
-  addons/             Addon system (loader, registry, bus, routes)
-src/
-  App.tsx             Shell (rail / workspace / run settings)
-  store/useStore.ts   Zustand store; conversations + providers + UI state
-  hooks/
-    useChatController.ts  Request lifecycle: send, stop, regenerate
-  lib/                api client, storage, brand assets, diff parsing, import/export
-  components/         Sidebar, Thread, Composer, SettingsPanel, ProvidersDialog,
-                      ImageStudio, GoalsPanel, CheckpointRail, Markdown, ui primitives
-public/               Static assets served as-is (fonts, svg/ brand marks, favicon)
-scripts/              Dev/build/sync tooling (dev.mjs, sync-*, setup-esbuild)
-addons-src/           Source of the bundled visual-context addon
-```
-
 ### Updating model support
 
 The app keeps local snapshots of what each model can do — reasoning support,
@@ -119,43 +73,6 @@ pnpm sync
 
 `pnpm dev` refreshes snapshots older than 24 hours on its own before starting,
 and when you are offline it keeps the current snapshot and starts anyway.
-
----
-
-## Adding a custom provider
-
-Providers → **Add provider** → pick a template or fill in the fields.
-
-| Field | Notes |
-| --- | --- |
-| **Display name** | Anything you like. |
-| **API format** | `openai` for anything speaking `/chat/completions`; `gemini` and `anthropic` for their native APIs. |
-| **Base URL** | Include the version segment: `https://api.example.com/v1`. |
-| **API key** | Stored in the `~/.moriko-studio/api-keys.json` vault (with your provider's endpoint). Leave blank for local runtimes. |
-| **Models** | Type ids manually or press **Fetch from provider**. |
-
-Saved providers appear in the Run settings dropdown immediately. The
-**API format** choice decides which adapter the proxy uses:
-
-- **OpenAI-compatible**
-- **Gemini**
-- **Anthropic**
-
-### How thinking level maps to each provider
-
-| Level | OpenAI | Gemini | Anthropic |
-| --- | --- | --- | --- |
-| Off | param omitted | `thinkingBudget: 0` | thinking omitted |
-| Low | `low` | 5% of max-out | 5% of max-out |
-| Medium | `medium` | 15% of max-out | 15% of max-out |
-| High | `high` | 30% of max-out | 30% of max-out |
-| Xhigh | `xhigh` | 50% of max-out | 50% of max-out |
-| Max | `max` | **64K** | **128K** |
-
-Budgets scale with the model's own max-output (models.dev). **Max uses the
-full allowance, capped at 64K (Gemini) / 128K (Anthropic)** — the Anthropic
-adapter sends `budget + 1024` as `max_tokens`, so the budget keeps 1,024
-tokens of headroom inside that 128K.
 
 ---
 
@@ -202,10 +119,6 @@ source tree:
     └── data.json                 
 ```
 
-On the first boot after restructuring, the proxy migrates the old flat stores
-(in the repo's legacy `.data/`) into this layout automatically — originals are
-renamed to `*.migrated`, never deleted.
-
 ---
 
 ## MCP (Use MCP)
@@ -238,37 +151,6 @@ Notes:
   re-enters the model context.
 - Server configs live in `~/.moriko-studio/mcp.json` header/env secrets never leave
   the server (the settings UI only ever sees masked values).
-
----
-
-## Agents (Agent mode)
-
-Agent mode turns the current conversation into a working coding agent — no
-separate view, chat agent stays in the same session. Flip it via the
-**Chat | Agent** separator above the composer (empty state), the composer's
-**Tools** menu, or Configuration → Tools.
-
-Pick a **workspace** with the folder button: that folder becomes the agent's
-playground. It gets dozens of tools — search and read code, edit and create
-files, run builds and tests, drive git, browse web pages, even draw live
-charts — and every action appears in the thread as a labelled card, so you
-can watch the work happen instead of trusting a summary.
-
-What keeps it safe:
-
-- **It stays inside the workspace.** Paths are resolved against the workspace
-  root and refused if they escape it; running commands and touching anything
-  outside asks for your approval first (off / ask / auto for allow-listed
-  programs).
-- **Every change is undoable.** Each edit and delete snapshots the previous
-  state into a local vault first, so a bad change is one step from restored.
-- **Broken code never ships.** When the harness edits itself, the change is
-  typechecked before it is applied; a failed check rejects it with the
-  compiler output.
-
-Workspaces are registered per machine in `~/.moriko-studio/agents.json`; the agent's
-trail — audit log, snapshots, read state — lives beside the other data under
-`~/.moriko-studio/`.
 
 ---
 

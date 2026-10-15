@@ -3,11 +3,19 @@
  * reused by lsp_symbols (lsp.ts), read_symbol / context_pack / diagnostics /
  * refactor (F2/F3).
  *
- * Fixes B2: script versions keyed by mtime so edits invalidate snapshots,
- * compilation settings read from the project's own tsconfig when present.
+ * Fixes:
+ *  - B2: script versions keyed by mtime so edits invalidate snapshots.
+ *  - Solution tsconfig: a root `tsconfig.json` that only lists `references`
+ *    (with `files: []` and no `compilerOptions`) parses to EMPTY options and
+ *    no root files — the old code fed that to the LanguageService, so the
+ *    program had no jsx/module/lib settings and no members, and every consumer
+ *    failed with "Could not find source file". The closest REFERENCED project
+ *    that actually contains the file is used instead (tsconfig.app.json for
+ *    src/, tsconfig.node.json for server/), so diagnostics see real settings.
+ *  - ESM: the directory walk uses the imported `readdirSync` (no `require()`).
  */
 import * as ts from 'typescript';
-import { readFileSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, readdirSync, type Dirent } from 'node:fs';
 import path from 'node:path';
 
 interface ServiceEntry {
@@ -15,33 +23,46 @@ interface ServiceEntry {
   files: Set<string>;
 }
 
-/** LRU of at most 2 services (bounded RAM, see plan §10). */
+/** LRU of at most 3 services (bounded RAM, see plan §10). */
 const services: Array<{ root: string; entry: ServiceEntry }> = [];
-const MAX_SERVICES = 2;
+const MAX_SERVICES = 3;
 
-function tsconfigFor(absFile: string): { dir: string; file: string } | null {
-  try {
-    const found = ts.findConfigFile(path.dirname(absFile), ts.sys.fileExists, 'tsconfig.json');
-    return found ? { dir: path.dirname(found), file: found } : null;
-  } catch {
-    return null;
-  }
+interface ResolvedProject {
+  /** Unique cache key: the tsconfig file path, or the workspace root when none. */
+  key: string;
+  /** Working directory the LanguageService host uses (current dir). */
+  dir: string;
+  /** Parsed compile options. */
+  options: ts.CompilerOptions;
+  /** Authoritative root files from the tsconfig include; null = walk fallback. */
+  rootFiles: string[] | null;
 }
 
-function compilationSettings(absFile: string): ts.CompilerOptions {
-  const cfg = tsconfigFor(absFile);
-  if (cfg) {
-    try {
-      const raw = ts.readConfigFile(cfg.file, ts.sys.readFile);
-      const parsed = ts.parseJsonConfigFileContent(raw.config ?? {}, ts.sys, cfg.dir);
-      return { ...parsed.options, noEmit: true };
-    } catch {
-      // fall through to defaults
-    }
-  }
+/** Empty (undefined/null/[]/{}) — used to tell a solution config from a real one. */
+function isEmpty(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === 'object') return Object.keys(value).length === 0;
+  return false;
+}
+
+/** True when a tsconfig is a solution file: references only, no code settings. */
+function isSolutionConfig(config: Record<string, unknown>): boolean {
+  return (
+    Array.isArray(config.references) &&
+    config.references.length > 0 &&
+    isEmpty(config.compilerOptions) &&
+    isEmpty(config.files) &&
+    isEmpty(config.include) &&
+    isEmpty(config.exclude)
+  );
+}
+
+/** Sensible defaults used when no tsconfig (or no project) is found. */
+function fallbackCompilerOptions(): ts.CompilerOptions {
   return {
     allowJs: true,
-    jsx: ts.JsxEmit.React,
+    jsx: ts.JsxEmit.ReactJSX,
     module: ts.ModuleKind.ESNext,
     moduleResolution: ts.ModuleResolutionKind.Bundler,
     target: ts.ScriptTarget.ES2022,
@@ -51,13 +72,87 @@ function compilationSettings(absFile: string): ts.CompilerOptions {
   };
 }
 
+/** Resolve the project that owns `absFile`: a real tsconfig, or a safe fallback. */
+function projectFor(absFile: string, root: string): ResolvedProject {
+  const fallback = (): ResolvedProject => ({
+    key: root,
+    dir: root,
+    options: fallbackCompilerOptions(),
+    rootFiles: null,
+  });
+
+  let found: string | undefined;
+  try {
+    found = ts.findConfigFile(path.dirname(absFile), ts.sys.fileExists, 'tsconfig.json');
+  } catch {
+    return fallback();
+  }
+  if (!found) return fallback();
+
+  try {
+    const raw = ts.readConfigFile(found, ts.sys.readFile);
+    const cfg = (raw.config ?? {}) as Record<string, unknown>;
+
+    // Solution file → pick the referenced project containing the file. Parsing
+    // a solution directly yields empty options + no roots, silently breaking the
+    // LanguageService ("Could not find source file").
+    // parseJsonConfigFileContent returns fileNames RELATIVE to the base dir;
+    // the LanguageService host must expose ABSOLUTE paths or the program
+    // reports TS6053 "Could not find source file" for every member.
+    const toAbs = (baseDir: string, f: string): string =>
+      path.isAbsolute(f) ? path.normalize(f) : path.resolve(baseDir, f);
+
+    if (isSolutionConfig(cfg)) {
+      const target = path.resolve(absFile);
+      for (const ref of cfg.references as Array<{ path?: string }>) {
+        if (typeof ref?.path !== 'string') continue;
+        const refFile = path.join(path.dirname(found), ref.path);
+        if (!ts.sys.fileExists(refFile)) continue;
+        const refDir = path.dirname(refFile);
+        const parsed = ts.parseJsonConfigFileContent(
+          ts.readConfigFile(refFile, ts.sys.readFile).config ?? {}, ts.sys, refDir,
+        );
+        const members = parsed.fileNames.map((f) => toAbs(refDir, f));
+        if (members.some((f) => f === target)) {
+          return {
+            key: refFile,
+            dir: refDir,
+            options: { ...parsed.options, noEmit: true },
+            rootFiles: members,
+          };
+        }
+      }
+      // Not part of any referenced project — fall back to a walk + defaults.
+      return fallback();
+    }
+
+    // Normal (non-solution) config — parse it directly.
+    const dir = path.dirname(found);
+    const parsed = ts.parseJsonConfigFileContent(
+      ts.readConfigFile(found, ts.sys.readFile).config ?? {}, ts.sys, dir,
+    );
+    return {
+      key: found,
+      dir,
+      options: { ...parsed.options, noEmit: true },
+      rootFiles: parsed.fileNames.map((f) => toAbs(dir, f)),
+    };
+  } catch {
+    return fallback();
+  }
+}
+
 function collectScriptFiles(dir: string, limit = 4000): string[] {
   const out: string[] = [];
   const skip = new Set(['node_modules', '.git', '.data', '.moriko', 'dist', 'build', 'out', 'coverage', '.next', '.turbo', '.attachments', '.pnpm-store']);
   const walk = (d: string, depth: number): void => {
     if (depth > 12 || out.length >= limit) return;
-    let entries: import('node:fs').Dirent[];
-    try { entries = require('node:fs').readdirSync(d, { withFileTypes: true }) as import('node:fs').Dirent[]; } catch { return; }
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(d, { withFileTypes: true });
+    } catch {
+      return;
+    }
     for (const e of entries) {
       if (out.length >= limit) return;
       if (e.isDirectory()) {
@@ -74,12 +169,17 @@ function collectScriptFiles(dir: string, limit = 4000): string[] {
 
 /** LanguageService scoped to the tsconfig nearest `absFile` (root = workspace). */
 export function getLanguageService(absFile: string, root: string): ts.LanguageService & { __files?: Set<string> } {
-  const cfg = tsconfigFor(absFile);
-  const scopeDir = cfg ? cfg.dir : root;
-  const existing = services.find((s) => s.root === scopeDir);
-  if (existing) return existing.entry.service;
+  const project = projectFor(absFile, root);
+  const existing = services.find((s) => s.root === project.key);
+  if (existing) {
+    // The cached program was captured at first use; register the newly
+    // requested file too. Cheap, and prevents a cached-service TS6053 when a
+    // file sat outside the originally captured root set.
+    existing.entry.files.add(path.normalize(absFile));
+    return existing.entry.service;
+  }
 
-  const files = new Set(collectScriptFiles(scopeDir));
+  const files = new Set(project.rootFiles ?? collectScriptFiles(project.dir));
   if (!files.has(path.normalize(absFile))) files.add(path.normalize(absFile));
 
   const host: ts.LanguageServiceHost = {
@@ -98,8 +198,8 @@ export function getLanguageService(absFile: string, root: string): ts.LanguageSe
         return undefined;
       }
     },
-    getCurrentDirectory: () => scopeDir,
-    getCompilationSettings: () => compilationSettings(absFile),
+    getCurrentDirectory: () => project.dir,
+    getCompilationSettings: () => project.options,
     getDefaultLibFileName: (options: ts.CompilerOptions) => ts.getDefaultLibFilePath(options),
     fileExists: (fileName: string) => {
       try { return existsSync(fileName); } catch { return false; }
@@ -112,15 +212,14 @@ export function getLanguageService(absFile: string, root: string): ts.LanguageSe
   const service = ts.createLanguageService(host, ts.createDocumentRegistry()) as ts.LanguageService & { __files?: Set<string> };
   service.__files = files;
 
-  services.unshift({ root: scopeDir, entry: { service, files } });
+  services.unshift({ root: project.key, entry: { service, files } });
   while (services.length > MAX_SERVICES) services.pop();
   return service;
 }
 
-/** Drop the service cached for the scope containing absFile (cheap invalidation). */
+/** Drop the service cached for the project containing absFile (cheap invalidation). */
 export function invalidateFile(absFile: string, root: string): void {
-  const cfg = tsconfigFor(absFile);
-  const scopeDir = cfg ? cfg.dir : root;
-  const idx = services.findIndex((s) => s.root === scopeDir);
+  const project = projectFor(absFile, root);
+  const idx = services.findIndex((s) => s.root === project.key);
   if (idx >= 0) services.splice(idx, 1);
 }

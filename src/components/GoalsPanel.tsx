@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Bell,
   Check,
   ChevronDown,
   CircleSlash,
+  Flag,
   ListTodo,
   Loader2,
   Pencil,
@@ -49,6 +50,7 @@ export function GoalsPanel({ open, onClose }: GoalsPanelProps) {
   const [draftPlan, setDraftPlan] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const rootRef = useRef<HTMLElement>(null);
 
   const sessionId = conversation?.id;
   const goals = conversation?.goals ?? [];
@@ -79,6 +81,22 @@ export function GoalsPanel({ open, onClose }: GoalsPanelProps) {
       cancelled = true;
     };
   }, [open, sessionId, setConversationGoals]);
+
+  /* CLOSE ON OUTSIDE CLICK — same pattern as CommandPalette/Popover. Ignores
+     clicks inside the panel and on plus-menu rows that toggle it (otherwise
+     pointerdown closes, then the toggle's click re-opens → flicker). */
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Element | null;
+      if (!target) return;
+      if (rootRef.current?.contains(target)) return;
+      if (target.closest('[data-plus-item]')) return;
+      onClose();
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => document.removeEventListener('pointerdown', onPointerDown, true);
+  }, [open, onClose]);
 
   if (!open) return null;
 
@@ -127,6 +145,7 @@ export function GoalsPanel({ open, onClose }: GoalsPanelProps) {
 
   return (
     <aside
+      ref={rootRef}
       aria-label="Goals and plans"
       style={{
         position: 'fixed',
@@ -325,6 +344,17 @@ export function GoalsPanel({ open, onClose }: GoalsPanelProps) {
                                 />
                                 <span style={{ minWidth: 0, overflowWrap: 'break-word', color: todo.done ? 'var(--faint)' : 'var(--muted)', textDecoration: todo.done ? 'line-through' : undefined }}>
                                   {todo.text}
+                                  {todo.priority && todo.priority !== 'medium' ? (
+                                    <span className={`todo-priority todo-priority--${todo.priority}`} style={{ marginLeft: 6 }}>
+                                      <Flag className="ic" style={{ width: 9, height: 9 }} aria-hidden="true" />
+                                      {todo.priority}
+                                    </span>
+                                  ) : null}
+                                  {todo.notes ? (
+                                    <span style={{ display: 'block', marginTop: 2, fontSize: 11, lineHeight: 1.5, color: 'var(--faint)' }}>
+                                      {todo.notes}
+                                    </span>
+                                  ) : null}
                                 </span>
                               </label>
                               {todo.subtasks?.length ? (

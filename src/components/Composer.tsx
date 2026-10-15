@@ -17,6 +17,7 @@ import {
   Image as ImageIcon,
   Link2,
   ListFilter,
+  ListTodo,
   Loader2,
   Music,
   Paperclip,
@@ -131,6 +132,8 @@ interface ComposerProps {
   /** Opens/closes the Goals & plans panel. */
   onToggleGoals?: () => void;
   goalsOpen?: boolean;
+  /** Opens/closes the standalone Todos panel. */
+  onToggleTodos?: () => void;
   /**
    * STEER: inject the draft into a RUNNING generation's context. Called with
    * the trimmed text; returns true when the server queued it (202). When the
@@ -181,6 +184,7 @@ export function Composer({
   onPickWorkspace,
   onToggleGoals,
   goalsOpen = false,
+  onToggleTodos,
   onSteer,
   onSendReminder,
   onNavigateFirstTurn,
@@ -368,6 +372,10 @@ export function Composer({
       onGoals={() => {
         closePlus();
         onToggleGoals?.();
+      }}
+      onTodos={() => {
+        closePlus();
+        onToggleTodos?.();
       }}
       onSlash={() => {
         closePlus();
@@ -1239,6 +1247,7 @@ interface PlusMenuBodyProps {
   onUpload: () => void;
   onPlanMode: () => void;
   onGoals: () => void;
+  onTodos: () => void;
   onSlash: () => void;
   onStudio: () => void;
   onWorkspace?: () => void;
@@ -1252,6 +1261,7 @@ function PlusMenuBody({
   onUpload,
   onPlanMode,
   onGoals,
+  onTodos,
   onSlash,
   onStudio,
   onWorkspace,
@@ -1272,6 +1282,7 @@ function PlusMenuBody({
         dot={goalRunning}
         active={goalsOpen}
       />
+      <PlusMenuRow icon={ListTodo} label="Todos" hint="Standalone todos (no goal)" onClick={onTodos} />
       <PlusMenuRow icon={ListFilter} label="Slash command" hint="Browse all commands" onClick={onSlash} />
       <PlusMenuRow icon={Wand2} label="Generate image" hint="Open Image Studio" onClick={onStudio} />
       {showWorkspace && onWorkspace ? (

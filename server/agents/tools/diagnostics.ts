@@ -53,11 +53,21 @@ async function diagnosticsTool(args: Record<string, unknown>, ctx: AgentToolCont
   for (const file of files.slice(0, 40)) {
     try { readFileSync(file, 'utf8'); } catch { continue; }
     const rel = path.relative(root, file).replace(/\\/g, '/');
-    const service = getLanguageService(file, root);
-    const diags = [
-      ...(service.getSyntacticDiagnostics(file) ?? []),
-      ...(semantic ? (service.getSemanticDiagnostics(file) ?? []) : []),
-    ];
+    let diags: ts.Diagnostic[];
+    try {
+      const service = getLanguageService(file, root);
+      diags = [
+        ...(service.getSyntacticDiagnostics(file) ?? []),
+        ...(semantic ? (service.getSemanticDiagnostics(file) ?? []) : []),
+      ];
+    } catch (error) {
+      sections.push(`── ${rel} — language-service failed: ${error instanceof Error ? error.message : 'unknown error'} (check the project tsconfig, or fall back to agent__typecheck)`);
+      continue;
+    }
+    // TS6053 "Could not find source file": the file fell outside the LanguageService
+    // program. lsp-service now pins the correct tsconfig project, but filter the
+    // noise defensively so it never masquerades as a real diagnostic.
+    diags = diags.filter((d) => d.code !== 6053);
     if (diags.length === 0) continue;
     total += diags.length;
     const lines: string[] = [`── ${rel} (${diags.length})`];

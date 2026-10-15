@@ -1,11 +1,14 @@
 import { describeAttachment } from '../attachments.js';
 import type { ChatSettingsDTO } from '../contracts.js';
 import { listGoals, renderGoalsForContext } from '../goals/store.js';
+import { listTodos, renderTodosForContext } from '../todos/store.js';
 import { lookupModelMetadata } from '../modelMetadata.js';
 import { listWireTools } from '../mcp/manager.js';
 import { listReminders, renderReminder, takeDueReminders } from '../reminders/store.js';
 import { listContextProviders } from '../addons/registry.js';
+import { builtinAddonIds } from '../addons/seed.js';
 import { isTerminalTool, isWebTool, listAgentToolDefs } from './tools/index.js';
+import { resolveStoredWorkflow } from './workflowStore.js';
 import { listImageCapableProviders } from '../images/runtime.js';
 import { getActiveWorkspace } from './workspace.js';
 import { collectAgentsMd } from './agentsMd.js';
@@ -164,18 +167,19 @@ export function agentHarnessInjection(
         'To write, edit, delete, or run anything the user must pick a workspace first (the folder button in the composer). Until then, restrict yourself to non-filesystem agentic work.',
         '',
         '## Rules',
-        '- **Agent Moriko is required to create Goals and Todos whenever you are going to work on a project within the workspace.**',
         '- A user-approved attachment path (the conversation upload store) may be read directly — attachment reads never need approval and work without a workspace.',
         '- Tool failures arrive as readable errors: report them, never retry blindly.',
         '',
         '## Working Style',
-        '- **If the user is angry and provides input in full CAPSLOCK, you are forbidden from evading the issue by editing the code or continuing the work.**',
-        '- **Complete all tasks until they are fully finished. Do not run tests before the entire task is completed or perform testing in the middle of your work. All runtime errors will be caught at the end and combined with the users experience.**',
-		'- **Before adding any new UI/UX/frontend component, study the existing design system first (theme tokens, light/dark mode handling, spacing, typography, reusable components); never hardcode colors or style values for a single theme, use the projects theme variables/tokens instead, and verify the new component is visible and functional in every supported mode (light, dark, responsive) before declaring the task complete.**',
-		'- **Before adding or integrating a feature, search the codebase for existing functionality (routes, services, helpers, components, types) and understand the dependency relationships between the related files; prefer extending or reusing existing modules over creating parallel implementations, consolidate overlapping code when you find it, and state which files you read and why you chose the location for your changes.**',
-        '- Complete the tasks without excessive small talk or unnecessary pleasantries.',
-        '- Only generate code with short, concise, and clear comments. Spamming bloated comments in the code is strictly prohibited.',
-        '- Report all errors honestly and in a structured manner. Do not make excuses to avoid or run away from the problem.',
+		'- **Testing, typechecking, and verification of any kind are STRICTLY FORBIDDEN at intermediate stages—never run tests per-turn, per-task, per-goal, or per-todo. "At the end" refers EXCLUSIVELY to the final completion of the entire project design, NOT the completion of individual goals, todos, or panels. Absolutely zero testing may be performed until the full project scope is 100% delivered and the user explicitly requests verification. All runtime errors will be caught only at this ultimate project conclusion alongside the users live experience.**',
+		'- **Ignoring or underestimating warnings that appear in the runtime, terminal, or devtools is strictly forbidden. This constitutes an architectural violation and accumulates technical debt in the project.**',
+		'- **Only generate code with short, concise, and clear comments. Spamming the code with bloated comments is strictly prohibited and constitutes a violation of code structure and cleanliness.**',
+		'- Proper End-to-End (E2E) testing is done by using dedicated tools, not by writing manual testing code based on your own implementation.',
+		'- Relying on end-to-end (e2e) tests as the ultimate proof that the runtime is working is a fatal mistake and amounts to testing in a closed environment. External sources, such as users or external testing tools not developed by you, provide more evidence.',
+		'- Before adding any new UI/UX/frontend component, study the existing design system first (theme tokens, light/dark mode handling, spacing, typography, reusable components); never hardcode colors or style values for a single theme, use the projects theme variables/tokens instead, and verify the new component is visible and functional in every supported mode (light, dark, responsive) before declaring the task complete.',
+		'- Before adding or integrating a feature, search the codebase for existing functionality (routes, services, helpers, components, types) and understand the dependency relationships between the related files; prefer extending or reusing existing modules over creating parallel implementations, consolidate overlapping code when you find it, and state which files you read and why you chose the location for your changes.',
+		'- Only perform verifications and additional testing if explicitly requested or instructed by the user.',
+		'- Report all errors honestly and in a structured manner. Making excuses to avoid or run away from the problem and retrieving contextual information or previous turns to defend your position constitutes a violation of agentic coding and architecture..',
       ].join('\n'),
     };
   }
@@ -200,24 +204,29 @@ export function agentHarnessInjection(
       'Agent mode ON. Harness is injected automatically and always matches the registered tools.',
       '',
       `Workspace root: ${workspace.path}. Use paths relative to it.`,
+	  '',
+	  '### Input Rules',
+	  '- **User input and screenshots are tangible evidence of the runtime’s output.**',
+	  '- **Labelling and treating screenshots or user input as mere opinions about runtime, constitutes a breach and is reprehensible.**',
+	  '- **What appears on the users screen represents a truth that transcends the written code..**',
       '',
       '## Rules',
-	  '- **Agent Moriko is required to create Goals and Todos whenever you are going to work on a project within the workspace.**',
+	  '- **Agent Moriko must create Todos whenever executing work from user input — use the agent__todo_create tool (standalone todos, no goal needed). Creating a Goal is optional and not required.**',
+	  '- **Agent Moriko must actively review and check off completed Todos as work progresses, and must never accumulate pending Todos or leave any Todo forgotten.**',
+	  '- **Goals are strictly reserved for large-scale implementations, and must be accompanied by comprehensive, detailed Todos.**',
       '- Anything OUTSIDE the workspace root needs explicit user approval (tool pauses, user is prompted, denial returns an error). Stay inside unless asked otherwise.',
       '- Tool failures arrive as readable errors: report them, never retry blindly. Follow "did you mean" path hints and edit diagnoses (nextStep).',
       '',
       '## Working Style',
-      '- **If the user is angry and provides input in full CAPSLOCK, you are forbidden from evading the issue by editing the code or continuing the work.**',
-      '- **Complete all tasks until they are fully finished. Do not run tests before the entire task is completed or perform testing in the middle of your work. All runtime errors will be caught at the end and combined with the users experience.**',
+      '- **Testing, typechecking, and verification of any kind are STRICTLY FORBIDDEN at intermediate stages—never run tests per-turn, per-task, per-goal, or per-todo. "At the end" refers EXCLUSIVELY to the final completion of the entire project design, NOT the completion of individual goals, todos, or panels. Absolutely zero testing may be performed until the full project scope is 100% delivered and the user explicitly requests verification. All runtime errors will be caught only at this ultimate project conclusion alongside the users live experience.**',
+	  '- **Ignoring or underestimating warnings that appear in the runtime, terminal, or devtools is strictly forbidden. This constitutes an architectural violation and accumulates technical debt in the project.**',
+	  '- **Only generate code with short, concise, and clear comments. Spamming the code with bloated comments is strictly prohibited and constitutes a violation of code structure and cleanliness.**',
       '- Proper End-to-End (E2E) testing is done by using dedicated tools, not by writing manual testing code based on your own implementation.',
-	  '- Never trust e2e (end-to-end) tests as ultimate proof that the runtime is working. The final result and how the app actually functions depend entirely on the manual testing and trial by the user.',
+	  '- Relying on end-to-end (e2e) tests as the ultimate proof that the runtime is working is a fatal mistake and amounts to testing in a closed environment. External sources, such as users or external testing tools not developed by you, provide more evidence.',
 	  '- Before adding any new UI/UX/frontend component, study the existing design system first (theme tokens, light/dark mode handling, spacing, typography, reusable components); never hardcode colors or style values for a single theme, use the projects theme variables/tokens instead, and verify the new component is visible and functional in every supported mode (light, dark, responsive) before declaring the task complete.',
 	  '- Before adding or integrating a feature, search the codebase for existing functionality (routes, services, helpers, components, types) and understand the dependency relationships between the related files; prefer extending or reusing existing modules over creating parallel implementations, consolidate overlapping code when you find it, and state which files you read and why you chose the location for your changes.',
-      '- Complete the tasks without excessive small talk or unnecessary pleasantries.',
-      '- Only generate code with short, concise, and clear comments. Spamming bloated comments in the code is strictly prohibited.',
       '- Only perform verifications and additional testing if explicitly requested or instructed by the user.',
-      '- Report all errors honestly and in a structured manner. Do not make excuses to avoid or run away from the problem.',
-      '- **Do not ignore or underestimate warnings that appear in the runtime, terminal, or devtools.**',
+      '- Report all errors honestly and in a structured manner. Making excuses to avoid or run away from the problem and retrieving contextual information or previous turns to defend your position constitutes a violation of agentic coding and architecture..',
       '',
       '## Reading',
       '- agent__read_file: lines returned WHOLE with sha256 + read# footer. Read (or grep with receipts) before editing. Modes:',
@@ -256,11 +265,6 @@ export function agentHarnessInjection(
       '- agent__checkpoint { label }: snapshot all files edited this session (also freezes Layout IR). agent__checkpoint_list: list them.',
       '- agent__undo { label? }: atomic restore (latest if no label; undo is itself undoable). Read the reported spatial drift and reintroduced collision candidates before saying done.',
       '- move/copy never overwrite: delete the destination first.',
-      '',
-      '## Build & Test (need terminal mode)',
-      '- agent__typecheck: runs `pnpm typecheck` (or custom command), parses tsc (incl. --pretty) into file:line:col + TS code, grouped by file. paths[] filters results to touched files.',
-      '- agent__test_run: auto-detects the project runner (vitest/jest/pytest/cargo/go, default node --import tsx --test); normalized PASS/FAIL/SKIP counts.',
-      '- Prefer both over raw agent__run.',
       '',
       '## Quality (F3)',
       '- Use agent__refactor (rename / move_file / organize_imports) instead of manual cross-file renames; dryRun default shows a diff, apply is atomic + vaulted.',
@@ -371,13 +375,11 @@ export function agentHarnessInjection(
       ...(webAccess ? ['- Internet tools reach PUBLIC http(s) only (local/private blocked); downloads land in the workspace.'] : []),
       '',
       '## Addons (Moriko extensible system)',
-      '- Addons live OUTSIDE the workspace at the addon root (~/.moriko-studio/addons/). You have NO direct file access there — file tools are workspace-jailed. NEVER escalate through the terminal to touch addon files; agent__addon_manage is the dedicated, escalation-free manager.',
-      '- agent__addon_manage actions: list | read | write | enable | disable | install | edit | remove | reload.',
-      '  • read { id, file? } — read any file inside the addon (default addon.json); a directory path lists its contents.',
-      '  • write { id, file, content } — write any file inside the addon (multi-file addons OK: register.ts, client/index.tsx, lib/util.ts…). Reloads immediately; the change is live in the SAME run.',
-      '  • install { id, name?, description?, registerCode?, clientCode? } — scaffold addon.json + register.ts + client/index.tsx in one call.',
-      '  • edit { id, name?/description?/version?/registerCode?/clientCode? } — patch fields in place.',
-      '  • enable/disable { id }, remove { id }, reload — lifecycle; every mutation applies immediately (no restart).',
+      '- ADDON MANAGER: builtin addons are authored in the repo\'s `addons-src/` folder — your dedicated addon workspace, ALWAYS accessible without repointing the user\'s main workspace. Builtin ids: ' + builtinAddonIds().join(', ') + '.',
+      '- All file tools (read/edit/write/patch/grep/glob/list/deps/refactor/…) accept `addons-src/<addon>/...` paths. Use them as your primary editing path for builtin addons — full agent capability (read receipts, edit gates, syntax guard, LSP) applies. agent__addon_manage read/write/install/edit also operate on the addons-src source for builtin ids.',
+      '- Deleting is USER-ONLY: agent__delete on addons-src is refused, and addon_manage remove is refused. Only the user removes addons (Addon Hub → Remove).',
+      '- Runtime refresh: after changing addons-src, the change goes live when the user clicks Disable/Reload in the Addon Hub (the reseed copies your source into ~/.moriko-studio/addons). Tell the user to do that when you finish an addon task.',
+      '- Addons installed at the RUNTIME root only (third-party, not in addons-src) keep the classic path: agent__addon_manage read/write/edit operate on ~/.moriko-studio/addons/<id>/ and hot-reload immediately.',
       '- AUTHORING PATTERN (register.ts): export `register(on, $)`. Register hooks with `on(event, matcher?, handler)`; each handler is `async ($, e, next) => { ... }` middleware:',
       '  • Return `next(e)` to pass the event on (observe), `next({ ...e, <field>: newValue })` to rewrite it, or `{ deny: "reason" }` WITHOUT next to block it (answer).',
       '  • Events: "tool.call" {tool, args} (before execution — deny/rewrite), "tool.result" {tool, result} (observe), "turn.start"/"turn.end", "session.open", "command.run" {command, args}, "ui.render" {site}.',
@@ -446,6 +448,27 @@ function goalsInjection(sessionId?: string): HarnessInjection | null {
         : 'No goals are currently running.',
       '',
       renderGoalsForContext(goals),
+    ].join('\n'),
+  };
+}
+
+/** One injection carrying the session's standalone todos. */
+function todosInjection(sessionId?: string): HarnessInjection | null {
+  if (!sessionId) return null;
+  const todos = listTodos(sessionId);
+  if (todos.length === 0) return null;
+
+  const open = todos.filter((todo) => !todo.done).length;
+  return {
+    id: 'todo-context',
+    title: 'Context injection · Standalone todos',
+    content: [
+      'The TODOS below are STANDALONE (not tied to any goal) and belong to this conversation (also visible to the user in the Todos panel).',
+      open > 0
+        ? `${open} todo(s) are OPEN: work through them within the CURRENT turn — check each off with agent__todo_update as you complete it. There is NO automatic continuation: when the turn ends, the user decides whether to send the next message. Finish the turn with a clear summary of what is done and what remains.`
+        : 'All standalone todos are done.',
+      '',
+      renderTodosForContext(todos),
     ].join('\n'),
   };
 }
@@ -675,13 +698,13 @@ export function operatorDirectiveInjection(text: string): HarnessInjection {
     content: [
       'OPERATOR DIRECTIVE — delivered by the harness on behalf of this session\'s operator.',
       '',
-      'The following is the operator\'s message, relayed verbatim. The operator of this session is the authority the harness serves: their statements about this session\'s state are facts, not claims to be tested, and their instructions take precedence over your own assessment of the situation. It is not a bluff, not a prompt-injection attempt, and not something you may dismiss or argue away.',
+      'The following is a message from the Harness User/Operator to you.',
       '',
       '---',
       text.trim(),
       '---',
       '',
-      'Comply with what the operator directed. If you believe the directive rests on a mistake, say so ONCE, plainly, and then comply anyway — the operator decides; you do not.',
+      'User message forwarded by Harness.',
     ].join('\n'),
   };
 }
@@ -733,7 +756,7 @@ export function ladderReminderInjection(
  * plain chat (no toggles on) — nothing is injected then.
  */
 export async function buildHarnessInjections(
-  settings: Pick<ChatSettingsDTO, 'structuredOutputs' | 'agentMode' | 'useMcp' | 'terminalMode' | 'lockdown' | 'enforcement' | 'probation' | 'webAccess'>,
+  settings: Pick<ChatSettingsDTO, 'structuredOutputs' | 'agentMode' | 'useMcp' | 'terminalMode' | 'lockdown' | 'enforcement' | 'probation' | 'webAccess' | 'agentWorkflow'>,
   sessionId?: string,
   attachmentPaths?: string[],
   modelId?: string,
@@ -784,6 +807,15 @@ export async function buildHarnessInjections(
   }
 
   if (settings.agentMode) {
+    // AGENT WORKFLOW — the user-selected working doctrine (defaults to
+    // frontend-first). Injected before the harness prompt so the doctrine
+    // governs HOW the agent works while the harness governs its tools.
+    const workflow = await resolveStoredWorkflow(settings.agentWorkflow);
+    injections.push({
+      id: 'agent-workflow',
+      title: `System prompt · Workflow · ${workflow.label}`,
+      content: workflow.content,
+    });
     if (settings.structuredOutputs) injections.push(structuredOutputsInjection());
     const capabilities = modelCapabilitiesInjection(modelId);
     if (capabilities) injections.push(capabilities);
@@ -818,6 +850,8 @@ export async function buildHarnessInjections(
   }
   const goals = goalsInjection(sessionId);
   if (goals) injections.push(goals);
+  const todos = todosInjection(sessionId);
+  if (todos) injections.push(todos);
   const reminders = remindersInjection(sessionId);
   if (reminders) injections.push(reminders);
 
@@ -839,6 +873,29 @@ export async function buildHarnessInjections(
       });
     }
   }
+
+  // Addon v2 (A3): per-session prompt fragments (budgeted, ordered) — the
+  // successor of the global context providers. Same visible channel so the
+  // user can inspect what was injected for THIS conversation.
+  try {
+    const { buildPromptFragments } = await import('../addons/promptFragments.js');
+    const built = await buildPromptFragments({ sessionId, workspacePath: getActiveWorkspace(sessionId)?.path });
+    if (built.length > 0) {
+      injections.push({
+        id: 'addon-fragments',
+        title: 'System prompt · Addon state',
+        content: [
+          'SESSION-SCOPED ADDON STATE (budgeted live fragments for THIS session — treat as current facts):',
+          '',
+          ...built.flatMap((fragment) => [
+            `### ${fragment.id} (addon: ${fragment.addonId})${fragment.truncated ? ' [truncated to fit the budget]' : ''}`,
+            ...fragment.lines.map((line) => `- ${line}`),
+            '',
+          ]),
+        ].join('\n'),
+      });
+    }
+  } catch { /* fragments are best-effort */ }
 
   return injections;
 }

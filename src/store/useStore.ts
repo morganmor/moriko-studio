@@ -19,6 +19,7 @@ import type {
   ImageSizeMode,
   ModelMeta,
   ProviderPublic,
+  Todo,
   TreeDelta,
   TreeIgnoreRules,
   TreeNodeInfo,
@@ -50,6 +51,7 @@ export const DEFAULT_SETTINGS: ChatSettings = {
   structuredOutputs: false,
   useMcp: false,
   agentMode: false,
+  agentWorkflow: '',
   terminalMode: 'auto',
   confirmDeletes: false,
   fetchWeb: false,
@@ -374,6 +376,10 @@ interface AppState {
     categoryId?: string;
     /** Binds the new chat to this workspace immediately (the '+' picker). */
     workspaceId?: string;
+    /** COUNCIL: stamp the new chat as a council container or a sub session of one. */
+    councilId?: string;
+    councilRole?: 'main' | 'sub';
+    councilAgentId?: string;
   }) => string;
   selectConversation: (id: string) => void;
   deleteConversation: (id: string) => void;
@@ -422,6 +428,9 @@ interface AppState {
   adoptFetchedBody: (fetched: Conversation) => void;
 
   appendTurn: (conversationId: string, turn: Turn) => void;
+  /** HARNESS-EVENT: insert/replace a kind:'harness-event' turn by id (dedupe
+   *  for bus replays; never retitles the conversation). */
+  upsertHarnessEvent: (conversationId: string, turn: Turn) => void;
   updateTurn: (conversationId: string, turnId: string, patch: Partial<Turn>) => void;
   /**
    * THE USER'S OWN PRUNER — the only thing that ever removes reasoning.
@@ -441,6 +450,8 @@ interface AppState {
   patchConversation: (conversationId: string, patch: Partial<Conversation>) => void;
   /** Replaces the goal list of one conversation (goals_state pushes / panel). */
   setConversationGoals: (conversationId: string, goals: Goal[]) => void;
+  /** Replaces the standalone todo list of one conversation (todos_state pushes / panel). */
+  setConversationTodos: (conversationId: string, todos: Todo[]) => void;
   /**
    * Patch settings. Without `conversationId` the ACTIVE conversation is
    * targeted; callers that know which session they are editing (the
@@ -588,6 +599,9 @@ function makeConversation(options?: {
   model?: string;
   categoryId?: string;
   workspaceId?: string;
+  councilId?: string;
+  councilRole?: 'main' | 'sub';
+  councilAgentId?: string;
 }): Conversation {
   const now = Date.now();
   return {
@@ -605,6 +619,9 @@ function makeConversation(options?: {
     turns: [],
     categoryId: options?.categoryId,
     ...(options?.workspaceId ? { workspaceId: options.workspaceId } : {}),
+    ...(options?.councilId ? { councilId: options.councilId } : {}),
+    ...(options?.councilRole ? { councilRole: options.councilRole } : {}),
+    ...(options?.councilAgentId ? { councilAgentId: options.councilAgentId } : {}),
   };
 }
 
@@ -615,6 +632,17 @@ function makeConversation(options?: {
  */
 export function isPhantomConversation(conversation: Conversation): boolean {
   return conversation.turns.length === 0 && conversation.title === 'New chat';
+}
+
+/**
+ * COUNCIL (Council Agent addon): a sub session lives INSIDE a council container.
+ * It is a real conversation (own turns/context) but must never appear as its own
+ * row in the sidebar, the workspace groups or the history — the council's Main
+ * Session is the single visible row, and switching between members happens
+ * through the TopBar council switcher.
+ */
+export function isSubSession(conversation: Conversation): boolean {
+  return conversation.councilRole === 'sub' && Boolean(conversation.councilId);
 }
 
 /**
@@ -1120,6 +1148,12 @@ function shellForSummary(summary: ConversationSummary): Conversation {
     providerId: summary.providerId ?? '',
     model: summary.model ?? '',
     workspaceId: summary.workspaceId,
+    // COUNCIL: sub sessions must keep their container markers on the SHELL —
+    // without these the sidebar/history filters (isSubSession) cannot see them
+    // and they leak into Recent Chat until the body is hydrated.
+    councilId: summary.councilId,
+    councilRole: summary.councilRole,
+    councilAgentId: summary.councilAgentId,
     rev: summary.rev,
     settings: {
       ...DEFAULT_SETTINGS,
@@ -2075,6 +2109,9 @@ export const useStore = create<AppState>((set, get) => ({
       model: options?.model ?? model,
       categoryId: options?.categoryId,
       workspaceId: options?.workspaceId,
+      councilId: options?.councilId,
+      councilRole: options?.councilRole,
+      councilAgentId: options?.councilAgentId,
     });
     conversation.settings = {
       ...pendingSettings,
@@ -2121,8 +2158,23 @@ export const useStore = create<AppState>((set, get) => ({
   },
   executeDeleteConversation: (id) => {
     pendingDeletions.add(id);
-    const next = get().conversations.filter((conversation) => conversation.id !== id);
-    const activeId = get().activeId === id ? newestConversationId(next) : get().activeId;
+    // COUNCIL: deleting the MAIN session takes its sub sessions with it —
+    // leaving them orphaned would make them unreachable (hidden from every
+    // list). Deleting a SUB session deletes ONLY that sub session.
+    const deleted = get().conversations.find((conversation) => conversation.id === id);
+    const councilId = deleted?.councilId;
+    const councilSubs = (councilId && deleted?.councilRole === 'main')
+      ? get().conversations.filter(
+          (conversation) => conversation.councilId === councilId && conversation.councilRole === 'sub',
+        )
+      : [];
+    const dropped = councilSubs.map((conversation) => conversation.id);
+    for (const subId of dropped) pendingDeletions.add(subId);
+    const next = get().conversations.filter((conversation) => !pendingDeletions.has(conversation.id));
+    const currentActiveId = get().activeId ?? '';
+    const activeId = (currentActiveId === id || dropped.includes(currentActiveId))
+      ? newestConversationId(next)
+      : get().activeId;
     set({ conversations: next, activeId });
     persist(next);
     storage.saveActiveId(activeId);
@@ -2340,6 +2392,23 @@ export const useStore = create<AppState>((set, get) => ({
     persist(next);
   },
 
+  upsertHarnessEvent: (conversationId, turn) => {
+    const safeTurn: Turn = { ...turn, content: typeof turn.content === 'string' ? turn.content : '' };
+    const next = get().conversations.map((conversation) => {
+      if (conversation.id !== conversationId) return conversation;
+      const exists = conversation.turns.some((entry) => entry.id === safeTurn.id);
+      return {
+        ...conversation,
+        turns: exists
+          ? conversation.turns.map((entry) => (entry.id === safeTurn.id ? safeTurn : entry))
+          : [...conversation.turns, safeTurn],
+        updatedAt: Date.now(),
+      };
+    });
+    set({ conversations: next });
+    persist(next);
+  },
+
   updateTurn: (conversationId, turnId, patch) => {
     // dead turn (second half of the hapus→muncul-lagi bug).
     if (isTurnTombstoned(turnId)) return;
@@ -2391,6 +2460,10 @@ export const useStore = create<AppState>((set, get) => ({
 
   setConversationGoals: (conversationId, goals) => {
     get().patchConversation(conversationId, { goals });
+  },
+
+  setConversationTodos: (conversationId, todos) => {
+    get().patchConversation(conversationId, { todos });
   },
 
   updateSettings: (patch, conversationId) => {

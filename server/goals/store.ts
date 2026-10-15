@@ -31,6 +31,10 @@ export interface GoalTodo {
   done: boolean;
   /** Optional nested checklist ("checklist dalam checklist"), one level deep. */
   subtasks?: GoalSubtask[];
+  /** Priority level — defaults to 'medium' for older entries. */
+  priority?: 'low' | 'medium' | 'high';
+  /** Optional longer-form detail. */
+  notes?: string;
 }
 
 export interface GoalSubtask {
@@ -155,6 +159,31 @@ export function listGoals(sessionId: string): Goal[] {
   return [...loadSession(sessionId)];
 }
 
+function normalizePriority(value: unknown): 'low' | 'medium' | 'high' | undefined {
+  if (value === 'low' || value === 'medium' || value === 'high') return value;
+  return undefined;
+}
+
+/** Accepts a plain string or a rich todo object; strings become medium todos. */
+function normalizeTodoInput(entry: unknown): GoalTodo | null {
+  if (typeof entry === 'string') {
+    const text = cleanText(entry, MAX_TODO_TEXT);
+    return text ? { id: randomUUID().slice(0, 8), text, done: false } : null;
+  }
+  const obj = entry as { text?: unknown; priority?: unknown; notes?: unknown };
+  const text = cleanText(obj?.text, MAX_TODO_TEXT);
+  if (!text) return null;
+  const priority = normalizePriority(obj?.priority);
+  const notes = cleanText(obj?.notes, MAX_TODO_TEXT);
+  return {
+    id: randomUUID().slice(0, 8),
+    text,
+    done: false,
+    ...(priority ? { priority } : {}),
+    ...(notes ? { notes } : {}),
+  };
+}
+
 export function createGoal(
   sessionId: string,
   input: { title?: unknown; plan?: unknown; todos?: unknown },
@@ -172,11 +201,9 @@ export function createGoal(
     title,
     plan: cleanText(input.plan, MAX_PLAN),
     status: 'running',
-    todos: rawTodos.slice(0, MAX_TODOS).map((text) => ({
-      id: randomUUID().slice(0, 8),
-      text: cleanText(text, MAX_TODO_TEXT),
-      done: false,
-    })).filter((todo) => todo.text),
+    todos: rawTodos.slice(0, MAX_TODOS)
+      .map(normalizeTodoInput)
+      .filter((todo): todo is GoalTodo => todo !== null),
     createdAt: now,
     updatedAt: now,
     loopCount: 0,
@@ -192,6 +219,8 @@ export interface GoalPatch {
   status?: unknown;
   /** Todo checkoff by id: { id, done }. */
   todos?: unknown;
+  /** Todo patch by id: { id, priority?, notes? }. */
+  setTodoMeta?: unknown;
   /** Add a subtask: { todoId, text }. */
   addSubtask?: unknown;
   /** Subtask checkoff by id: { id, done } — ids are unique across the goal. */
@@ -226,6 +255,18 @@ export function updateGoal(sessionId: string, goalId: string, patch: GoalPatch):
     for (const entry of patch.todos as Array<{ id?: unknown; done?: unknown }>) {
       const todo = goal.todos.find((candidate) => candidate.id === entry?.id);
       if (todo && typeof entry.done === 'boolean') todo.done = entry.done;
+    }
+  }
+  if (Array.isArray(patch.setTodoMeta)) {
+    for (const entry of patch.setTodoMeta as Array<{ id?: unknown; priority?: unknown; notes?: unknown }>) {
+      const todo = goal.todos.find((candidate) => candidate.id === entry?.id);
+      if (!todo) continue;
+      const priority = normalizePriority(entry?.priority);
+      if (priority) todo.priority = priority;
+      if (entry?.notes !== undefined) {
+        const notes = cleanText(entry.notes, MAX_TODO_TEXT);
+        todo.notes = notes || undefined;
+      }
     }
   }
   if (patch.addSubtask && typeof patch.addSubtask === 'object') {
@@ -265,6 +306,11 @@ export function updateGoal(sessionId: string, goalId: string, patch: GoalPatch):
   }
   goal.updatedAt = Date.now();
   persistSession(sessionId);
+  // Addon v2 (A3): goal.change — observe point.
+  try {
+    const { emitPointAsync } = require('../addons/points.js') as typeof import('../addons/points.js');
+    emitPointAsync('goal.change', { sessionId, goalId, status: goal.status });
+  } catch { /* best-effort */ }
   return goal;
 }
 
@@ -284,11 +330,12 @@ export function renderGoalsForContext(goals: Goal[]): string {
       const todos = goal.todos.length
         ? goal.todos
             .map((todo) => {
-              const line = `  - [${todo.done ? 'x' : ' '}] (${todo.id}) ${todo.text}`;
+              const line = `  - [${todo.done ? 'x' : ' '}] (${todo.id})${todo.priority && todo.priority !== 'medium' ? ` [${todo.priority}]` : ''} ${todo.text}`;
+              const notes = todo.notes ? `\n      notes: ${todo.notes}` : '';
               const subs = todo.subtasks?.length
                 ? todo.subtasks.map((sub) => `\n      · [${sub.done ? 'x' : ' '}] (${sub.id}) ${sub.text}`).join('')
                 : '';
-              return line + subs;
+              return line + notes + subs;
             })
             .join('\n')
         : '  (no todos yet)';

@@ -396,6 +396,34 @@ node scripts/test-fetchweb-e2e.mjs
 node scripts/test-agent-e2e.mjs   # Agent harness smoke test (no API key)
 ```
 
+## Addon system (v2)
+
+`server/addons/` is a mod-scale platform: addons are folders under
+`~/.moriko-studio/addons/` (builtin sources live in `addons-src/` and are
+seeded at boot — never overwriting user edits). See `docs/ADDON-API.md` for
+the full authoring contract. Shape:
+
+| Module | Role |
+| --- | --- |
+| `manifest.ts` `permissions.ts` `graph.ts` | v2 manifest validation, consent (normal/sensitive/dangerous), dependency + conflict resolution |
+| `registry.ts` `disposables.ts` | registries (tools/commands/hooks/widgets/views/settings/prompt fragments/status), per-addon lifetime Scope (zero leaks on reload) |
+| `loader.ts` `seed.ts` | per-addon hot reload (mtime cache-bust), builtin seeding |
+| `points.ts` | Harness Extension Points: tool.call/result (cancel/mutate), fs.change, round/turn/session events — no-op cheap when no hooks |
+| `inject.ts` `sessionRegistry.ts` (agents/) | `sessions.inject` mid-run notices (idempotent, rate-limited) + running-session presence |
+| `storage.ts` `settings.ts` `contributions.ts` | persistent KV, schema-validated settings, manifest contributions |
+| `clientBundle.ts` | server-side transpile of addon client code (`ts.transpileModule`) + host shim → ONE React instance; serves views/widgets/assets |
+| `bus.ts` | cross-session pub/sub + SSE with monotonic ids, Last-Event-ID replay, topic filters |
+| `routes.ts` | `/api/addons/*`: list/views/settings/RPC/permissions/logs/client modules |
+
+Client: the left sidebar has an Addons section + Addon Hub (`ViewId =
+"addons"`); addon views mount as full pages (`ViewId = "addon:<id>/<view>"`)
+via `AddonViewHost`; notifications surface through the center-top
+`AddonNotificationHost` (SSE `addon.notify`).
+
+Reference addons: `addons-src/rsat/` (v2 — tools, scope guard, fs ledger,
+multi-agent sync, pixel board UI) and `addons-src/visual-context/` (v1
+legacy, kept working by the shim).
+
 ## Testing notes
 
 `scripts/` hosts standalone e2e scripts (real MCP servers, fetch-web, Bitdeer

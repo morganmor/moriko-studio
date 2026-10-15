@@ -20,7 +20,6 @@ const GAME_PACK = [
   '- Handle resize (viewport + camera aspect); pause the loop when the tab is hidden.',
   '- Budget assets up front: agent__asset_inspect (triangles, texture size, bytes) before shipping models.',
   '- Shaders: validate with agent__shader_check (prelude "three" for ShaderMaterial built-ins).',
-  '- Final verification: agent__game_probe on the localhost dev server (fps, console errors, blank-canvas detection).',
   '- Expose a dev-only `window.__MORIKO_PROBE__ = { renderer, scene }` hook so game_probe can read draw stats.',
 ];
 

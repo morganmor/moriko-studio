@@ -14,10 +14,10 @@ import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { MAX_EDIT_BYTES, resolveWithPermission } from './shared.js';
 import { buildUnifiedDiff, diffStatFromOps } from '../diff.js';
 import { snapshotFile, restoreSnapshot } from '../vault.js';
-import { runProcess } from '../exec.js';
 import {
   recordAfterWrite, hasCurrentRead, readRequiredMessage, staleReadMessage,
   getReadEntry, outOfRangeLinesMessage,
+  shiftIntervalsForEdit, isRangeCoveredByReadEntry,
 } from '../read-policy.js';
 import { fuzzyHint } from '../fuzzy.js';
 import { sha256 } from '../edit-diagnostics.js';
@@ -94,45 +94,122 @@ export function loadEditable(
 }
 
 /**
- * Shared optimistic-concurrency check; returns the refusal text or null.
+ * Normalizes a hash the model supplied: strips the optional `sha256:`
+ * prefix (the read_file footer prints `sha256:<hex>`, and models copy
+ * that string verbatim into expectedReadHash/lastHash) and lowercases.
  */
-export function hashGuardError(content: string, expectedReadHash: string, relative: string): string | null {
-  if (!expectedReadHash) return null;
-  const actualHash = sha256(content);
-  const expected = expectedReadHash.length >= 64 ? expectedReadHash : expectedReadHash.padEnd(64, '0');
-  if (actualHash === expected || actualHash.startsWith(expectedReadHash)) return null;
-  return (
-    `expectedReadHash mismatch: the file changed since the read you anchored on. ` +
-    `on-disk sha256:${actualHash.slice(0, 12)}... vs your expected ${expectedReadHash.slice(0, 12)}.... ` +
-    `Next step: agent__read_file path="${relative}" -- refresh, then retry with the new hash.`
-  );
+export function normalizeHashInput(raw: string): string {
+  return raw.trim().replace(/^sha256:/i, '').toLowerCase();
 }
 
 /**
- * LINE-SHIFT MAP for the edit receipt. After an edit that adds/removes
- * lines, every line number the model holds from before the edit is stale
- * past the first changed line. A cheap O(n) scan (no LCS): first divergence
- * + total line delta is enough to say which numbers moved.
+ * Shared optimistic-concurrency check; returns the refusal text or null.
  */
-function lineShiftMap(before: string, after: string): string | null {
-  if (before === after) return null;
-  const trimPhantom = (raw: string[]) => (raw.length > 1 && raw[raw.length - 1] === '' ? raw.slice(0, -1) : raw);
-  const beforeLines = trimPhantom(before.split('\n'));
-  const afterLines = trimPhantom(after.split('\n'));
-  const limit = Math.min(beforeLines.length, afterLines.length);
-  let first = 0;
-  while (first < limit && beforeLines[first] === afterLines[first]) first += 1;
-  if (first === limit && beforeLines.length === afterLines.length) return null;
-  const delta = afterLines.length - beforeLines.length;
-  const at = first + 1;
-  if (delta === 0) {
-    return ` Line numbers stay aligned (line count unchanged) but line ${at} changed — verify anchors past line ${at} before reusing them.`;
-  }
-  const sign = delta > 0 ? '+' : '';
+export function hashGuardError(content: string, expectedReadHash: string, relative: string): string | null {
+  const cleaned = normalizeHashInput(expectedReadHash);
+  if (!cleaned) return null;
+  const actualHash = sha256(content).toLowerCase();
+  if (actualHash === cleaned || (cleaned.length < 64 && actualHash.startsWith(cleaned))) return null;
   return (
-    ` Line-shift map: line numbers ≥ ${at} moved by ${sign}${delta} ` +
-    `(file went ${beforeLines.length} → ${afterLines.length} lines) — re-anchor with read_file before trusting old line numbers.`
+    `expectedReadHash mismatch: the file changed since the read you anchored on. ` +
+    `on-disk sha256:${actualHash.slice(0, 12)} vs your expected sha256:${cleaned.slice(0, 12)}. ` +
+    `Next step: agent__read_file path="${relative}" — refresh, then retry with the new hash.`
   );
+}
+
+export interface EditBounds {
+  changed: boolean;
+  /** 1-based first line of the changed span. */
+  startLine: number;
+  oldSpanLines: number;
+  newSpanLines: number;
+  deltaLines: number;
+  beforeTotalLines: number;
+  afterTotalLines: number;
+}
+
+/**
+ * Pemindaian O(N) dua arah (prefix & suffix) untuk menemukan batas baris
+ * perubahan secara eksak: baris identik dari ATAS dan dari BAWAH dilompati,
+ * sisa di tengah = span lama → span baru. Menggantikan peta geser satu
+ * arah (first-divergence + total delta) yang kabur untuk edit di tengah/akhir file.
+ */
+export function computeEditBounds(before: string, after: string): EditBounds {
+  const trimPhantom = (raw: string[]) =>
+    raw.length > 1 && raw[raw.length - 1] === '' ? raw.slice(0, -1) : raw;
+  const beforeLines = trimPhantom(before.replace(/\r\n/g, '\n').split('\n'));
+  const afterLines = trimPhantom(after.replace(/\r\n/g, '\n').split('\n'));
+
+  if (before === after) {
+    return {
+      changed: false,
+      startLine: 1,
+      oldSpanLines: 0,
+      newSpanLines: 0,
+      deltaLines: 0,
+      beforeTotalLines: beforeLines.length,
+      afterTotalLines: afterLines.length,
+    };
+  }
+
+  const minLen = Math.min(beforeLines.length, afterLines.length);
+  let prefix = 0;
+  while (prefix < minLen && beforeLines[prefix] === afterLines[prefix]) {
+    prefix += 1;
+  }
+
+  let suffix = 0;
+  while (
+    suffix < minLen - prefix &&
+    beforeLines[beforeLines.length - 1 - suffix] === afterLines[afterLines.length - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
+
+  const startLine = prefix + 1;
+  return {
+    changed: true,
+    startLine,
+    oldSpanLines: Math.max(0, beforeLines.length - prefix - suffix),
+    newSpanLines: Math.max(0, afterLines.length - prefix - suffix),
+    deltaLines: afterLines.length - beforeLines.length,
+    beforeTotalLines: beforeLines.length,
+    afterTotalLines: afterLines.length,
+  };
+}
+
+/**
+ * Membangun ringkasan pergeseran baris + Context Echo: map geser baris
+ * (≥ first-changed line moved by ±delta) plus ±4 baris konteks di sekitar
+ * area yang baru diedit dengan nomor baris BARU — model tak perlu read_file
+ * ulang hanya untuk men-anchor edit lanjutan.
+ */
+function buildPostEditSummary(afterContent: string, bounds: EditBounds, newHash: string): string {
+  if (!bounds.changed) return '';
+  const sign = bounds.deltaLines > 0 ? '+' : '';
+  const shiftHeader =
+    bounds.deltaLines === 0
+      ? ` Line numbers stay aligned (line ${bounds.startLine} changed; ${bounds.afterTotalLines} lines, sha256:${newHash.slice(0, 12)}).`
+      : ` Line-shift map: line numbers ≥ ${bounds.startLine + bounds.oldSpanLines} moved by ${sign}${bounds.deltaLines} ` +
+        `(${bounds.beforeTotalLines} → ${bounds.afterTotalLines} lines, new sha256:${newHash.slice(0, 12)}).`;
+
+  const rawLines = afterContent.replace(/\r\n/g, '\n').split('\n');
+  const view = rawLines.length > 1 && rawLines[rawLines.length - 1] === '' ? rawLines.slice(0, -1) : rawLines;
+  const pad = 4;
+  const echoFrom = Math.max(1, bounds.startLine - pad);
+  const maxEditedLinesShown = Math.min(bounds.newSpanLines, 12);
+  const echoTo = Math.min(view.length, bounds.startLine + Math.max(maxEditedLinesShown, 1) - 1 + pad);
+
+  const rows: string[] = [];
+  for (let ln = echoFrom; ln <= echoTo; ln += 1) {
+    const inEdited = ln >= bounds.startLine && ln < bounds.startLine + bounds.newSpanLines;
+    rows.push(`${inEdited ? '>' : ' '}${String(ln).padStart(5)}| ${view[ln - 1] ?? ''}`);
+  }
+  if (bounds.newSpanLines > maxEditedLinesShown) {
+    rows.push(`  … (${bounds.newSpanLines - maxEditedLinesShown} more modified line(s) in this block)`);
+  }
+
+  return `${shiftHeader}\n── post-edit context (lines ${echoFrom}–${echoTo}) ──\n${rows.join('\n')}`;
 }
 
 /**
@@ -156,7 +233,9 @@ export async function finishEdit(
   const nextContent = normalized
     ? nextEffective.replace(/\r/g, '').replace(/\n/g, '\r\n')
     : nextEffective;
-  const shiftNote = lineShiftMap(originalRaw, nextContent);
+  const bounds = computeEditBounds(originalRaw, nextContent);
+  const newHash = sha256(nextContent).toLowerCase();
+  const shiftNote = buildPostEditSummary(nextContent, bounds, newHash);
 
   if (dryRun) {
     return {
@@ -226,7 +305,28 @@ export async function finishEdit(
   } catch {
     postMtime = Date.now();
   }
-  recordAfterWrite(ctx.sessionId, absolute, nextContent, postMtime);
+  // Post-edit receipt maintenance: shift the session's read intervals by the
+  // true edit bounds and keep them (instead of nuking the receipt to 1..MAX)
+  // so the model can continue editing the regions it actually saw. A
+  // full-window receipt stays full (nothing to shift, nothing to lose).
+  let shiftedIntervals: import('../read-policy.js').LineInterval[] | undefined;
+  if (!bounds.changed) {
+    shiftedIntervals = undefined;
+  } else {
+    const priorRead = getReadEntry(ctx.sessionId, absolute);
+    shiftedIntervals =
+      priorRead && priorRead.toLine < Number.MAX_SAFE_INTEGER
+        ? shiftIntervalsForEdit(
+            priorRead.intervals,
+            priorRead.fromLine,
+            priorRead.toLine,
+            bounds.startLine,
+            bounds.oldSpanLines,
+            bounds.newSpanLines,
+          )
+        : undefined;
+  }
+  recordAfterWrite(ctx.sessionId, absolute, nextContent, postMtime, undefined, shiftedIntervals);
   return {
     ok: true,
     isError: false,
@@ -258,6 +358,8 @@ export async function replaceLineRange(
     verifySyntax: boolean;
     newString: string;
     toolName: string;
+    /** Result an anchor tool already loaded — avoids a double disk read. */
+    preloaded?: LoadedFile;
     note?: string;
   },
 ): Promise<HarnessToolResult> {
@@ -265,7 +367,9 @@ export async function replaceLineRange(
   if (!exists) {
     return { ok: false, isError: true, text: `No such file: ${relative}${fuzzyHint(absolute)} — ${opts.toolName} edits an existing file.` };
   }
-  const loaded = loadEditable(target, ctx, opts.toolName, opts.expectedReadHash);
+  const loaded = opts.preloaded
+    ? { ok: true as const, data: opts.preloaded }
+    : loadEditable(target, ctx, opts.toolName, opts.expectedReadHash);
   if (!loaded.ok) return loaded.result;
   const content = loaded.data.content;
   const readEntry = loaded.data.readEntry;
@@ -276,10 +380,10 @@ export async function replaceLineRange(
   const view = rawLines.length > 1 && rawLines[rawLines.length - 1] === '' ? rawLines.slice(0, -1) : rawLines;
 
   if (readEntry && readEntry.toLine < Number.MAX_SAFE_INTEGER) {
-    if (opts.range.from < readEntry.fromLine || opts.range.to > readEntry.toLine) {
+    if (!isRangeCoveredByReadEntry(readEntry, opts.range.from, opts.range.to)) {
       return {
         ok: false, isError: true,
-        text: outOfRangeLinesMessage(relative, opts.range.from, opts.range.to, readEntry.fromLine, readEntry.toLine),
+        text: outOfRangeLinesMessage(relative, opts.range.from, opts.range.to, readEntry.fromLine, readEntry.toLine, readEntry),
       };
     }
   }
@@ -287,6 +391,18 @@ export async function replaceLineRange(
     return {
       ok: false, isError: true,
       text: `edit range ends at line ${opts.range.to}, but "${relative}" has ${view.length} line(s). Re-read the tail if it grew.`,
+    };
+  }
+
+  // No-op guard: replacing a range with the text it already holds is a bug,
+  // not a success — refuse instead of writing an identical file.
+  const existingSlice = view.slice(opts.range.from - 1, opts.range.to).join('\n');
+  const normalizedNew = opts.newString.replace(/\r/g, '');
+  if (existingSlice === normalizedNew) {
+    return {
+      ok: false,
+      isError: true,
+      text: `${opts.toolName} is a guaranteed no-op: lines ${opts.range.from}–${opts.range.to} already equal "newString".`,
     };
   }
 
@@ -304,10 +420,10 @@ export async function replaceLineRange(
 
 /**
  * SYNTAX GUARD probe for freshly written files. JSON parses in-process;
- * .js/.mjs/.cjs go through `node --check`; .ts/.tsx/.mts/.cts/.jsx are
- * validated with the TypeScript Compiler API in-process (F1.6); .css gets a
- * light brace/comment balance heuristic. Anything unverifiable (other
- * extensions, or an environment that cannot spawn) is SKIPPED — the guard
+ * the full TS/JS family (.ts/.tsx/.mts/.cts/.jsx/.js/.mjs/.cjs) is validated
+ * in-process with the TypeScript Compiler API (F1.6 — no spawn) and reports
+ * the offending line + code snippet; .css gets a light brace/comment balance
+ * heuristic. Anything unverifiable (other extensions) is SKIPPED — the guard
  * never false-fails an edit.
  */
 export async function verifyWrittenSyntax(
@@ -323,44 +439,46 @@ export async function verifyWrittenSyntax(
     }
     return {};
   }
-  // F1.6 — TS/JSX family: ts.transpileModule diagnostics, no spawn.
-  if (ext === '.ts' || ext === '.tsx' || ext === '.mts' || ext === '.cts' || ext === '.jsx') {
+  // F1.6 — TS/JS family (incl. .js/.mjs/.cjs): ts.transpileModule diagnostics,
+  // in-process (<2 ms) with the exact line/column + offending code snippet —
+  // no `node --check` spawn (slow, needs process permissions).
+  if (['.ts', '.tsx', '.mts', '.cts', '.jsx', '.js', '.mjs', '.cjs'].includes(ext)) {
     try {
-      const kind = ext === '.tsx' || ext === '.jsx' ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+      const isJsx = ext === '.tsx' || ext === '.jsx';
+      const isJs = ext === '.js' || ext === '.mjs' || ext === '.cjs' || isJsx;
+      // Never emit `jsx: JsxEmit.None` — TypeScript's option validation rejects
+      // the enum value 0 ("Argument for '--jsx' option must be: …"), which made
+      // the guard roll back EVERY plain .ts/.mts/.cts write as a false positive.
+      // Non-JSX files omit `jsx` entirely (JSX is not parsed for them anyway).
+      const compilerOptions: ts.CompilerOptions = {
+        target: ts.ScriptTarget.ES2022,
+        allowJs: isJs,
+      };
+      if (isJsx) compilerOptions.jsx = ts.JsxEmit.Preserve;
+
       const result = ts.transpileModule(nextContent, {
         reportDiagnostics: true,
         fileName: path.basename(absolute),
-        compilerOptions: {
-          jsx: kind === ts.ScriptKind.TSX ? ts.JsxEmit.Preserve : ts.JsxEmit.None,
-          target: ts.ScriptTarget.ES2022,
-        },
+        compilerOptions,
       });
       const diags = (result.diagnostics ?? []).filter((d) => d.category === ts.DiagnosticCategory.Error);
       if (diags.length > 0) {
+        const lines = nextContent.replace(/\r\n/g, '\n').split('\n');
         const first = diags.slice(0, 3).map((d) => {
-          const pos = d.file && d.start !== undefined
-            ? `${d.file.getLineAndCharacterOfPosition(d.start).line + 1}:${d.file.getLineAndCharacterOfPosition(d.start).character + 1}`
-            : '?';
-          return `${pos} ${ts.flattenDiagnosticMessageText(d.messageText, ' ')}`;
+          if (d.file && d.start !== undefined) {
+            const lc = d.file.getLineAndCharacterOfPosition(d.start);
+            const lineNo = lc.line + 1;
+            const colNo = lc.character + 1;
+            const codeSnippet = (lines[lineNo - 1] ?? '').trim().slice(0, 80);
+            return `L${lineNo}:${colNo} ${ts.flattenDiagnosticMessageText(d.messageText, ' ')} (at: \`${codeSnippet}\`)`;
+          }
+          return ts.flattenDiagnosticMessageText(d.messageText, ' ');
         });
         return { failed: `syntax error(s): ${first.join(' | ')}.` };
       }
       return {};
     } catch {
       return {}; // internal error → never false-fail
-    }
-  }
-  if (ext === '.js' || ext === '.mjs' || ext === '.cjs') {
-    try {
-      const outcome = await runProcess(process.execPath, ['--check', absolute], {
-        cwd: path.dirname(absolute),
-        timeoutMs: 15_000,
-      });
-      if (outcome.exitCode === 0) return {};
-      if (outcome.exitCode === null) return {};
-      return { failed: `node --check rejected the file (${outcome.output.slice(0, 300).trim()}).` };
-    } catch {
-      return {};
     }
   }
   // F1.6 — light CSS balance heuristic (strings and comments excluded).

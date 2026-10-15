@@ -5,13 +5,14 @@ import { ChatIcon, DashboardIcon, DIcon, GalleryIcon, HistoryIcon, ProviderIcon,
 import { brandCatHeadSvgUrl, brandWordmarkSvgUrl } from '../lib/brandAssets';
 import { CommandPalette } from './CommandPalette';
 import { Download, Pin } from './icons';
-import { isPhantomConversation, useStore } from '../store/useStore';
+import { isPhantomConversation, isSubSession, useStore } from '../store/useStore';
 import { refreshLiveStreamsNow, subscribeLivePolls, type LiveStreamSnapshot } from '../store/livePoller';
 import type { Conversation, ViewId } from '../types';
 import { storage } from '../lib/storage';
 import { resolveTheme } from '../lib/appearance';
 import { Tip, cx } from './ui';
 import { MobileWatching } from './MobileWatching';
+import { AddonSidebarSection } from './AddonSidebarSection';
 import { ShortcutsDialog } from './ShortcutsDialog';
 
 interface SidebarProps {
@@ -30,6 +31,8 @@ interface SidebarProps {
 interface NavItemProps {
   icon: React.ReactNode;
   label: string;
+  /** Satu baris kecil di bawah label (status addon / versi). */
+  subtitle?: string;
   active?: boolean;
   onClick?: () => void;
   trailing?: React.ReactNode;
@@ -41,6 +44,7 @@ interface NavItemProps {
 function NavItem({
   icon,
   label,
+  subtitle,
   active,
   onClick,
   trailing,
@@ -55,12 +59,15 @@ function NavItem({
         disabled={placeholder}
         aria-current={active ? 'page' : undefined}
         {...rest}
-        className="nav"
+        className={cx('nav', subtitle ? 'has-sub' : undefined)}
       >
         <span className="nav-ic" aria-hidden="true">
           {icon}
         </span>
-        <span className="nav-lbl">{label}</span>
+        <span className="nav-lbl">
+          <span className="nav-lbl-t">{label}</span>
+          {subtitle ? <span className="nav-sub">{subtitle}</span> : null}
+        </span>
         {trailing}
       </button>
     </Tip>
@@ -68,7 +75,7 @@ function NavItem({
 }
 
 /** Indented child of a collapsible nav group ("New Chat", "History", …). */
-function SubItem({
+export function SubItem({
   icon,
   label,
   active,
@@ -133,21 +140,29 @@ function CollapseSection({
 }
 
 /** Expandable nav group: the parent toggles, children render inline below. */
-function NavGroup({
+export function NavGroup({
   icon,
   label,
+  subtitle,
+  tail,
   active,
   open,
   onToggle,
   count,
+  leaf,
   children,
 }: {
   icon: React.ReactNode;
   label: string;
+  subtitle?: string;
+  /** Badge status di kanan (legacy / Appove / off) — ciri khas per addon. */
+  tail?: React.ReactNode;
   active?: boolean;
   open: boolean;
   onToggle: () => void;
   count?: number;
+  /** Baris tanpa sub-menu: tanpa chevron, tanpa CollapseSection. */
+  leaf?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -155,26 +170,28 @@ function NavGroup({
       <NavItem
         icon={icon}
         label={label}
+        subtitle={subtitle}
         active={active}
         onClick={onToggle}
-        aria-expanded={open}
+        aria-expanded={leaf ? undefined : open}
         trailing={
           <>
-            {typeof count === 'number' && count > 0 ? (
-              <span className="cnt">{count}</span>
-            ) : null}
-            <DIcon name="chev-d" className="chev" aria-hidden="true" />
+            {tail}
+            {!leaf && typeof count === 'number' && count > 0 ? <span className="cnt">{count}</span> : null}
+            {!leaf ? <DIcon name="chev-d" className="chev" aria-hidden="true" /> : null}
           </>
         }
       />
-      <CollapseSection open={open} contentClassName="navsub">
-        {children}
-      </CollapseSection>
+      {!leaf ? (
+        <CollapseSection open={open} contentClassName="navsub">
+          {children}
+        </CollapseSection>
+      ) : null}
     </div>
   );
 }
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
+export function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     <p className="sec-label">{children}</p>
   );
@@ -531,7 +548,9 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, onBindWor
 
   /** Chats that actually exist: unused "New chat" phantoms never show. */
   const visibleConversations = useMemo(
-    () => conversations.filter((conversation) => !isPhantomConversation(conversation)),
+    () => conversations.filter(
+      (conversation) => !isPhantomConversation(conversation) && !isSubSession(conversation),
+    ),
     [conversations],
   );
 
@@ -882,6 +901,8 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, onBindWor
             ) : null}
           </div>
         </CollapseSection>
+
+        <AddonSidebarSection go={go} />
       </nav>
 
       {}
@@ -1020,6 +1041,29 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, onBindWor
           </button>
         </Tip>
         <span className="grow" />
+		<Tip label="Settings">
+          <button
+            type="button"
+            aria-label="Settings"
+            onClick={() => onOpenSettings?.()}
+            className="ib"
+          >
+            <SettingsIcon />
+          </button>
+        </Tip>
+		<Tip label="Provider">
+		  <button
+			type="button"
+			aria-label="Provider"
+			onClick={() => {
+			  onOpenProviders?.();
+			  onNavigate?.();
+			}}
+			className="ib"
+		  >
+			<ProviderIcon />
+		  </button>
+		</Tip>
         <Tip label="Dashboard">
           <button
             type="button"
@@ -1029,16 +1073,6 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, onBindWor
             className="ib"
           >
             <DashboardIcon />
-          </button>
-        </Tip>
-        <Tip label="Settings">
-          <button
-            type="button"
-            aria-label="Settings"
-            onClick={() => onOpenSettings?.()}
-            className="ib"
-          >
-            <SettingsIcon />
           </button>
         </Tip>
         <Tip label={effectiveTheme === 'light' ? 'Night mode' : 'Day mode'}>

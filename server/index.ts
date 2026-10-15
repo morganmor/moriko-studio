@@ -18,11 +18,14 @@ import { attachBrowserPanelWs } from './agents/browser/ws.js';
 import { beginStream, endStream } from './agents/reload.js';
 import { syncSessionContext } from './agents/read-policy.js';
 import { goalsRouter } from './goals/routes.js';
+import { todosRouter } from './todos/routes.js';
 import { remindersRouter } from './reminders/routes.js';
+import { workflowsRouter } from './workflows/routes.js';
 import { addonRouter } from './addons/routes.js';
 import { watchRouter } from './watch/routes.js';
 import { uiExportRouter } from './uiExport.js';
 import { loadAllAddons, startAddonWatcher } from './addons/loader.js';
+import { publishBusEvent } from './addons/bus.js';
 import { aggregateUsage, dailyUsage, USAGE_WINDOWS } from './usageLedger.js';
 import { listReminders, renderReminder, takeDueReminders } from './reminders/store.js';
 import { asyncRoute, HttpError } from './http.js';
@@ -106,8 +109,9 @@ import {
 } from './providers.js';
 import { allModelMetadata, lookupModelMetadata, minLimit } from './modelMetadata.js';
 import { UpstreamError, type StreamHandler, type StreamParams } from './sse.js';
-import { isSteerable, pushSteer, registerSteerSession, unregisterSteerSession, steerTextOf, type SteerEntry, type SteerPart } from './steer.js';
-import { watchWritingRules, SYSTEM_RULES_PRESETS } from './agents/writingRules.js';
+import { isSteerable, pushSteer, registerSteerSession, unregisterSteerSession, type SteerEntry, type SteerPart } from './steer.js';
+import { markSessionOpen, markSessionClose } from './agents/sessionRegistry.js';
+import { SYSTEM_RULES_PRESETS } from './agents/writingRules.js';
 import { providerStore as store } from './store.js';
 import { resolveCredentials as resolveSharedCredentials } from './credentials.js';
 import { startSweepTimer, touchSession } from './sessionLease.js';
@@ -631,11 +635,26 @@ app.post(
 
     const sessionId = typeof body.conversationId === 'string' ? body.conversationId : null;
 
+    // Addon v2 (A3): the session registry tracks this run for multi-agent
+    // coordination (presence, sessions.inject) and mirrors the steer lifecycle.
+    const registrySessionId = steerSessionId ?? undefined;
+    if (registrySessionId) {
+      try {
+        markSessionOpen({
+          sessionId: registrySessionId,
+          conversationId: sessionId ?? undefined,
+          workspacePath: getActiveWorkspace(registrySessionId)?.path,
+          model: body.model,
+        });
+      } catch { /* registry is best-effort */ }
+    }
+
     createStream(streamId, {
       abortUpstream: () => controller.abort(),
       onEnded: () => {
         releaseSlot();
         if (steerSessionId) unregisterSteerSession(steerSessionId);
+        if (registrySessionId) markSessionClose(registrySessionId);
         unsubscribeTree?.();
       },
     }, { conversationId: sessionId });
@@ -663,22 +682,11 @@ app.post(
     });
     attachStream(streamId, res);
 
-    const writingRules = settings.agentMode === true && steerSessionId
-      ? watchWritingRules((reminder) => {
-          const entry = pushSteer(steerSessionId, [{ type: 'text', text: reminder }]);
-          send({ type: 'steer', id: entry.id, text: steerTextOf(entry) });
-        })
-      : null;
-
     /** finishReason reported by the adapter's terminal `done` — the fallback
      *  `done` in `finally` must carry it forward, or the client's last-write-
      *  wins handler overwrites a real cut (max_tokens) with `undefined`. */
     let lastFinishReason: string | undefined;
     const send: StreamHandler = (event: StreamEvent) => {
-      if (writingRules && !writingRules.consumed) {
-        if (event.type === 'text' && typeof event.delta === 'string') writingRules.observe(event.delta);
-        else if (event.type === 'reasoning' && typeof event.delta === 'string') writingRules.observe(event.delta);
-      }
       if (event.type === 'done' && event.finishReason) lastFinishReason = event.finishReason;
       publishFrame(streamId, `data: ${JSON.stringify(event)}\n\n`);
       turnMirror?.apply(event);
@@ -1021,7 +1029,7 @@ app.post(
  *    like every other attachment part.
  *  - `text` (legacy) — a plain text steer.
  *  - `preset: "writingRules"` — the manual SYSTEM-RULES REMINDER (one authored
- *    copy on the server, shared with the automatic e2e classifier).
+ *    copy on the server; sent by the user via the Composer button).
  */
 app.post(
   '/api/chat/steer',
@@ -1537,7 +1545,9 @@ app.post(
 
 app.use('/api/agent', agentRouter());
 app.use('/api/goals', goalsRouter());
+app.use('/api/todos', todosRouter());
 app.use('/api/reminders', remindersRouter());
+app.use('/api/workflows', workflowsRouter());
 app.use('/api/addons', addonRouter());
 app.use('/api/watch', watchRouter());
 app.use('/api/ui', uiExportRouter());
@@ -2013,9 +2023,28 @@ const httpServer = app.listen(PORT, () => {
 
   attachBrowserPanelWs(httpServer);
 
-  void loadAllAddons().then(() => {
-    startAddonWatcher(() => console.log('  Addons reloaded.'));
-  });
+  // Addon v2 (A9): seed builtin addons (addons-src/) BEFORE loading so a fresh
+  // install ships visual-context + rsat without a manual install step.
+  void (async () => {
+    try {
+      const { seedBuiltinAddons } = await import('./addons/seed.js');
+      const report = seedBuiltinAddons();
+      if (report.seeded.length > 0) console.log(`  Seeded builtin addons: ${report.seeded.join(', ')}.`);
+    } catch (error) {
+      console.error('  [addons] builtin seed failed:', error);
+    }
+    await loadAllAddons();
+    startAddonWatcher((ids) => {
+      console.log(`  Addons reloaded: ${ids.join(', ')}.`);
+      // LIVE: disk-side addon edits reach every browser without a refresh.
+      void publishBusEvent('addons.registry', { reason: 'watcher', addonIds: ids }, 'moriko-host');
+    });
+    // Addon v2 (A3): harness.start — observe point, fired after addons load.
+    try {
+      const { emitPoint } = await import('./addons/points.js');
+      await emitPoint('harness.start', { at: Date.now() });
+    } catch { /* best-effort */ }
+  })();
 
   const configured = BUILT_IN_PROVIDERS.filter(
     (provider) => (provider.envKey && process.env[provider.envKey]) || provider.keyOptional,

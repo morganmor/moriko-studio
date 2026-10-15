@@ -942,6 +942,29 @@ export function useChatController() {
     abortsRef.current.get(id)?.abort();
   }, []);
 
+  /** Stop an arbitrary conversation by id — mirrors stop() but parameterized.
+   * Used by the council orchestrator's council_stop tool: the server aborts the
+   * upstream stream via api.sessions.abort, then publishes council:stopped on
+   * the bus; the panel bridges it to a window event App.tsx catches and calls
+   * this. */
+  const stopRun = useCallback((conversationId: string) => {
+    const id = conversationId;
+    const record = storage.loadStreamIds()[id];
+    stoppedStreams.set(id, record?.streamId ?? null);
+    userStoppedRuns.add(id);
+    useStore.getState().markRunStopped(id);
+    refreshLiveStreamsNow();
+    if (record) {
+      void fetch(`/api/chat/stream/${encodeURIComponent(record.streamId)}/abort`, { method: 'POST' }).catch(
+        () => undefined,
+      );
+      storage.clearStreamId(id);
+    }
+    autoRetryPending.current.delete(id);
+    useStore.getState().setGenRunning(id, false);
+    abortsRef.current.get(id)?.abort();
+  }, []);
+
   /**
    * RESUME OF A CRASHED RUN — the user picked up the thread after the proxy
    * died mid-agent-run. The conversation still holds everything the run
@@ -1186,12 +1209,20 @@ export function useChatController() {
       const continueOnly = opts?.continueOnly === true;
       const resume = Boolean(opts?.resumeStreamId);
 
-      const provider = providers.find((entry) => entry.id === providerId);
+      // Provider/model come from the TARGET conversation when it declares its own
+      // — a council sub-session runs on its agent's model, not the operator's pick.
+      const targetConversation = targetConversationId
+        ? useStore.getState().conversations.find((entry) => entry.id === targetConversationId)
+        : undefined;
+      const runProviderId = targetConversation?.providerId || providerId;
+      const runModel = targetConversation?.model || model;
+
+      const provider = providers.find((entry) => entry.id === runProviderId);
       if (!provider && !resume) {
         showNotice('send.noProvider');
         return;
       }
-      if (!model && !resume) {
+      if (!runModel && !resume) {
         showNotice('send.noModel');
         return;
       }
@@ -1222,8 +1253,24 @@ export function useChatController() {
       const role = opts?.role ?? useStore.getState().composerRole ?? 'user';
 
       if (!resume && useStore.getState().genRunning[conversationId]) {
-        showNotice('send.alreadyGenerating');
-        return;
+        // STALE-RUN RECONCILE (dispatch choke point): a hidden council sub
+        // session has no attached stream loop of its own. If its genRunning
+        // flag outlived its server stream (proxy restart mid-run), this guard
+        // would swallow EVERY future dispatch silently — the exact "orchestrator
+        // message never arrives" bug. Ask the registry: a live stream means the
+        // flag is honest (still generating → refuse); no stream means the flag
+        // is a zombie → clear it and let the dispatch proceed.
+        try {
+          const live = await fetchLiveStreams();
+          if (live !== null && !live.some((s) => s.conversationId === conversationId)) {
+            useStore.getState().setGenRunning(conversationId, false);
+            storage.clearStreamId(conversationId);
+          }
+        } catch { /* registry unreachable = treat the flag as honest */ }
+        if (useStore.getState().genRunning[conversationId]) {
+          showNotice('send.alreadyGenerating');
+          return;
+        }
       }
 
       const attachmentPaths = (attachments ?? [])
@@ -1282,8 +1329,8 @@ export function useChatController() {
         }
       }
 
-      const modelMeta = model
-        ? lookupModelMeta(useStore.getState().modelMeta, model)
+      const modelMeta = runModel
+        ? lookupModelMeta(useStore.getState().modelMeta, runModel)
         : undefined;
       const incomingTokens = continueOnly || resume
         ? 0
@@ -1314,8 +1361,8 @@ export function useChatController() {
         try {
           const outcome = await runCompaction({
             conversationId,
-            providerId,
-            model,
+            providerId: runProviderId,
+            model: runModel,
             settings: conversation.settings,
             trigger,
             prune: wirePruneArmed.has(conversationId),
@@ -1507,11 +1554,19 @@ export function useChatController() {
       let failedTool = false;
       const segments: import('../types').TurnSegment[] = [];
       const injections: import('../types').TurnInjection[] = [];
+      /** Harness-Events delivered during THIS run (addon events channel). */
+      const harnessEvents: import('../types').TurnHarnessEvent[] = [];
       /** Tool-def payload size reported by the server (`context_tools`). */
       let toolsDefsChars: number | undefined;
       const steers: import('../types').TurnSteer[] = [];
       /** Interval handle for the mid-run context-pressure sampler. */
       let pressureTimer: number | null = null;
+      /** Latest harnessEvents list written to the assistant turn (dedupe). */
+      const currentTurnEvents = () => {
+        const conv = useStore.getState().conversations.find((c) => c.id === conversationId);
+        const t = conv?.turns.find((x) => x.id === assistantTurn.id);
+        return t?.harnessEvents ?? [];
+      };
 
       let flushTimer: number | null = null;
 	  let flushViaRaf = false;
@@ -1598,8 +1653,8 @@ export function useChatController() {
         }, 30_000);
 
         for await (const event of streamChat({
-          providerId,
-          model,
+          providerId: runProviderId,
+          model: runModel,
           messages: history,
           settings: liveSettings,
           trust: liveConversation?.trust,
@@ -1624,8 +1679,8 @@ export function useChatController() {
               if (event.id) {
                 storage.saveStreamId(conversationId, {
                   streamId: event.id,
-                  providerId,
-                  model,
+                  providerId: runProviderId,
+                  model: runModel,
                   at: Date.now(),
                 });
                 if (conversation.settings.agentMode === true) {
@@ -1761,6 +1816,29 @@ export function useChatController() {
               useStore.getState().removeAskUserRequest(event.id ?? '');
               break;
             }
+            case 'harness_event': {
+              // HARNESS-EVENT: addon event on its own channel — appended to the
+              // turn's harnessEvents (rendered as a dedicated panel, never a
+              // "You" bubble) and mirrored into the store for idle visibility.
+              if (event.id && !harnessEvents.some((entry) => entry.id === event.id)) {
+                const entry = {
+                  id: event.id,
+                  addonId: event.addonId ?? 'addon',
+                  level: (event.level ?? 'info') as 'info' | 'warn' | 'block',
+                  text: event.text ?? '',
+                  at: event.at ?? Date.now(),
+                };
+                harnessEvents.push(entry);
+                const turned = [...(currentTurnEvents())];
+                if (!turned.some((e) => e.id === entry.id)) turned.push(entry);
+                updateTurn(conversationId, assistantTurn.id, { harnessEvents: turned });
+                useStore.getState().upsertHarnessEvent(conversationId, {
+                  id: entry.id, role: 'user', kind: 'harness-event', content: `[${entry.addonId}] [${entry.level}] ${entry.text}`, createdAt: entry.at, eventAddon: entry.addonId, eventLevel: entry.level,
+                } as import('../types').Turn);
+                flushNow();
+              }
+              break;
+            }
             case 'harness_injection': {
               if (event.id && !injections.some((entry) => entry.id === event.id)) {
                 injections.push({
@@ -1790,6 +1868,12 @@ export function useChatController() {
             case 'goals_state': {
               if (Array.isArray(event.goals)) {
                 useStore.getState().setConversationGoals(conversationId, event.goals);
+              }
+              break;
+            }
+            case 'todos_state': {
+              if (Array.isArray(event.todos)) {
+                useStore.getState().setConversationTodos(conversationId, event.todos);
               }
               break;
             }
@@ -2629,6 +2713,7 @@ export function useChatController() {
   return {
     send,
     stop,
+    stopRun,
     regenerate,
     regenerateFrom,
     compactNow,

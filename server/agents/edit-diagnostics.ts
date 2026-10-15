@@ -237,6 +237,84 @@ export function diagnoseNoMatch(ctx: FailureContext): EditFailure {
 }
 
 /**
+ * ELASTIC-INDENT MATCH — the fallback when an exact oldString fails ONLY
+ * because its indentation drifted (model copied a block with different
+ * leading whitespace). Matches on trimmed lines; when exactly one candidate
+ * matches, returns the file's actual slice plus `newString` re-indented to
+ * the file's base indent so the replacement lands cleanly.
+ */
+export interface ElasticIndentMatch {
+  /** 1-based first line of the match. */
+  startLine: number;
+  /** 1-based last line (inclusive). */
+  endLine: number;
+  /** The file's actual text for the matched span (authoritative anchor). */
+  matchedOriginalSlice: string;
+  /** newString re-indented to the file's base indentation. */
+  reindentedNewString: string;
+}
+
+export function matchWithElasticIndent(
+  content: string,
+  oldString: string,
+  newString: string,
+): { status: 'none' | 'ambiguous'; lines: number[] } | { status: 'unique'; match: ElasticIndentMatch } {
+  const fileLines = content.split('\n');
+  const oldLines = oldString.split('\n');
+
+  const nonEmptyOld = oldLines.filter((l) => l.trim().length > 0);
+  if (oldLines.length < 2 || nonEmptyOld.length === 0) {
+    return { status: 'none', lines: [] };
+  }
+
+  const trimmedOld = oldLines.map((l) => l.trim());
+  const candidates: number[] = [];
+  for (let i = 0; i <= fileLines.length - oldLines.length; i += 1) {
+    let allMatch = true;
+    for (let j = 0; j < oldLines.length; j += 1) {
+      if ((fileLines[i + j] ?? '').trim() !== trimmedOld[j]) {
+        allMatch = false;
+        break;
+      }
+    }
+    if (allMatch) candidates.push(i);
+  }
+
+  if (candidates.length === 0) return { status: 'none', lines: [] };
+  if (candidates.length > 1) {
+    return { status: 'ambiguous', lines: candidates.map((idx) => idx + 1) };
+  }
+
+  const startIdx = candidates[0];
+  const matchedSliceLines = fileLines.slice(startIdx, startIdx + oldLines.length);
+
+  const firstNonEmptyIdx = oldLines.findIndex((l) => l.trim().length > 0);
+  const leadingWs = (s: string): string => /^[\t ]*/.exec(s)?.[0] ?? '';
+
+  const fileBaseIndent = leadingWs(matchedSliceLines[firstNonEmptyIdx] ?? '');
+  const oldBaseIndent = leadingWs(oldLines[firstNonEmptyIdx]);
+
+  const newLines = newString.split('\n');
+  const reindentedNewLines = newLines.map((line) => {
+    if (line.trim().length === 0) return '';
+    if (line.startsWith(oldBaseIndent)) {
+      return fileBaseIndent + line.slice(oldBaseIndent.length);
+    }
+    return fileBaseIndent + line.trimStart();
+  });
+
+  return {
+    status: 'unique',
+    match: {
+      startLine: startIdx + 1,
+      endLine: startIdx + oldLines.length,
+      matchedOriginalSlice: matchedSliceLines.join('\n'),
+      reindentedNewString: reindentedNewLines.join('\n'),
+    },
+  };
+}
+
+/**
  * Builds the report for "oldString matched N>1 times" — with the actual
  * line numbers so the model can disambiguate without a second read.
  */

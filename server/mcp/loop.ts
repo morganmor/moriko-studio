@@ -5,6 +5,7 @@ import { pauseStreamSlot, resumeStreamSlot } from '../agents/reload.js';
 import { jobStore, normalizeArgsKey } from '../agents/journal.js';
 import type { ChatSettingsDTO } from '../contracts.js';
 import { listGoals } from '../goals/store.js';
+import { listTodos } from '../todos/store.js';
 import { INLINE_DATA_URL_LIMIT, putBytes } from '../attachmentStore.js';
 import { callWireTool, listWireTools, type McpWireTool } from './manager.js';
 import { MAX_OUTPUT_CHARS } from '../agents/tools/shared.js';
@@ -254,6 +255,7 @@ export type ToolLoopEvent =
   | { type: 'permission_request'; id: string; tool: string; paths: string[]; root: string; command?: string }
   | { type: 'permission_result'; id: string; granted: boolean }
   | { type: 'goals_state'; sessionId: string; goals: ReturnType<typeof listGoals> }
+  | { type: 'todos_state'; sessionId: string; todos: ReturnType<typeof listTodos> }
   | { type: 'tool_progress'; toolName: string; message: string }
   | { type: 'ask_user_request'; request: AskUserRequest }
   | { type: 'ask_user_result'; id: string; answers: AskAnswerWire[]; timedOut: boolean };
@@ -445,7 +447,7 @@ function safeParseArgs(raw: string): Record<string, unknown> {
  * walks the tail, closes open strings and braces, and re-parses — preserving
  * every complete key/value pair while dropping the dangling one.
  */
-function repairPartialJson(raw: string): Record<string, unknown> | null {
+export function repairPartialJson(raw: string): Record<string, unknown> | null {
   let work = raw.trim();
   if (!work.startsWith('{')) return null;
 
@@ -547,6 +549,9 @@ async function dispatchCall(
       sessionId,
       onGoalsChanged: (changedSession) => {
         onEvent?.({ type: 'goals_state', sessionId: changedSession, goals: listGoals(changedSession) });
+      },
+      onTodosChanged: (changedSession) => {
+        onEvent?.({ type: 'todos_state', sessionId: changedSession, todos: listTodos(changedSession) });
       },
       terminalMode,
       confirmDeletes,
@@ -803,6 +808,12 @@ export async function executeCalls(
     | { call: PendingToolCall; serverName: string; toolName: string; ok: boolean; text: string; diff?: string; diffstat?: { added: number; removed: number }; images?: ToolImage[]; visual?: VisualPayload; replayed?: boolean; errorCode?: string; panelUrl?: string; emitted?: boolean }
     | null
   > = Array.from({ length: calls.length }, () => null);
+
+  // Addon v2 (A3): round.start — observe point before this round executes.
+  try {
+    const { emitPointAsync } = await import('../addons/points.js');
+    emitPointAsync('round.start', { sessionId, plannedCalls: calls.length, tools: calls.map((c) => c.wireName) });
+  } catch { /* best-effort */ }
 
   const emitResult = (entry: NonNullable<typeof settled[number]>): void => {
     if (!entry.replayed) {
@@ -1088,6 +1099,16 @@ export async function executeCalls(
       ...(entry.images?.length ? { images: entry.images } : {}),
     });
   }
+
+  // Addon v2 (A3): round.end — observe point after all calls settled.
+  try {
+    const { emitPointAsync } = await import('../addons/points.js');
+    emitPointAsync('round.end', {
+      sessionId,
+      calls: settled.length,
+      ok: settled.filter((s) => s?.ok).length,
+    });
+  } catch { /* best-effort */ }
 
   return { followUp, events };
 }

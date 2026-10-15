@@ -48,6 +48,12 @@ export interface ReadEntry {
   fromLine: number;
   toLine: number;
   /**
+   * PRECISE multi-interval read receipt: the exact line spans the model
+   * actually saw in this session, merged (mergeLineIntervals) across reads.
+   * Empty/absent = legacy single-window entry; fromLine..toLine is the base.
+   */
+  intervals?: LineInterval[];
+  /**
    * Per-file revision for this session — bumped on every successful write.
    * Surfaced in read_file's footer (`read#N`) so the model can tell when the
    * file it holds is stale relative to its own last edit.
@@ -55,6 +61,141 @@ export interface ReadEntry {
   rev: number;
   /** Which operation last touched this entry — drives list "touched" statuses. */
   lastOp: 'read' | 'write';
+}
+
+export interface LineInterval {
+  from: number;
+  to: number;
+}
+
+/** Merges overlapping/adjacent line intervals into a sorted, disjoint set. */
+export function mergeLineIntervals(intervals: LineInterval[]): LineInterval[] {
+  const valid = intervals.filter((iv) => Number.isFinite(iv.from) && Number.isFinite(iv.to) && iv.to >= iv.from);
+  if (valid.length <= 1) return valid.map((i) => ({ ...i }));
+  const sorted = [...valid].sort((a, b) => a.from - b.from || a.to - b.to);
+  const merged: LineInterval[] = [{ ...sorted[0] }];
+  for (let i = 1; i < sorted.length; i += 1) {
+    const prev = merged[merged.length - 1];
+    const curr = sorted[i];
+    if (curr.from <= prev.to + 1) {
+      prev.to = Math.max(prev.to, curr.to);
+    } else {
+      merged.push({ ...curr });
+    }
+  }
+  return merged;
+}
+
+/**
+ * True when [targetFrom, targetTo] lies FULLY inside the read receipt.
+ * Multi-interval entries are checked per interval; legacy entries fall back
+ * to the single fromLine..toLine window.
+ */
+export function isRangeCoveredByReadEntry(
+  entry: { fromLine: number; toLine: number; intervals?: LineInterval[] } | undefined,
+  targetFrom: number,
+  targetTo: number = targetFrom,
+): boolean {
+  if (!entry) return false;
+  if (entry.toLine >= Number.MAX_SAFE_INTEGER) return true;
+  if (Array.isArray(entry.intervals) && entry.intervals.length > 0) {
+    return entry.intervals.some((iv) => targetFrom >= iv.from && targetTo <= iv.to);
+  }
+  return targetFrom >= entry.fromLine && targetTo <= entry.toLine;
+}
+
+/**
+ * True when an insertion point (insert_at_line) touches at least one read
+ * interval (or sits right at its open lower edge = same gap the model has
+ * seen). Insert-only enforcement is softer than edit enforcement on purpose.
+ */
+export function isInsertionPointCovered(
+  entry: { fromLine: number; toLine: number; intervals?: LineInterval[] } | undefined,
+  insertAt: number,
+): boolean {
+  if (!entry) return false;
+  if (entry.toLine >= Number.MAX_SAFE_INTEGER) return true;
+  if (Array.isArray(entry.intervals) && entry.intervals.length > 0) {
+    return entry.intervals.some((iv) => insertAt >= iv.from && insertAt <= iv.to + 1);
+  }
+  return insertAt >= entry.fromLine && insertAt <= entry.toLine + 1;
+}
+
+/**
+ * Shifts existing read intervals after an edit at `editStartLine` that
+ * replaced `oldSpanLines` lines with `newSpanLines` lines, marks the edited
+ * span as read (the model wrote it), and merges the result.
+ */
+export function shiftIntervalsForEdit(
+  existing: LineInterval[] | undefined,
+  fallbackFrom: number,
+  fallbackTo: number,
+  editStartLine: number,
+  oldSpanLines: number,
+  newSpanLines: number,
+): LineInterval[] {
+  const base: LineInterval[] =
+    existing && existing.length > 0 ? existing.map((i) => ({ ...i })) : [{ from: fallbackFrom, to: fallbackTo }];
+  const delta = newSpanLines - oldSpanLines;
+  const editEndOld = editStartLine + Math.max(oldSpanLines, 1) - 1;
+  const editEndNew = editStartLine + Math.max(newSpanLines, 1) - 1;
+
+  const shifted: LineInterval[] = [];
+  for (const iv of base) {
+    if (iv.to >= Number.MAX_SAFE_INTEGER) {
+      continue; // full-window receipt: recomputed below from the edit itself
+    }
+    if (iv.to < editStartLine) {
+      // Fully above the edit location: unchanged.
+      shifted.push({ ...iv });
+    } else if (iv.from > editEndOld) {
+      // Fully below the edit location: shift by delta.
+      shifted.push({
+        from: Math.max(1, iv.from + delta),
+        to: Math.max(1, iv.to + delta),
+      });
+    } else {
+      // Overlaps the edit location: snap its lower edge to the edit and
+      // extend the tail by delta so it covers the file's new layout.
+      shifted.push({
+        from: Math.min(iv.from, editStartLine),
+        to: Math.max(editEndNew, iv.to + delta),
+      });
+    }
+  }
+  // The model WROTE these lines — the edited span counts as read.
+  shifted.push({ from: editStartLine, to: Math.max(editStartLine, editEndNew) });
+  return mergeLineIntervals(shifted);
+}
+
+/** Formats a receipt's covered lines for the out-of-range refusal message. */
+export function formatReadIntervals(
+  entry: { fromLine: number; toLine: number; intervals?: LineInterval[] },
+): string {
+  if (entry.toLine >= Number.MAX_SAFE_INTEGER) return 'all lines';
+  if (Array.isArray(entry.intervals) && entry.intervals.length > 0) {
+    return entry.intervals.map((iv) => `${iv.from}–${iv.to}`).join(', ');
+  }
+  return `${entry.fromLine}–${entry.toLine}`;
+}
+
+/** Parses persisted intervals defensively; falls back to the legacy window. */
+function parseIntervals(
+  raw: unknown,
+  fallbackFrom: number,
+  fallbackTo: number,
+): LineInterval[] {
+  if (Array.isArray(raw)) {
+    const parsed = raw
+      .filter((iv): iv is Record<string, unknown> => !!iv && typeof iv === 'object')
+      .map((iv) => ({
+        from: typeof iv.from === 'number' && Number.isFinite(iv.from) ? Math.trunc(iv.from) : NaN,
+        to: typeof iv.to === 'number' && Number.isFinite(iv.to) ? Math.trunc(iv.to) : NaN,
+      }))
+      .filter((iv) => iv.to >= iv.from && iv.from >= 1);
+    if (parsed.length > 0) return mergeLineIntervals(parsed);
+  }
+  return [{ from: fallbackFrom, to: fallbackTo }];
 }
 
 /** session -> path -> entry. Loaded lazily, written through on change. */
@@ -169,14 +310,17 @@ function load(session: string): Map<string, ReadEntry> {
           if (value && typeof value === 'object') {
             const entry = value as Record<string, unknown>;
             if (typeof entry.hash === 'string' && typeof entry.mtime === 'number') {
+              const legacyFrom = typeof entry.fromLine === 'number' ? entry.fromLine : 1;
+              const legacyTo = typeof entry.toLine === 'number' ? entry.toLine : Number.MAX_SAFE_INTEGER;
               map.set(key, {
                 hash: entry.hash,
                 mtime: entry.mtime,
                 gRev: typeof entry.gRev === 'number' ? entry.gRev : 0,
-                fromLine: typeof entry.fromLine === 'number' ? entry.fromLine : 1,
-                toLine: typeof entry.toLine === 'number' ? entry.toLine : Number.MAX_SAFE_INTEGER,
+                fromLine: legacyFrom,
+                toLine: legacyTo,
                 rev: typeof entry.rev === 'number' ? entry.rev : 1,
                 lastOp: entry.lastOp === 'write' ? 'write' : 'read',
+                intervals: parseIntervals(entry.intervals, legacyFrom, legacyTo),
               });
             }
           }
@@ -221,15 +365,52 @@ export function recordRead(
   if (!session) return undefined;
   const map = load(session);
   const previous = map.get(absolute);
-  const entry: ReadEntry = {
-    hash: createHash('sha256').update(content).digest('hex'),
-    mtime,
-    gRev: ledgerRevOf(absolute),
-    fromLine: previous ? Math.min(previous.fromLine, fromLine) : fromLine,
-    toLine: previous ? Math.max(previous.toLine, toLine) : toLine,
-    rev: (previous?.rev ?? 0) + 1,
-    lastOp: 'read',
-  };
+  const hash = createHash('sha256').update(content).digest('hex');
+
+  // Merge the new range into the receipt ONLY when the file is at the same
+  // revision the model already read — unioning windows across different file
+  // versions would bless lines the model never saw of the current content.
+  let entry: ReadEntry;
+  if (!previous || previous.hash !== hash) {
+    entry = {
+      hash,
+      mtime,
+      gRev: ledgerRevOf(absolute),
+      fromLine,
+      toLine,
+      intervals: [{ from: fromLine, to: toLine }],
+      rev: (previous?.rev ?? 0) + 1,
+      lastOp: 'read',
+    };
+  } else if (previous.toLine >= Number.MAX_SAFE_INTEGER) {
+    // Full-window receipt unions trivially: it stays a full window.
+    entry = {
+      hash,
+      mtime,
+      gRev: ledgerRevOf(absolute),
+      fromLine: previous.fromLine,
+      toLine: previous.toLine,
+      intervals: previous.intervals ?? [{ from: previous.fromLine, to: previous.toLine }],
+      rev: previous.rev + 1,
+      lastOp: 'read',
+    };
+  } else {
+    const base: LineInterval[] =
+      Array.isArray(previous.intervals) && previous.intervals.length > 0
+        ? previous.intervals.map((i) => ({ ...i }))
+        : [{ from: previous.fromLine, to: previous.toLine }];
+    const intervals = mergeLineIntervals([...base, { from: fromLine, to: toLine }]);
+    entry = {
+      hash,
+      mtime,
+      gRev: ledgerRevOf(absolute),
+      fromLine: intervals[0].from,
+      toLine: intervals[intervals.length - 1].to,
+      intervals,
+      rev: previous.rev + 1,
+      lastOp: 'read',
+    };
+  }
   map.set(absolute, entry);
   persist(session);
   return entry;
@@ -267,8 +448,12 @@ export function recordAfterWrite(
   absolute: string,
   content: string,
   mtime: number,
+  meta?: { op?: 'add' | 'modify' | 'delete' | 'rename' | 'copy'; tool?: string; from?: string },
+  updatedIntervals?: LineInterval[],
 ): void {
   const ledger = loadLedger();
+  const existedBefore = ledger.has(absolute) || existsSync(absolute);
+  const op = meta?.op ?? (existedBefore ? 'modify' : 'add');
   ledger.set(absolute, {
     gRev: (ledger.get(absolute)?.gRev ?? 0) + 1,
     hash: createHash('sha256').update(content).digest('hex'),
@@ -278,14 +463,33 @@ export function recordAfterWrite(
   });
   persistLedger();
 
+  // Addon v2 (A3): fs.change — observe point for every workspace file write
+  // (add vs modify inferred from the ledger when the caller doesn't say).
+  try {
+    const bytesAfter = Buffer.byteLength(content, 'utf8');
+    queueFsChange({
+      sessionId: session,
+      path: absolute,
+      op,
+      tool: meta?.tool ?? 'agent__write',
+      from: meta?.from,
+      bytesAfter,
+      hashAfter: createHash('sha256').update(content).digest('hex').slice(0, 16),
+    });
+  } catch { /* best-effort, never break the write */ }
+
   if (session) {
     const map = load(session);
     const previous = map.get(absolute);
+    const intervals = Array.isArray(updatedIntervals) && updatedIntervals.length > 0
+      ? mergeLineIntervals(updatedIntervals)
+      : undefined;
     map.set(absolute, {
       hash: createHash('sha256').update(content).digest('hex'),
       mtime,
-      fromLine: 1,
-      toLine: Number.MAX_SAFE_INTEGER,
+      fromLine: intervals ? intervals[0].from : 1,
+      toLine: intervals ? intervals[intervals.length - 1].to : Number.MAX_SAFE_INTEGER,
+      ...(intervals ? { intervals } : {}),
       gRev: ledgerRevOf(absolute),
       rev: (previous?.rev ?? 0) + 1,
       lastOp: 'write',
@@ -318,7 +522,11 @@ function invalidateSearchIndexInline(absolute: string): void {
  */
 function owningWorkspaceInline(absolute: string): string | null {
   try {
-    const { listWorkspaces, isInsideRoot } = require('./workspace.js') as typeof import('./workspace.js');
+    const { listWorkspaces, isInsideRoot, addonsSrcRoot } = require('./workspace.js') as typeof import('./workspace.js');
+    // Addon Manager: writes into the builtin addon sources re-index the
+    // addons-src root too (it rides every session's search index).
+    const src = addonsSrcRoot();
+    if (src && isInsideRoot(absolute, src)) return src;
     for (const workspace of listWorkspaces()) {
       if (isInsideRoot(absolute, workspace.path)) return workspace.path;
     }
@@ -338,6 +546,50 @@ function invalidateDepsGraphInline(_absolute: string): void {
     }
   } catch {
   }
+}
+
+// -------------------------------------------------------------------------
+// ADDON v2 (A3): fs.change emission — buffered, fire-and-forget, and cycle-
+// free (points.js is imported lazily). Only files INSIDE a workspace are
+// reported; harness-internal writes stay invisible.
+// -------------------------------------------------------------------------
+
+export interface FsChangeEvent {
+  sessionId?: string;
+  path: string;
+  op: 'add' | 'modify' | 'delete' | 'rename' | 'copy';
+  tool: string;
+  from?: string;
+  bytesAfter?: number;
+  hashAfter?: string;
+}
+
+/** Public fs.change entry for delete/rename/copy sites (path = ABSOLUTE). */
+export function recordFsChange(event: FsChangeEvent): void {
+  queueFsChange(event);
+}
+
+const fsChangeBuffer: FsChangeEvent[] = [];
+let fsChangeTimer: ReturnType<typeof setTimeout> | null = null;
+
+function queueFsChange(event: FsChangeEvent): void {
+  const ws = owningWorkspaceInline(event.path);
+  if (!ws) return; // outside every workspace → not the addon's business
+  const rel = path.relative(ws, event.path).split(path.sep).join('/');
+  fsChangeBuffer.push({ ...event, path: rel });
+  if (fsChangeTimer) return;
+  fsChangeTimer = setTimeout(() => {
+    fsChangeTimer = null;
+    const batch = fsChangeBuffer.splice(0, fsChangeBuffer.length);
+    if (batch.length === 0) return;
+    void (async () => {
+      try {
+        const { emitPointAsync } = await import('../addons/points.js');
+        for (const entry of batch) emitPointAsync('fs.change', entry);
+      } catch { /* best-effort */ }
+    })();
+  }, 50);
+  fsChangeTimer.unref?.();
 }
 
 /**
@@ -423,25 +675,29 @@ export function staleReadMessage(relative: string, readRev: number): string {
 
 /**
  * The refusal when the edit's anchor lies outside the line range the model
- * actually read (e.g. it read lines 1–400 but anchors at line 512).
+ * actually read. `entry` (optional) enables the precise multi-interval label
+ * — without it the legacy single-window label is shown.
  */
 export function outOfRangeMessage(
   relative: string,
   fromLine: number,
   toLine: number,
   anchorLine: number,
+  entry?: { fromLine: number; toLine: number; intervals?: LineInterval[] },
 ): string {
+  const windowLabel = entry ? formatReadIntervals(entry) : `${fromLine}–${toLine}`;
   return (
-    `Anchor outside your read window: "${relative}" was read as lines ${fromLine}–${toLine}, ` +
-    `but your oldString first matches around line ${anchorLine}. ` +
+    `Anchor outside your read window: "${relative}" was read at lines [${windowLabel}], ` +
+    `but your oldString matches around line ${anchorLine} — outside every covered interval. ` +
     `Next step: agent__read_file path="${relative}" offsetLine=${Math.max(1, anchorLine - 10)} maxLines=30, ` +
-    `then retry with an anchor you have actually seen.`
+    `then retry with an anchor inside your read window.`
   );
 }
 
 /**
  * The refusal when a line-RANGE edit (editLines) targets lines outside the
- * window the model actually read.
+ * window the model actually read. `entry` (optional) switches to the precise
+ * multi-interval label.
  */
 export function outOfRangeLinesMessage(
   relative: string,
@@ -449,9 +705,11 @@ export function outOfRangeLinesMessage(
   to: number,
   readFrom: number,
   readTo: number,
+  entry?: { fromLine: number; toLine: number; intervals?: LineInterval[] },
 ): string {
+  const windowLabel = entry ? formatReadIntervals(entry) : `${readFrom}–${readTo}`;
   return (
-    `editLines ${from}–${to} is outside your read window (${readFrom}–${readTo}) for "${relative}". ` +
+    `editLines ${from}–${to} is outside your read window [${windowLabel}] for "${relative}". ` +
     `Line-range edits may only touch regions you have actually seen. ` +
     `Next step: agent__read_file path="${relative}" offsetLine=${Math.max(1, from - 10)} maxLines=${to - from + 21}, ` +
     `then retry the same editLines.`

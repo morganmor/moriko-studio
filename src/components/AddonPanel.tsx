@@ -54,6 +54,13 @@ export const AddonPanel = memo(function AddonPanel({ width: _width }: { width?: 
 
   useEffect(() => { void refresh(); }, []);
 
+  // LIVE REGISTRY: toggle/reload/delete from any client repaints the panel.
+  useEffect(() => {
+    const onReload = () => void refresh();
+    window.addEventListener('moriko:addons-reloaded', onReload);
+    return () => window.removeEventListener('moriko:addons-reloaded', onReload);
+  }, []);
+
   const toggle = async (id: string) => {
     await fetch(`/api/addons/${id}/toggle`, { method: 'POST' });
     void refresh();

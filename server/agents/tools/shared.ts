@@ -10,7 +10,47 @@
 import path from 'node:path';
 import type { AgentPermissionRequest } from '../permissions.js';
 import { requestApproval } from '../permissions.js';
-import { assertSelfHostAccess, getActiveWorkspace, isInsideRoot, isInsideAllowedDir, isAttachmentPath } from '../workspace.js';
+import { addonsSrcRoot, assertSelfHostAccess, getActiveWorkspace, isInsideRoot, isInsideAllowedDir, isAttachmentPath } from '../workspace.js';
+
+/**
+ * ADDON MANAGER — builtin addon sources. `addons-src/` in the repo is the
+ * source of truth for builtin addons and is ALWAYS agent-accessible: no
+ * workspace needs to point at it (the user never has to repoint their main
+ * workspace). Tool paths with the `addons-src/` prefix — or absolute paths
+ * inside it — resolve against that root even when NO workspace is active.
+ * Deletes are refused there (only the user removes addons, via the Hub).
+ * The canonical root lives in workspace.ts (`addonsSrcRoot`).
+ */
+export function isInsideAddonsSrc(absolute: string): boolean {
+  const root = addonsSrcRoot();
+  return root !== null && isInsideRoot(path.resolve(absolute), root);
+}
+
+/** Resolve an `addons-src/…` (or absolute in-root) path; null when not one. */
+function resolveAddonsSrcPath(raw: string): { absolute: string; relative: string } | null {
+  const root = addonsSrcRoot();
+  if (!root) return null;
+  const trimmed = raw.trim();
+  const normalized = trimmed.replace(/\\/g, '/');
+  let absolute: string;
+  if (path.isAbsolute(trimmed)) {
+    absolute = path.resolve(trimmed);
+    if (!isInsideRoot(absolute, root)) return null;
+  } else if (normalized === 'addons-src' || normalized.startsWith('addons-src/')) {
+    absolute = path.resolve(root, normalized.slice('addons-src'.length));
+    if (!isInsideRoot(absolute, root)) return null;
+  } else {
+    return null;
+  }
+  const rel = path.relative(root, absolute).replace(/\\/g, '/');
+  return { absolute, relative: rel ? `addons-src/${rel}` : 'addons-src' };
+}
+
+/** Public form for tools that resolve paths manually (deps, patch, …):
+ *  an addons-src target, or null when the input is not one. */
+export function resolveAddonsSrcTarget(raw: string): { absolute: string; relative: string } | null {
+  return resolveAddonsSrcPath(raw);
+}
 
 
 export interface AgentToolDef {
@@ -80,6 +120,8 @@ export interface AgentToolContext {
   sessionId?: string;
   /** Notifies the UI that the goal state changed (goals_state event). */
   onGoalsChanged?: (sessionId: string) => void;
+  /** Notifies the UI that the standalone todo state changed (todos_state event). */
+  onTodosChanged?: (sessionId: string) => void;
   /** Ask-user channel: the model asked the user a question (ask_user_request event). */
   onAskUser?: (request: import('../tools/ask.js').AskUserRequest) => void;
   /** Reports the user's answers (or the timeout/abort) back to the stream. */
@@ -412,6 +454,12 @@ export async function resolveWithPermission(
     }
     return { absolute, relative: absolute, outside: false };
   }
+  // Addon Manager: addons-src/ is always accessible — even without a workspace.
+  const addonsSrc = resolveAddonsSrcPath(raw);
+  if (addonsSrc) {
+    assertSelfHostAccess(addonsSrc.absolute, intent);
+    return { absolute: addonsSrc.absolute, relative: addonsSrc.relative, outside: false };
+  }
   const { root } = requireWorkspace(ctx);
   const absolute = path.resolve(root, raw);
   assertSelfHostAccess(absolute, intent);
@@ -445,7 +493,13 @@ export async function resolveManyWithPermission(
       }
       exempted[entry.key] = { absolute, relative: absolute, outside: false };
     } else {
-      workspacePaths.push(entry);
+      const addonsSrc = resolveAddonsSrcPath(raw);
+      if (addonsSrc) {
+        assertSelfHostAccess(addonsSrc.absolute, intent);
+        exempted[entry.key] = { absolute: addonsSrc.absolute, relative: addonsSrc.relative, outside: false };
+      } else {
+        workspacePaths.push(entry);
+      }
     }
   }
   if (workspacePaths.length === 0) return exempted;

@@ -479,17 +479,26 @@ export async function runPipeline(
     }
   }
   {
-    const { emitAddonEvent } = await import('../addons/registry.js');
-    const { createAddonApi } = await import('../addons/api.js');
-    const outcome = await emitAddonEvent('tool.call', { tool: call.wireName, args: call.args }, createAddonApi('__harness__', process.cwd()));
-    if (outcome.deny) {
-      return { ok: false, isError: true, text: outcome.deny, errorCode: 'addon_denied' };
-    }
-    if (outcome.result) {
-      const r = outcome.result as Partial<HarnessToolResult>;
-      if (typeof r.ok === 'boolean' && typeof r.text === 'string' && typeof r.isError === 'boolean') {
-        call.durationMs = 0;
-        return { ok: r.ok, text: r.text, isError: r.isError };
+    // Addon v2 (A1/A2): the hook chain gets the session's id (A-02) and each
+    // hook receives an API bound to ITS addon (A-03) — emitAddonEvent builds
+    // per-owner facades internally; the facade here is only the chain entry.
+    const { emitAddonEvent, addonHookCount } = await import('../addons/registry.js');
+    if (addonHookCount() > 0) {
+      const { createAddonApi } = await import('../addons/api.js');
+      const outcome = await emitAddonEvent('tool.call', {
+        tool: call.wireName,
+        args: call.args,
+        sessionId: call.ctx?.sessionId,
+      }, createAddonApi('__harness__'));
+      if (outcome.deny) {
+        return { ok: false, isError: true, text: outcome.deny, errorCode: 'addon_denied' };
+      }
+      if (outcome.result) {
+        const r = outcome.result as Partial<HarnessToolResult>;
+        if (typeof r.ok === 'boolean' && typeof r.text === 'string' && typeof r.isError === 'boolean') {
+          call.durationMs = 0;
+          return { ok: r.ok, text: r.text, isError: r.isError };
+        }
       }
     }
   }
@@ -507,11 +516,20 @@ export async function runPipeline(
   }
   call.durationMs = Date.now() - started;
   {
-    const { emitAddonEvent } = await import('../addons/registry.js');
-    const { createAddonApi } = await import('../addons/api.js');
-    try {
-      await emitAddonEvent('tool.result', { tool: call.wireName, result }, createAddonApi('__harness__', process.cwd()));
-    } catch {  }
+    // Addon v2: tool.result now carries args + sessionId (A-02) and can MUTATE
+    // the result via outcome.result (A-19, handled in A3's emitPoint).
+    const { emitAddonEvent, addonHookCount } = await import('../addons/registry.js');
+    if (addonHookCount() > 0) {
+      const { createAddonApi } = await import('../addons/api.js');
+      try {
+        await emitAddonEvent('tool.result', {
+          tool: call.wireName,
+          args: call.args,
+          result,
+          sessionId: call.ctx?.sessionId,
+        }, createAddonApi('__harness__'));
+      } catch {  }
+    }
   }
   for (const hook of hooks) {
     try {

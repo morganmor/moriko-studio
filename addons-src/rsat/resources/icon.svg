@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 7" shape-rendering="crispEdges">
+  <!-- pixel gem (design sprite "gem"), single-fill so the host can tint it -->
+  <path fill="currentColor" d="M2 0h4v1h1v2h-1v1h-1v1h-1v2H3V5H2V4H1V3H0V1h1V0h1z"/>
+  <path fill="currentColor" opacity=".55" d="M2 1h2v1H2zM1 2h2v1H1z"/>
+</svg>

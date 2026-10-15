@@ -208,6 +208,11 @@ import Gauge__raw from 'lucide-react/dist/esm/icons/gauge.js';
 const Gauge = Gauge__raw as unknown as LucideIcon;
 export { Gauge };
 
+import Route__raw from 'lucide-react/dist/esm/icons/route.js';
+/** Route — used in src\components\SettingsPanel.tsx (agent workflow selector) */
+const Route = Route__raw as unknown as LucideIcon;
+export { Route };
+
 import GitBranch__raw from 'lucide-react/dist/esm/icons/git-branch.js';
 /** GitBranch — used in src\components\Thread.tsx */
 const GitBranch = GitBranch__raw as unknown as LucideIcon;
@@ -272,6 +277,11 @@ import ListTodo__raw from 'lucide-react/dist/esm/icons/list-todo.js';
 /** ListTodo — used in src\components\GoalsPanel.tsx */
 const ListTodo = ListTodo__raw as unknown as LucideIcon;
 export { ListTodo };
+
+import Flag__raw from 'lucide-react/dist/esm/icons/flag.js';
+/** Flag — used in src\components\GoalsPanel.tsx, src\components\TodoPanel.tsx */
+const Flag = Flag__raw as unknown as LucideIcon;
+export { Flag };
 
 import Loader2__raw from 'lucide-react/dist/esm/icons/loader-circle.js';
 /** Loader2 — used in src\components\AgentAskUserDialog.tsx */

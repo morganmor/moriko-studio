@@ -17,9 +17,9 @@ import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, num, bool } from './shared.js';
 import {
   diagnoseNoMatch, diagnoseMultiMatch, occurrenceLines,
-  positionOfOccurrenceNearLine, plausiblyApplied,
+  positionOfOccurrenceNearLine, plausiblyApplied, matchWithElasticIndent,
 } from '../edit-diagnostics.js';
-import { outOfRangeMessage } from '../read-policy.js';
+import { outOfRangeMessage, isRangeCoveredByReadEntry } from '../read-policy.js';
 import { resolveWriteTarget, loadEditable, finishEdit } from './edit-core.js';
 
 export async function editDefaultTool(args: Record<string, unknown>, ctx: AgentToolContext): Promise<HarnessToolResult> {
@@ -85,12 +85,13 @@ export async function editDefaultTool(args: Record<string, unknown>, ctx: AgentT
     }
   }
 
-  const occurrences = normalized
+  let occurrences = normalized
     ? occurrenceLines(effectiveContent, effectiveOldString)
     : rawOccurrences;
 
   let effectiveNew = newString;
   let eolAdapted = false;
+  let indentAligned = false;
   if (
     preserveEol && !normalized && newString.includes('\n') &&
     content.includes('\r\n') && !newString.includes('\r\n')
@@ -98,7 +99,9 @@ export async function editDefaultTool(args: Record<string, unknown>, ctx: AgentT
     effectiveNew = newString.replace(/\n/g, '\r\n');
     eolAdapted = true;
   }
-  const eolNote = eolAdapted ? ' newString line endings were adapted to the file\'s CRLF.' : '';
+  // Temuan B: eolNote WAJIB dibangun SETELAH cabang elastic-indent di bawah,
+  // di mana indentAligned bisa jadi true — kalau dibekukan lebih awal,
+  // catatan (matched via elastic indentation…) tidak pernah tercetak.
 
   if (occurrences.length === 0) {
     if (newString && content.includes(newString) && plausiblyApplied(oldString, newString)) {
@@ -109,21 +112,37 @@ export async function editDefaultTool(args: Record<string, unknown>, ctx: AgentT
           'No changes were written. If this is unexpected, re-read the region before editing.',
       };
     }
-    const failure = diagnoseNoMatch({ relative, content, oldString, lineHint });
-    return { ok: false, isError: true, text: failure.report };
-  }
-
-  if (readEntry && readEntry.toLine < Number.MAX_SAFE_INTEGER) {
-    const anchorLine = occurrences[0];
-    if (anchorLine < readEntry.fromLine || anchorLine > readEntry.toLine) {
-      return {
-        ok: false, isError: true,
-        text: outOfRangeMessage(relative, readEntry.fromLine, readEntry.toLine, anchorLine),
-      };
+    // FALLBACK: pencocokan elastis terhadap indentasi — anchor yang HANYA
+    // salah leading-whitespace tetap bisa dieksekusi dengan indentasi berkas.
+    const normCheck = normalized ? effectiveContent : content.replace(/\r\n/g, '\n');
+    const normOld = oldString.replace(/\r\n/g, '\n');
+    const normNew = newString.replace(/\r\n/g, '\n');
+    const elastic = matchWithElasticIndent(normCheck, normOld, normNew);
+    if (elastic.status === 'unique') {
+      effectiveContent = normCheck;
+      effectiveOldString = elastic.match.matchedOriginalSlice;
+      effectiveNew = elastic.match.reindentedNewString;
+      normalized = content.includes('\r\n');
+      occurrences = [elastic.match.startLine];
+      indentAligned = true;
+    } else {
+      const failure = diagnoseNoMatch({ relative, content: effectiveContent, oldString, lineHint });
+      return { ok: false, isError: true, text: failure.report };
     }
   }
 
-  if (occurrences.length > 1 && !replaceAll) {
+  // BUG (lineHint ditolak lebih awal diperbaiki): disambiguasi target DIJALANKAN
+  // SEBELUM validasi jendela baca — sebelumnya occurrences[0] diperiksa ke
+  // readEntry walau lineHint menunjuk occurrence lain yang sah.
+  let targetLinesToVerify: number[] = [];
+  let selectedOccurrenceLine: number | null = null;
+
+  if (occurrences.length === 1) {
+    selectedOccurrenceLine = occurrences[0];
+    targetLinesToVerify = [occurrences[0]];
+  } else if (replaceAll) {
+    targetLinesToVerify = occurrences;
+  } else {
     if (lineHint !== undefined) {
       let bestLine: number | null = null;
       let bestDist = Number.POSITIVE_INFINITY;
@@ -139,17 +158,42 @@ export async function editDefaultTool(args: Record<string, unknown>, ctx: AgentT
         }
       }
       if (bestLine !== null && ties === 1) {
-        const pos = positionOfOccurrenceNearLine(effectiveContent, effectiveOldString, bestLine);
-        const nextEff =
-          effectiveContent.slice(0, pos) + effectiveNew + effectiveContent.slice(pos + effectiveOldString.length);
-        return finishEdit(ctx, absolute, relative, content, nextEff, normalized, 1, dryRun, verifySyntax, 'edit_file', eolNote);
+        selectedOccurrenceLine = bestLine;
+        targetLinesToVerify = [bestLine];
       }
     }
-    const failure = diagnoseMultiMatch(relative, occurrences, replaceAll);
-    return { ok: false, isError: true, text: failure.report };
+    if (selectedOccurrenceLine === null) {
+      const failure = diagnoseMultiMatch(relative, occurrences, replaceAll);
+      return { ok: false, isError: true, text: failure.report };
+    }
   }
 
-  const nextContent = effectiveContent.split(effectiveOldString).join(effectiveNew);
+  const eolNote =
+    (eolAdapted ? ' newString line endings were adapted to the file\'s CRLF.' : '') +
+    (indentAligned ? ' (matched via elastic indentation; newString auto-indented to match file.)' : '');
+
+  // Validasi SEMUA baris target terhadap readEntry (multi-interval + span).
+  if (readEntry && readEntry.toLine < Number.MAX_SAFE_INTEGER) {
+    const spanLen = Math.max(effectiveOldString.split('\n').length, 1);
+    for (const anchorLine of targetLinesToVerify) {
+      if (!isRangeCoveredByReadEntry(readEntry, anchorLine, anchorLine + spanLen - 1)) {
+        return {
+          ok: false,
+          isError: true,
+          text: outOfRangeMessage(relative, readEntry.fromLine, readEntry.toLine, anchorLine, readEntry),
+        };
+      }
+    }
+  }
+
+  let nextContent: string;
+  if (replaceAll) {
+    nextContent = effectiveContent.split(effectiveOldString).join(effectiveNew);
+  } else {
+    const pos = positionOfOccurrenceNearLine(effectiveContent, effectiveOldString, selectedOccurrenceLine!);
+    nextContent =
+      effectiveContent.slice(0, pos) + effectiveNew + effectiveContent.slice(pos + effectiveOldString.length);
+  }
 
   return finishEdit(
     ctx, absolute, relative, content, nextContent, normalized,

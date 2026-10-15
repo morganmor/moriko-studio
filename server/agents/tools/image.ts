@@ -165,9 +165,41 @@ export async function imageTool(args: Record<string, unknown>, ctx: AgentToolCon
   }
 
   // Size: explicit args win; else the saved Image Studio size settings.
+  // LLMs often send numbers as strings ("966") — coerce before validating,
+  // otherwise the value is silently dropped and the provider default wins.
+  const coerceDim = (value: unknown): number | undefined => {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim() !== '') {
+      const parsed = Number(value.trim());
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    return undefined;
+  };
   let aspectRatio = str(args, 'aspectRatio').trim() || undefined;
-  let width = typeof args.width === 'number' ? args.width : undefined;
-  let height = typeof args.height === 'number' ? args.height : undefined;
+  let width = coerceDim(args.width);
+  let height = coerceDim(args.height);
+  if ((width !== undefined) !== (height !== undefined)) {
+    return {
+      ok: false,
+      isError: true,
+      errorCode: 'schema_error',
+      text:
+        `width and height must be sent as a PAIR — you sent only ${width !== undefined ? `width=${width}` : `height=${height}`}. ` +
+        `Resend the call with BOTH width and height (numbers, 64-4096), or drop both and use aspectRatio.`,
+    };
+  }
+  if (
+    width !== undefined &&
+    height !== undefined &&
+    (width < 64 || height < 64 || width > 4096 || height > 4096)
+  ) {
+    return {
+      ok: false,
+      isError: true,
+      errorCode: 'schema_error',
+      text: `width/height must be 64-4096 — you sent ${width}x${height}.`,
+    };
+  }
   if (!aspectRatio && width === undefined && height === undefined) {
     const saved = getUiState()['imageStudio'] as
       | { sizeMode?: unknown; aspectRatio?: unknown; pixelWidth?: unknown; pixelHeight?: unknown }

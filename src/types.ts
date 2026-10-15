@@ -187,6 +187,11 @@ export interface ChatSettings {
    */
   agentMode: boolean;
   /**
+   * AGENT WORKFLOW: which working doctrine the harness injects each agent
+   * turn. Empty string = server default (frontend-first).
+   */
+  agentWorkflow: string;
+  /**
    * Terminal execution for the agent harness: 'off' (no run/git tools),
    * 'ask' (each command shows a permission dialog with the exact command
    * line), 'auto' (default; runs without dialogs via system shell — git clone/push still ask).
@@ -390,8 +395,13 @@ export interface StreamEvent {
     | 'tool_call' | 'tool_result' | 'tool_progress'
     | 'permission_request' | 'permission_result'
     | 'ask_user_request' | 'ask_user_result'
-    | 'harness_injection' | 'goals_state' | 'steer' | 'context_tools'
+    | 'harness_injection' | 'goals_state' | 'todos_state' | 'steer' | 'context_tools'
+    | 'harness_event'
     | 'tree_update';
+  /** HARNESS-EVENT payload (type 'harness_event'). */
+  addonId?: string;
+  level?: string;
+  at?: number;
   /** REALTIME PROJECT STRUCTURE delta (only when agentMode + a workspace). */
   workspaceId?: string;
   version?: number;
@@ -470,6 +480,8 @@ export interface StreamEvent {
   command?: string;
   /** Goals state push (after a goal tool ran). */
   goals?: Goal[];
+  /** Standalone todos state push (after a todo tool ran). */
+  todos?: Todo[];
   /** Steer: the mid-run text the adapter injected between tool rounds. */
   text?: string;
   /** stream_id: the run's assistant turn id (echoed from the request's
@@ -549,6 +561,17 @@ export interface TurnInjection {
   content: string;
 }
 
+/** A Harness-Event: an addon event delivered as its OWN channel — never a
+ *  user message. Persisted as a kind:'harness-event' turn in this
+ *  conversation only; rendered as a dedicated panel. */
+export interface TurnHarnessEvent {
+  id: string;
+  addonId: string;
+  level: 'info' | 'warn' | 'block';
+  text: string;
+  at: number;
+}
+
 /** A persisted turn in a conversation. */
 export interface Turn {
   id: string;
@@ -584,6 +607,8 @@ export interface Turn {
   segments?: TurnSegment[];
   /** Harness system-prompt blocks injected into this turn's context. */
   injections?: TurnInjection[];
+  /** Harness-Events (addon events) delivered during/for this turn. */
+  harnessEvents?: TurnHarnessEvent[];
   /**
    * STEER: texts the user injected mid-run. They ride on the ASSISTANT turn
    * (the one they steered), not the user turn — the reply is what they
@@ -605,7 +630,10 @@ export interface Turn {
    *  A user-role turn wearing a [HARNESS] costume was dismissible as a
    *  prompt-injection attempt (see the classifier's `authority-denial`
    *  family); a system block is not. */
-  kind?: 'compaction' | 'goal-loop' | 'lockdown' | 'enforcement' | 'probation' | 'restore';
+  kind?: 'compaction' | 'goal-loop' | 'lockdown' | 'enforcement' | 'probation' | 'restore' | 'harness-event';
+  /** HARNESS-EVENT turn metadata (kind 'harness-event'): which addon spoke. */
+  eventAddon?: string;
+  eventLevel?: 'info' | 'warn' | 'block';
   /** Compaction details shown on the checkpoint card. */
   compactionMeta?: { covered: number; replacedTokens: number; trigger: string };
   /**
@@ -763,6 +791,8 @@ export interface Conversation {
   categoryId?: string;
   /** Goals/plans/todos of this conversation (agent-managed, user-visible). */
   goals?: Goal[];
+  /** Standalone todos of this conversation (agent-managed, user-visible). */
+  todos?: Todo[];
   /**
    * Harness context lifecycle: the injections built at the last refresh
    * point (conversation start, model switch, tools-toggle change,
@@ -782,6 +812,20 @@ export interface Conversation {
      */
     toolsDefsChars?: number;
   };
+
+  /**
+   * COUNCIL (Council Agent addon): conversations can be grouped into a council —
+   * one Main Session (role 'main', the shell the sidebar/history show) plus N
+   * Sub Sessions (role 'sub', one per RSAT agent). Sub Sessions are REAL
+   * conversations — own turns, model, context — but are hidden from the sidebar
+   * and history; they are reached through the TopBar council switcher below the
+   * title. This keeps "one RSAT project" to ONE sidebar row no matter how many
+   * agents are working it.
+   */
+  councilId?: string;
+  councilRole?: 'main' | 'sub';
+  /** RSAT agent identity bound to this sub session (enables reuse on re-dispatch). */
+  councilAgentId?: string;
 }
 
 /**
@@ -801,6 +845,12 @@ export interface ConversationSummary {
   model?: string;
   /** 6A: the agent workspace this chat is bound to (sidebar grouping). */
   workspaceId?: string;
+  /** COUNCIL: sub sessions carry their container's id (sidebar/history filter). */
+  councilId?: string;
+  /** COUNCIL: 'main' | 'sub' — mirrors server/conversationStore.ts. */
+  councilRole?: 'main' | 'sub';
+  /** COUNCIL: the RSAT agent bound to this member session, if any. */
+  councilAgentId?: string;
   /** Monotonic client mutation counter — the freshness tiebreak on merge. */
   rev?: number;
   turnCount: number;
@@ -941,6 +991,10 @@ export interface GoalTodo {
   text: string;
   done: boolean;
   subtasks?: GoalSubtask[];
+  /** Priority level — defaults to 'medium' for older entries. */
+  priority?: 'low' | 'medium' | 'high';
+  /** Optional longer-form detail. */
+  notes?: string;
 }
 
 /**
@@ -964,7 +1018,31 @@ export interface Goal {
   injectEveryTodos?: number;
 }
 
-export type ViewId = 'playground' | 'history' | 'imagehistory' | 'gallery' | 'dashboard' | 'imagestudio';/** UI font style chosen in Settings → Appearance. */
+/**
+ * A STANDALONE todo — lives WITHOUT a parent goal. The agent manages todos
+ * through harness tools; the user through the Todos panel. Created whenever
+ * the agent works on user input; goals remain reserved for large-scale work.
+ */
+export interface Todo {
+  id: string;
+  text: string;
+  done: boolean;
+  priority: 'low' | 'medium' | 'high';
+  /** Optional longer-form detail. */
+  notes?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type ViewId =
+  | 'playground'
+  | 'history'
+  | 'imagehistory'
+  | 'gallery'
+  | 'dashboard'
+  | 'imagestudio'
+  | 'addons'
+  | `addon:${string}`;/** UI font style chosen in Settings → Appearance. */
 export type FontFamily = 'inter' | 'mono' | 'system';
 
 /** Theme mechanism (design/moriko-design-1-theme-mechanism): colour-scheme choice; 'system' follows prefers-color-scheme. */

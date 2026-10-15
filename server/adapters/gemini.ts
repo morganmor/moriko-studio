@@ -5,6 +5,7 @@ import { coerceText } from '../textUtil.js';
 import { assertOk, iterateSse, type StreamHandler, type StreamParams } from '../sse.js';
 import { resolveSteerPartRefs } from '../attachmentStore.js';
 import { drainSteers, steerTextOf, steersToUserParts } from '../steer.js';
+import { drainInjections, injectionText } from '../addons/inject.js';
 import { gateToolImages, imageCapableFor, separateImageParts, IMAGE_OMITTED_NOTE } from './visionGate.js';
 import {
   createLoopGuard,
@@ -394,6 +395,13 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
     resolveSteerPartRefs(steerParts);
     if (steered.length > 0) {
       responseParts.push(...toGeminiParts(steerParts));
+    }
+
+    // Addon v2 (A3, Q2): queued addon notices ride the steer seam.
+    const injections = drainInjections(params.sessionId ?? undefined);
+    for (const entry of injections) {
+      onEvent({ type: 'steer', id: `addon-inject-${entry.id}`, text: `[${entry.addonId}] ${injectionText(entry)}` });
+      responseParts.push({ text: `System notice from the ${entry.addonId} addon:\n${injectionText(entry)}` });
     }
 
     convo.push({ role: 'user', parts: responseParts });

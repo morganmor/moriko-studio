@@ -104,7 +104,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
    * decides what lands instead of the fetch dumping every id in at once.
    */
   const [modelPicker, setModelPicker] = useState<{ models: string[]; target: 'draft' | 'builtin' } | null>(null);
-  /** Left pane: provider search query ("Cari provider"). */
+  /** Left pane: provider search query ("Search provider"). */
   const [query, setQuery] = useState('');
   /** API key field reveal toggle (right pane). */
   const [showKey, setShowKey] = useState(false);
@@ -426,7 +426,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
             minWidth: 0,
           }}
         >
-          {/* Search + refresh — baris atas (referensi: "Cari provider" + ikon) */}
+          {}
           <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
             <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
               <Search
@@ -437,8 +437,8 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Cari provider"
-                aria-label="Cari provider"
+                placeholder="Search provider"
+                aria-label="Search provider"
                 className="field"
                 style={{ minWidth: 0, fontSize: 12.5, paddingLeft: 32, height: 36 }}
               />

@@ -5,6 +5,7 @@ import { adoptLegacyProviderKeys } from './lib/providerKeys';
 import { adoptLegacyBrowserState, bootUiState, uiStateReachable } from './lib/storage';
 import type { AddonBusPayload } from './types/addonBus';
 import './styles/index.css';
+import './styles/addon.css';
 import './styles/sidebar.css';
 
 if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
@@ -42,11 +43,30 @@ async function boot(): Promise<void> {
     import('./store/useStore'),
   ]);
   try {
+    const { installAddonHost, dispatchAddonBusFrame } = await import('./addons/host');
+    installAddonHost();
     const bus = new EventSource('/api/addons/events');
     bus.onmessage = (message) => {
       try {
         const frame = JSON.parse(message.data) as AddonBusPayload;
-        if (frame && typeof frame.topic === 'string') useStore.getState().pushAddonEvent(frame);
+        if (frame && typeof frame.topic === 'string') {
+          useStore.getState().pushAddonEvent(frame);
+          dispatchAddonBusFrame(frame);
+          // LIVE ADDON REGISTRY: enable/disable/reload from ANY browser (or the
+          // agent's addon_manage) repaints the sidebar section, Hub, and unmounts
+          // a disabled addon's open view — no manual refresh needed. useStore is
+          // already in boot() scope — no import here (this callback is not async).
+          if (frame.topic === 'addons.registry') {
+            window.dispatchEvent(new Event('moriko:addons-reloaded'));
+            const view = useStore.getState().view;
+            if (typeof view === 'string' && view.startsWith('addon:')) {
+              const addonId = view.slice('addon:'.length).split('/')[0] ?? '';
+              if (frame.payload?.addonId === addonId && (frame.payload?.enabled === false || frame.payload?.reason === 'delete')) {
+                useStore.getState().setView('addons');
+              }
+            }
+          }
+        }
       } catch {
       }
     };

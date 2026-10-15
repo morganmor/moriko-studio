@@ -111,6 +111,11 @@ export const TAB_CAPTURE_SCRIPT = String.raw`
     stream = s;
     for (const track of stream.getVideoTracks()) {
       track.contentHint = 'detail';
+      // Pin the encoder to the capture resolution — without this Chromium may
+      // downscale the frame under bandwidth pressure and text turns to mush.
+      try {
+        void track.applyConstraints({ degradationPreference: 'maintain-resolution' }).catch(() => {});
+      } catch {}
       track.addEventListener('ended', () => signal({ type: 'rtc-ended' }));
     }
     pc = new RTCPeerConnection({ iceServers: [] });

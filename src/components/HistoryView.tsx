@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Download, MessageSquare, RotateCcw, Search, Trash2, Upload } from './icons';
 
-import { isPhantomConversation, refreshConversationList, useStore } from '../store/useStore';
+import { isPhantomConversation, isSubSession, refreshConversationList, useStore } from '../store/useStore';
 import { EmptyState, Modal } from './ui';
 import { exportAll, importBundle } from '../lib/exportImport';
 
@@ -44,7 +44,9 @@ function groupByDay(conversations: ReturnType<typeof useStore.getState>['convers
 export function HistoryView() {
   const allConversations = useStore((state) => state.conversations);
   const conversations = useMemo(
-    () => allConversations.filter((conversation) => !isPhantomConversation(conversation)),
+    () => allConversations.filter(
+      (conversation) => !isPhantomConversation(conversation) && !isSubSession(conversation),
+    ),
     [allConversations],
   );
   const selectConversation = useStore((state) => state.selectConversation);

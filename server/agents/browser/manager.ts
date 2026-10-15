@@ -41,6 +41,12 @@ export const WS_OPEN = 1;
  *  (setViewport), so always read the CURRENT size via manager.getViewport(). */
 export const BROWSER_VIEWPORT = { width: 1920, height: 1080 } as const;
 
+/** Panel DPR → launch deviceScaleFactor, rounded to halves and clamped 1..3
+ *  (rounding avoids context churn from fractional DPR jitter). */
+function clampDpr(dpr: number): number {
+  return Math.min(Math.max(Math.round(dpr * 2) / 2, 1), 3);
+}
+
 /** Where the persistent profile lives — survives across sessions/restarts. */
 export function browserProfileDir(): string {
   return path.join(morikoHome, 'browser-profile');
@@ -71,13 +77,24 @@ class BrowserManager {
   private ensuring: Promise<BrowserSession> | null = null;
   private viewport: { width: number; height: number } = { ...BROWSER_VIEWPORT };
   private screenInfo: { width: number; height: number; dpr: number } | null = null;
+  /** DPR the running context was launched with — DPR changes need a relaunch. */
+  private launchedDpr = 1;
 
   getViewport(): { width: number; height: number } {
     return { ...this.viewport };
   }
 
   setScreenInfo(info: { width: number; height: number; dpr: number }): void {
+    const dprChanged = clampDpr(info.dpr) !== this.launchedDpr;
     this.screenInfo = info;
+    // deviceScaleFactor is launch-time only: a DPR change (panel opened on a
+    // different-density display) needs a fresh context — drop this one so the
+    // next ensureContext relaunches at the new density.
+    if (dprChanged && this.session) {
+      const stale = this.session;
+      this.session = null;
+      void stale.context.close().catch(() => undefined);
+    }
   }
   getScreenInfo(): { width: number; height: number; dpr: number } | null {
     return this.screenInfo;
@@ -168,6 +185,9 @@ class BrowserManager {
 
       const profileDir = browserProfileDir();
       fs.mkdirSync(profileDir, { recursive: true });
+      // Render at the panel monitor's pixel density — a 1x bitmap upscaled on
+      // a 125%/150% Windows display reads as blur. Agent input stays in CSS px.
+      const launchDpr = clampDpr(this.screenInfo?.dpr ?? 1);
 
       let context: BrowserContext;
       try {
@@ -175,7 +195,7 @@ class BrowserManager {
           channel: 'msedge',
           headless: true,
           viewport: BROWSER_VIEWPORT,
-          deviceScaleFactor: 1,
+          deviceScaleFactor: launchDpr,
           args: [
             '--no-first-run',
             '--no-default-browser-check',
@@ -196,6 +216,7 @@ class BrowserManager {
         );
       }
 
+      this.launchedDpr = launchDpr;
       const existing = context.pages()[0];
       const firstPage = existing ?? (await context.newPage());
       const session: BrowserSession = {

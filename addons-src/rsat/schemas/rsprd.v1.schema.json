@@ -1,0 +1,184 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "rsprd.v1.schema.json",
+  "title": "RS-PRD v1",
+  "type": "object",
+  "required": ["format", "version", "prd", "achievements"],
+  "properties": {
+    "format": { "const": "rs-prd" },
+    "version": { "type": "number", "maximum": 1 },
+    "rev": { "type": "number" },
+    "prd": {
+      "type": "object",
+      "required": ["id", "title", "status", "createdBy"],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "summary": { "type": "string" },
+        "status": { "enum": ["draft", "running", "paused", "done", "archived"] },
+        "createdAt": { "type": "string" },
+        "createdBy": { "$ref": "#/definitions/actor" },
+        "language": { "enum": ["en", "id"] },
+        "goals": { "type": "array", "items": { "type": "string" } },
+        "nonGoals": { "type": "array", "items": { "type": "string" } },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "text": { "type": "string" },
+              "enforce": { "enum": ["advisory", "strict"] }
+            }
+          }
+        },
+        "globalScope": { "$ref": "#/definitions/scope" },
+        "architecture": { "type": "string", "description": "High-level system architecture description" },
+        "modules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "desc": { "type": "string" },
+              "scope": { "$ref": "#/definitions/scope" }
+            }
+          }
+        },
+        "milestones": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" },
+              "goal": { "type": "string" }
+            }
+          }
+        },
+        "nonFunctional": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "text": { "type": "string" },
+              "metric": { "type": "string" }
+            }
+          }
+        },
+        "risks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "text": { "type": "string" },
+              "mitigation": { "type": "string" },
+              "severity": { "enum": ["low", "medium", "high"] }
+            }
+          }
+        },
+        "technicalDecisions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "text": { "type": "string" },
+              "reason": { "type": "string" },
+              "at": { "type": "string" }
+            },
+            "required": ["text"]
+          },
+          "description": "Key technical decisions with rationale"
+        }
+      }
+    },
+    "achievements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "state"],
+        "properties": {
+          "id": { "type": "string" },
+          "no": { "type": "number" },
+          "title": { "type": "string" },
+          "kind": { "enum": ["feature", "bugfix", "refactor", "chore", "research", "test"] },
+          "tier": { "enum": ["bronze", "silver", "gold", "diamond"] },
+          "points": { "type": "number" },
+          "description": { "type": "string" },
+          "technical": { "type": "string" },
+          "acceptance": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["text"],
+              "properties": {
+                "id": { "type": "string" },
+                "text": { "type": "string" },
+                "done": { "type": "boolean" }
+              }
+            }
+          },
+          "scope": { "$ref": "#/definitions/scope" },
+          "dependsOn": { "type": "array", "items": { "type": "string" } },
+          "moduleId": { "type": "string" },
+          "milestoneId": { "type": "string" },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "state": { "enum": ["locked", "available", "claimed", "in_progress", "review", "done", "blocked", "dropped"] },
+          "claim": {
+            "type": "object",
+            "properties": {
+              "by": { "$ref": "#/definitions/actor" },
+              "at": { "type": "string" },
+              "heartbeat": { "type": "string" },
+              "ttlSec": { "type": "number" },
+              "label": { "type": "string" }
+            }
+          },
+          "comments": { "type": "array" },
+          "scopeChanges": { "type": "array" },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": { "type": "string" },
+                "op": { "enum": ["add", "modify", "delete", "rename", "copy", "refactor"] },
+                "summary": { "type": "string" },
+                "from": { "type": "string" },
+                "by": { "$ref": "#/definitions/actor" },
+                "at": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "history": { "type": "array" }
+  },
+  "definitions": {
+    "actor": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["user", "agent", "operator", "system"] },
+        "name": { "type": "string" },
+        "sessionId": { "type": "string" },
+        "model": { "type": "string" },
+        "label": { "type": "string" }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "include": { "type": "array", "items": { "type": "string" } },
+        "exclude": { "type": "array", "items": { "type": "string" } },
+        "maxFiles": { "type": "number" },
+        "allowCreate": { "type": "boolean" },
+        "allowDelete": { "type": "boolean" }
+      }
+    }
+  }
+}

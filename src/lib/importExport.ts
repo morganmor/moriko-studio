@@ -63,6 +63,7 @@ function sanitizeSettings(value: unknown): ChatSettings {
     useMcp: raw.useMcp === true ||
       (raw as { functionCalling?: unknown }).functionCalling === true,
     agentMode: raw.agentMode === true,
+    agentWorkflow: typeof raw.agentWorkflow === 'string' ? raw.agentWorkflow : '',
     terminalMode:
       raw.terminalMode === 'off' || raw.terminalMode === 'ask' ? raw.terminalMode : 'auto',
     confirmDeletes: raw.confirmDeletes === true,

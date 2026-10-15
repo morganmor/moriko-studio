@@ -1,0 +1,200 @@
+/* ============================================================================
+   ADDON.CSS — CSS milik ADDON (RSAT + COUNCIL), dipisahkan dari CSS harness.
+   Dipisah 2026-10 dari src/styles/index.css supaya css addon dan css harness
+   tidak tercampur dalam satu file (aturan: AGENTS.md "CSS: satu file = satu
+   pemilik"). Pemilik = addon; pemakai = DOM .rsat / .council (AddonViewHost).
+   Batas pemilikan — JANGAN dicampur lagi:
+   · Milik addon (file ini): token --c-rsat-* + --c-council-* (light/dark/mocha)
+     + blok .rsat + blok .council.
+   · Milik harness (tetap di index.css): .council-switch* (TopBar switcher),
+     .rsat-gem-ic (ikon tombol TopBar), .addon-* kit host, token --c-notify-*.
+   ========================================================================= */
+/* RSAT pixel board (R6) — token persis dari design/rsat-panel-pixel.html. */
+:root,.scope-light{
+  --c-rsat-bronze:176 108 54;--c-rsat-silver:120 128 142;--c-rsat-gold:190 138 12;--c-rsat-diamond:10 150 170;
+  --c-rsat-available:22 163 74;--c-rsat-claimed:2 132 199;--c-rsat-running:var(--al);--c-rsat-review:124 58 237;
+  --c-rsat-done:22 163 74;--c-rsat-locked:140 146 158;--c-rsat-blocked:220 38 38;
+  --c-rsat-add:22 163 74;--c-rsat-mod:2 132 199;--c-rsat-del:220 38 38;--c-rsat-ref:124 58 237;
+  --c-rsat-sel:2 132 199;
+  /* permukaan pixel (bevel) */
+  --c-rsat-face:222 214 204;--c-rsat-slot:196 187 176;--c-rsat-hi:255 255 255;--c-rsat-lo:146 134 122;--c-rsat-edge:30 24 20;
+  --c-rsat-stone:140 140 140;--c-rsat-stone-dk:104 104 104;--c-rsat-shine:255 255 255;
+  --c-rsat-tip-bg:26 12 40;--c-rsat-tip-edge:110 56 210;
+  --c-rsat-toast-bg:30 24 40;--c-rsat-toast-ink:255 250 242;
+  /* invariant (sprite & HUD) — diwarisi .dark/.mocha */
+  --c-rsat-skin:214 150 110;--c-rsat-hair:98 64 38;--c-rsat-xp:110 205 30;
+  --c-rsat-toast-title:255 214 64;--c-rsat-toast-title-ch:196 160 255;
+  /* INTERLINKED (ComfyUI glowing node-wire graph) — kontras tinggi di light */
+  --c-rsat-il-bg:226 220 212;--c-rsat-il-grid:172 162 150;--c-rsat-il-node:248 244 238;--c-rsat-il-head:228 220 210;
+  --c-rsat-wire-data:2 132 199;--c-rsat-wire-type:124 58 237;--c-rsat-wire-active:22 163 74;
+  --c-rsat-wire-cross:217 119 6;--c-rsat-wire-broken:220 38 38;--c-rsat-pin-bg:255 255 255;
+  /* COUNCIL — satu aksen lembut, harus terbaca di canvas terang. */
+  --c-council-accent:124 58 237;--c-council-soft:246 243 255;--c-council-line:226 220 246;
+}
+.dark,.scope-dark{
+  --c-rsat-bronze:205 140 84;--c-rsat-silver:178 186 200;--c-rsat-gold:240 190 60;--c-rsat-diamond:90 220 235;
+  --c-rsat-available:74 222 128;--c-rsat-claimed:56 189 248;--c-rsat-running:var(--ad);--c-rsat-review:167 139 250;
+  --c-rsat-done:74 222 128;--c-rsat-locked:96 100 112;--c-rsat-blocked:248 113 113;
+  --c-rsat-add:74 222 128;--c-rsat-mod:56 189 248;--c-rsat-del:248 113 113;--c-rsat-ref:167 139 250;
+  --c-rsat-sel:56 189 248;--c-rsat-slot:22 22 22;--c-rsat-hi:104 104 104;--c-rsat-lo:12 12 12;--c-rsat-edge:0 0 0;
+  --c-rsat-stone:126 126 126;--c-rsat-stone-dk:90 90 90;
+  --c-rsat-il-bg:14 16 22;--c-rsat-il-grid:42 48 64;--c-rsat-il-node:26 30 40;--c-rsat-il-head:36 42 56;
+  --c-rsat-wire-data:56 189 248;--c-rsat-wire-type:167 139 250;--c-rsat-wire-active:74 222 128;
+  --c-rsat-wire-cross:251 191 36;--c-rsat-wire-broken:248 113 113;--c-rsat-pin-bg:18 20 28;
+  --c-council-accent:167 139 250;--c-council-soft:24 20 34;--c-council-line:44 36 62;
+  --c-rsat-xp:126 230 40;
+}
+
+.mocha,.scope-mocha{
+  --c-rsat-bronze:205 140 84;--c-rsat-silver:178 186 200;--c-rsat-gold:240 190 60;--c-rsat-diamond:90 220 235;
+  --c-rsat-available:74 222 128;--c-rsat-claimed:56 189 248;--c-rsat-running:var(--ad);--c-rsat-review:167 139 250;
+  --c-rsat-done:74 222 128;--c-rsat-locked:112 100 92;--c-rsat-blocked:248 113 113;
+  --c-rsat-add:74 222 128;--c-rsat-mod:56 189 248;--c-rsat-del:248 113 113;--c-rsat-ref:167 139 250;
+  --c-rsat-sel:56 189 248;--c-rsat-slot:30 24 21;--c-rsat-hi:124 106 94;--c-rsat-lo:16 12 10;--c-rsat-edge:0 0 0;
+  --c-rsat-stone:130 120 112;--c-rsat-stone-dk:94 86 80;
+  --c-rsat-tip-bg:24 12 30;--c-rsat-tip-edge:140 90 230;--c-rsat-toast-bg:28 20 22;
+  --c-rsat-il-bg:20 16 15;--c-rsat-il-grid:62 50 44;--c-rsat-il-node:36 29 26;--c-rsat-il-head:50 40 35;
+  --c-rsat-wire-data:56 189 248;--c-rsat-wire-type:192 132 252;--c-rsat-wire-active:74 222 128;
+  --c-rsat-wire-cross:251 191 36;--c-rsat-wire-broken:248 113 113;--c-rsat-pin-bg:24 19 17;
+  --c-rsat-xp:126 230 40;
+  --c-council-accent:167 139 250;--c-council-soft:32 26 30;--c-council-line:58 46 52;
+}
+
+
+/* ============================================================================
+   RSA/T — REBUILD DARI NOL (2026-10), port 1:1 dari design/split:
+     · rsat-panel-canvas.html  → root .rsat > .app > .work > .view > .view-in
+     · rsat-panel-topbar.html  → header .topbar (crumb + acting-as + theme
+                                 seg-ctl + accent swatch + demo controls)
+   Scoped di bawah `.rsat`; warna memakai token --c-rsat-* (light/dark/mocha)
+   di atas file ini. Bevel = box-shadow 4-sisi (--o2/--o3/--up*/--dn2).
+   Netralisasi gaya global host (.app/.work/.topbar/.crumb/.btn) wajib agar
+   tak bocor ke pixel style.
+   ========================================================================= */
+.rsat{
+  --o3:0 -3px 0 0 rgb(var(--c-rsat-edge)),0 3px 0 0 rgb(var(--c-rsat-edge)),-3px 0 0 0 rgb(var(--c-rsat-edge)),3px 0 0 0 rgb(var(--c-rsat-edge));
+  --o2:0 -2px 0 0 rgb(var(--c-rsat-edge)),0 2px 0 0 rgb(var(--c-rsat-edge)),-2px 0 0 0 rgb(var(--c-rsat-edge)),2px 0 0 0 rgb(var(--c-rsat-edge));
+  --up3:inset 3px 3px 0 rgb(var(--c-rsat-hi)),inset -3px -3px 0 rgb(var(--c-rsat-lo));
+  --up2:inset 2px 2px 0 rgb(var(--c-rsat-hi)),inset -2px -2px 0 rgb(var(--c-rsat-lo));
+  --dn2:inset 2px 2px 0 rgb(var(--c-rsat-lo)),inset -2px -2px 0 rgb(var(--c-rsat-hi)/.55);
+  --f-px:"Moriko Pixel","Silkscreen","Pixelify Sans",ui-monospace,"Cascadia Code",Consolas,monospace;
+  --f-body:"Moriko Pixel Body","Pixelify Sans",ui-monospace,"Cascadia Code",Consolas,monospace;
+  --f-mono:ui-monospace,"Cascadia Code",Consolas,monospace;
+  min-height:100%;display:flex;flex-direction:column;
+  font:13px/1.45 var(--f-body);color:rgb(var(--c-ink));
+  -webkit-font-smoothing:none;text-rendering:optimizeSpeed;
+  background-color:rgb(var(--c-canvas));
+  background-image:conic-gradient(rgb(var(--c-ink)/.035) 25%,transparent 0 50%,rgb(var(--c-ink)/.035) 0 75%,transparent 0);
+  background-size:8px 8px;
+}
+.rsat *{box-sizing:border-box}
+.rsat button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:inherit;border-radius:0}
+.rsat select,.rsat input{font:inherit;color:inherit;border-radius:0}
+.rsat :focus-visible{outline:3px solid rgb(var(--c-accent));outline-offset:3px}
+.rsat .muted{color:var(--muted)}
+.rsat .row{display:flex;align-items:center;gap:8px}
+.rsat .eyebrow{font:700 10.5px/1 var(--f-px);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+
+/* ── canvas: work area tengah (rsat-panel-canvas.html) ─────────────────── */
+.rsat .app{position:static;z-index:auto;display:flex;flex:1;min-width:0;min-height:0;height:auto;padding:14px}
+.rsat .work{position:relative;flex:1;min-width:0;display:flex;flex-direction:column;
+  background:rgb(var(--c-panel));border:0;border-radius:0;
+  box-shadow:var(--o3),var(--up3);overflow:hidden}
+.rsat .view{position:relative;inset:auto;display:block;flex:1;min-height:0;overflow:auto;
+  padding:22px clamp(14px,3vw,32px) 150px;scroll-behavior:smooth}
+.rsat .view-in{height:100%;min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:10px;border:3px dashed var(--line);position:relative}
+.rsat .canvas-hint{display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center;padding:24px;max-width:420px}
+.rsat .canvas-hint b{font:700 14px var(--f-px);letter-spacing:.03em;text-transform:uppercase}
+.rsat .canvas-hint p{margin:0;color:var(--muted);font-size:12.5px}
+.rsat .chips{display:flex;gap:6px;flex-wrap:wrap;justify-content:center}
+.rsat .chip{font:700 9.5px var(--f-px);letter-spacing:.05em;text-transform:uppercase;padding:2px 7px;
+  background:rgb(var(--c-rsat-slot));box-shadow:inset 0 0 0 2px rgb(var(--c-rsat-lo));color:var(--muted);border-radius:0}
+
+/* ── topbar (rsat-panel-topbar.html) ───────────────────────────────────── */
+.rsat .topbar{display:flex;align-items:center;gap:10px;height:auto;padding:10px 16px;
+  background:rgb(var(--c-rsat-face));border-bottom:3px solid rgb(var(--c-rsat-edge));flex-wrap:wrap;flex:none;transition:none}
+.rsat .crumb{display:flex;align-items:center;gap:6px;height:auto;padding:0;border:0;border-radius:0;
+  color:var(--muted);font:600 12px var(--f-px);white-space:nowrap}
+.rsat .crumb:hover{color:var(--muted);border-color:transparent}
+.rsat .crumb b{color:rgb(var(--c-ink))}
+.rsat .demo{display:flex;align-items:center;gap:6px;margin-left:auto;flex-wrap:wrap}
+
+/* kontrol (Minecraft button, field, swatch, seg-ctl) */
+.rsat .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:34px;padding:0 14px;margin:2px;
+  font:700 11.5px var(--f-px);letter-spacing:.05em;text-transform:uppercase;white-space:nowrap;
+  background:rgb(var(--c-rsat-face));border:0;border-radius:0;
+  box-shadow:var(--o2),var(--up2);text-shadow:1px 1px 0 rgb(var(--c-ink)/.12);transition:none}
+.rsat .btn:hover{background:rgb(var(--c-elev));border-color:transparent}
+.rsat .btn:active{box-shadow:var(--o2),var(--dn2);transform:translateY(2px);scale:1}
+.rsat .btn.sm{height:28px;padding:0 10px;font-size:10.5px}
+.rsat .btn.ghost{background:none;box-shadow:none;text-shadow:none}
+.rsat .btn.ghost:hover{background:rgb(var(--c-ink)/.08)}
+.rsat .field{height:34px;margin:2px;padding:0 10px;min-width:0;border:0;border-radius:0;
+  background:rgb(var(--c-rsat-slot));box-shadow:var(--o2),var(--dn2)}
+.rsat .sw{width:20px;height:20px;margin:2px;--sa:var(--ac);background:rgb(var(--sa));box-shadow:var(--o2);border-radius:0}
+.rsat .sw[aria-pressed=true]{box-shadow:var(--o2),0 0 0 4px rgb(var(--c-ink))}
+.rsat .sw[data-accent=ember]{--ac:234 88 12}
+.rsat .sw[data-accent=sakura]{--ac:219 39 119}
+.rsat .sw[data-accent=matcha]{--ac:22 163 74}
+.rsat .sw[data-accent=ocean]{--ac:2 132 199}
+.rsat .sw[data-accent=violet]{--ac:124 58 237}
+.rsat .seg-ctl{display:inline-flex;gap:4px}
+.rsat .seg-ctl button{height:30px;margin:2px;padding:0 12px;font:700 11px var(--f-px);color:var(--muted);
+  background:rgb(var(--c-rsat-face));box-shadow:var(--o2),var(--up2);border-radius:0}
+.rsat .seg-ctl button[aria-pressed=true]{background:rgb(var(--c-accent));color:rgb(var(--c-accent-ink));box-shadow:var(--o2),var(--dn2)}
+
+/* ── sprite: wajah creeper (desain SPR + .face) ────────────────────────── */
+.rsat .spr{display:block;width:100%;height:100%;shape-rendering:crispEdges;image-rendering:pixelated;overflow:visible}
+.rsat .spr .k{fill:rgb(var(--c-rsat-edge))}
+.rsat .spr .g{fill:rgb(var(--c-rsat-stone))}
+.rsat .spr .h{fill:rgb(var(--c-rsat-stone-dk))}
+.rsat .spr .a{fill:var(--sa,rgb(var(--c-accent)))}
+.rsat .spr .b{fill:color-mix(in srgb,var(--sa,rgb(var(--c-accent))) 58%,rgb(var(--c-rsat-edge)))}
+.rsat .spr .c{fill:color-mix(in srgb,var(--sa,rgb(var(--c-accent))) 55%,rgb(var(--c-rsat-shine)))}
+.rsat .spr .w{fill:rgb(var(--c-rsat-shine))}
+.rsat .face{width:18px;height:18px;display:inline-block;flex:none;vertical-align:middle;--sa:rgb(var(--c-rsat-mod))}
+
+/* Create agent: bingkai logo besar (portrait karakter) + Generate/Clear di bawahnya. */
+.rsat .alogo-col{align-items:center;flex:none}
+.rsat .alogo{width:96px;height:96px;padding:6px;display:grid;place-items:center;cursor:pointer;
+  background:rgb(var(--c-rsat-stone));color:rgb(var(--c-rsat-edge));border-radius:0;
+  box-shadow:var(--o2),var(--up2)}
+.rsat .alogo img{width:100%;height:100%;object-fit:cover;image-rendering:pixelated;display:block}
+.rsat .alogo:hover{background:rgb(var(--c-rsat-stone-dk))}
+/* Agent yang dipilih untuk diedit: border biru pada barisnya di roster. */
+.rsat .qrow.editing{outline:2px solid rgb(var(--c-rsat-sel));outline-offset:-2px}
+.rsat .pill.jump{cursor:pointer}
+
+/* ============================================================================
+   COUNCIL (Council Agent addon) — panel manajemen dewan. Token --c-council-*
+   (light/dark/mocha di atas). Memakai komponen host (.card/.btn/.mi) untuk
+   permukaan umum; hanya warna khas dewan yang pakai token sendiri.
+   ========================================================================= */
+.council{--f-council:var(--f-mono)}
+.council .page{max-width:1080px;margin:0 auto;padding:22px 24px 80px}
+.council h2{margin:0;font-size:19px;font-weight:600;letter-spacing:-.01em;color:rgb(var(--c-ink))}
+.council .sub{margin:4px 0 0;font-size:12.5px;color:var(--muted)}
+.council .sec{margin-top:20px}
+.council .sec-h{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin-bottom:8px}
+.council .brief{
+  width:100%;min-height:86px;resize:vertical;padding:10px 12px;border-radius:var(--r-md);
+  border:1px solid var(--line);background:rgb(var(--c-field));color:rgb(var(--c-ink));
+  font:13px/1.5 var(--f-sans);outline:0}
+.council .brief:focus{border-color:rgb(var(--c-accent)/.6)}
+.council .members{display:flex;flex-direction:column;gap:8px}
+.council .member{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:var(--r-md);
+  border:1px solid var(--line);background:rgb(var(--c-card))}
+.council .member .who{display:flex;flex-direction:column;min-width:0;flex:1}
+.council .member .who b{font-size:13px;font-weight:600;color:rgb(var(--c-ink))}
+.council .member .who span{font-size:11.5px;color:var(--muted)}
+.council .tag{flex:none;font-size:10px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;
+  padding:2px 7px;border-radius:999px;border:1px solid rgb(var(--c-council-line));
+  background:rgb(var(--c-council-soft));color:rgb(var(--c-council-accent))}
+.council .tag.main{border-color:var(--line);background:rgb(var(--c-field));color:var(--muted)}
+.council .empty{padding:18px;border:1px dashed var(--line);border-radius:var(--r-md);
+  text-align:center;color:var(--muted);font-size:12.5px}
+/* Dua kolom ala Create Agent: sesi/kiri, roster agent/kanan; runtuh di layar sempit. */
+.council .cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0 26px;align-items:start;margin-top:-4px}
+.council .col{min-width:0}
+@media (max-width:960px){.council .cols{grid-template-columns:1fr}}

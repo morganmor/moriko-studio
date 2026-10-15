@@ -62,7 +62,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
           offsetLine: { type: 'number', description: '1-based first line (default 1).' },
           maxLines: { type: 'number', description: 'Default 400, max 1000.' },
           line: { type: 'number', description: 'Read one full line by number.' },
-          ranges: { type: 'array', description: 'Disjoint regions [[from,to],...] (max 6, 2000 lines).' },
+          ranges: { type: 'array', items: { type: 'array', items: { type: 'number' } }, description: 'Disjoint regions [[from,to],...] (max 6, 2000 lines).' },
           mode: { type: 'string', enum: ['window', 'outline', 'fold'], description: '"window" (default) / "outline" / "fold".' },
           showWhitespace: { type: 'boolean', description: 'Expose tabs/trailing spaces.' },
           lastHash: { type: 'string', description: 'Previous sha; "unchanged" short-circuit.' },
@@ -279,6 +279,48 @@ export function listAgentToolDefs(): AgentToolDef[] {
       wireName: 'agent__goal_list',
       description: 'List goals with statuses, plans and todo ids.',
       inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      wireName: 'agent__todo_create',
+      description: 'Create a standalone todo (not tied to a goal). Use for everyday task tracking.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'The task to do.' },
+          priority: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Default medium.' },
+          notes: { type: 'string', description: 'Optional longer detail.' },
+        },
+        required: ['text'],
+      },
+    },
+    {
+      wireName: 'agent__todo_update',
+      description: 'Update a standalone todo: check/uncheck, change text/priority, add notes.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          todoId: { type: 'string', description: 'Todo id.' },
+          text: { type: 'string', description: 'New text.' },
+          done: { type: 'boolean', description: 'Check (true) or uncheck (false).' },
+          priority: { type: 'string', enum: ['low', 'medium', 'high'], description: 'New priority.' },
+          notes: { type: 'string', description: 'Notes (empty string clears).' },
+        },
+        required: ['todoId'],
+      },
+    },
+    {
+      wireName: 'agent__todo_list',
+      description: 'List standalone todos with statuses and priorities.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      wireName: 'agent__todo_delete',
+      description: 'Delete a standalone todo by id.',
+      inputSchema: {
+        type: 'object',
+        properties: { todoId: { type: 'string', description: 'Todo id.' } },
+        required: ['todoId'],
+      },
     },
     {
       wireName: 'agent__fetch',
@@ -708,6 +750,14 @@ export function listAgentToolDefs(): AgentToolDef[] {
           },
           variants: {
             type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                source: { type: 'string', description: 'Complete HTML document (≤256 KB).' },
+                title: { type: 'string', description: 'Candidate caption.' },
+                height: { type: 'number', description: '120-2000 (default 360).' },
+              },
+            },
             description:
               'FRONTEND PREVIEW: 1..3 candidate documents [{ source, title?, height? }] shown side by side in one card; the user picks one and the pick is announced back to you.',
             maxItems: 3,
@@ -1314,7 +1364,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__addon_manage',
-      description: 'Manage Moriko addons — like deepseek plugin_manager. Actions: list | read { id, file? } | write { id, file, content } | enable/disable { id } | install { id, name?, description?, registerCode?, clientCode? } | edit { id, ...same fields } | remove { id } | reload. read/write give direct escalation-free file access inside the addon root (multi-file addons OK). Addon authoring: register.ts exports register(on, $) — on(event, matcher?, handler) hooks with ($, e, next) middleware; $ API: $.tool.register (dynamic tools), $.ui.draw(site, element) for widgets (sites: thread-sidebar, composer-band, right-dock, floating), $.command.register, $.store, $.http, $.fs (addon root), $.workspace (ACTIVE workspace root), $.bus.publish/subscribe (cross-session realtime + browser SSE), $.context.provide(title, lines) (inject live context into EVERY session system prompt), $.clock. Widget component: client/index.tsx, default-export React; realtime via EventSource("/api/addons/events"). Everything applies immediately — no restart.',
+      description: 'Manage Moriko addons — the Addon Manager. Builtin addons are authored in addons-src/<id>/ (always agent-accessible; full file tools also work on addons-src/... paths). Actions: list | read { id, file? } | write { id, file, content } | enable/disable { id } | install { id, name?, description?, registerCode?, clientCode? } | edit { id, ...same fields } | remove { id } (USER-ONLY — always refused for the agent; user removes via the Addon Hub) | reload. read/write/install/edit target the addons-src source for builtin ids (change goes live on the Hub Disable/Reload reseed) and the runtime root for third-party addons (hot-reload). Addon authoring: register.ts exports register(on, $) — on(event, matcher?, handler) hooks with ($, e, next) middleware; $ API: $.tool.register (dynamic tools), $.ui.draw(site, element) for widgets (sites: thread-sidebar, composer-band, right-dock, floating), $.command.register, $.store, $.http, $.fs (addon root), $.workspace (ACTIVE workspace root), $.bus.publish/subscribe (cross-session realtime + browser SSE), $.context.provide(title, lines) (inject live context into EVERY session system prompt), $.clock. Widget component: client/index.tsx, default-export React; realtime via EventSource("/api/addons/events").',
       inputSchema: {
         type: 'object',
         properties: {

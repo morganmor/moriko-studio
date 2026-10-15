@@ -5,6 +5,7 @@ import { coerceText } from '../textUtil.js';
 import { assertOk, iterateSse, type StreamHandler, type StreamParams } from '../sse.js';
 import { resolveSteerPartRefs } from '../attachmentStore.js';
 import { drainSteers, steerTextOf, steersToUserParts } from '../steer.js';
+import { drainInjections, injectionText } from '../addons/inject.js';
 import { buildSystemInstruction } from './openai.js';
 import { gateToolImages, imageCapableFor, separateImageParts, IMAGE_OMITTED_NOTE } from './visionGate.js';
 import {
@@ -476,6 +477,14 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
       } else {
         resultBlocks.push(...blocks);
       }
+    }
+
+    // Addon v2 (A3, Q2): queued addon notices ride the same seam as steers,
+    // as one labeled user block so the model AND the user see the notice.
+    const injections = drainInjections(params.sessionId ?? undefined);
+    for (const entry of injections) {
+      onEvent({ type: 'steer', id: `addon-inject-${entry.id}`, text: `[${entry.addonId}] ${injectionText(entry)}` });
+      resultBlocks.push({ type: 'text', text: `System notice from the ${entry.addonId} addon:\n${injectionText(entry)}` });
     }
 
     convo.push({ role: 'user', content: resultBlocks });

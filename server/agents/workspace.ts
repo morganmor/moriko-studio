@@ -18,6 +18,21 @@ import { agentsFile, conversationDir, morikoHome } from '../paths.js';
 
 const CONFIG_FILE = agentsFile;
 
+/**
+ * ADDON MANAGER — the builtin addon source root (`addons-src/` next to the
+ * server). The Addon Manager mechanism (always-allowed jail + search index
+ * union + addon_manage source redirect) hangs off this one path; null in
+ * packaged builds, where the repo layout does not exist.
+ */
+export function addonsSrcRoot(): string | null {
+  try {
+    const dir = path.resolve(process.cwd(), 'addons-src');
+    return statSync(dir).isDirectory() ? dir : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface AgentWorkspace {
   id: string;
   /** Human label shown by the picker; defaults to the folder name. */
@@ -138,6 +153,11 @@ export function addWorkspace(inputPath: string, label?: string): AgentWorkspace 
     selfHosted: detectSelfHost(normalized),
   };
   persist({ ...store, workspaces: [...store.workspaces, workspace] });
+  // Addon v2 (A3): workspace.bind — observe point.
+  try {
+    const { emitPointAsync } = require('../addons/points.js') as typeof import('../addons/points.js');
+    emitPointAsync('workspace.bind', { workspaceId: workspace.id, path: workspace.path });
+  } catch { /* best-effort */ }
   return workspace;
 }
 
@@ -176,6 +196,11 @@ export function setActiveWorkspace(id: string, sessionId?: string): AgentWorkspa
   } else {
     persist({ ...store, activeId: id });
   }
+  // Addon v2 (A3): workspace.active — observe point.
+  try {
+    const { emitPointAsync } = require('../addons/points.js') as typeof import('../addons/points.js');
+    emitPointAsync('workspace.active', { workspaceId: workspace.id, path: workspace.path, sessionId });
+  } catch { /* best-effort */ }
   return workspace;
 }
 

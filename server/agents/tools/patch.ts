@@ -19,7 +19,7 @@
 import { readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
-import { str, truncateOutput } from './shared.js';
+import { str, truncateOutput, resolveAddonsSrcTarget } from './shared.js';
 import { snapshotFile } from '../vault.js';
 import { buildUnifiedDiff, diffStatFromOps } from '../diff.js';
 import { recordAfterWrite, getReadEntry, hasCurrentRead, readRequiredMessage, staleReadMessage } from '../read-policy.js';
@@ -237,13 +237,19 @@ export async function applyPatchTool(args: Record<string, unknown>, ctx: AgentTo
   }
 
   const ws = getActiveWorkspace(ctx.sessionId);
-  if (!ws) return { ok: false, isError: true, text: 'No active workspace.' };
-
   const targets: Array<{ relPath: string; absolute: string; file: PatchFile }> = [];
   for (const file of files) {
     const relPath = file.newPath || file.oldPath;
-    const absolute = path.resolve(ws.path, relPath);
-    if (!isInsideRoot(absolute, ws.path)) {
+    // Addon Manager: addons-src/… hunks resolve against the addon source root
+    // — they apply even without an active workspace.
+    const addonsSrc = resolveAddonsSrcTarget(relPath);
+    const absolute = addonsSrc ? addonsSrc.absolute : ws ? path.resolve(ws.path, relPath) : null;
+    if (absolute === null) return { ok: false, isError: true, text: 'No active workspace (and no addons-src target in the patch).' };
+    if (addonsSrc) {
+      targets.push({ relPath: addonsSrc.relative, absolute, file });
+      continue;
+    }
+    if (!isInsideRoot(absolute, ws!.path)) {
       return { ok: false, isError: true, text: `Patch target "${relPath}" is outside the workspace root.` };
     }
     snapshotFile(ctx.sessionId, absolute, 'apply_patch');

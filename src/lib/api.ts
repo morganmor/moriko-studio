@@ -15,6 +15,7 @@ import type {
   ProviderPublic,
   Reminder,
   StreamEvent,
+  Todo,
   TreeDelta,
   TreeIgnoreRules,
   TreeViewInfo,
@@ -95,6 +96,52 @@ export async function fetchReminders(sessionId: string): Promise<Reminder[]> {
   if (!response.ok) await parseError(response);
   const payload = (await response.json()) as { reminders?: Reminder[] };
   return payload.reminders ?? [];
+}
+
+// Standalone todos (not tied to a goal — see server/todos/store.ts)
+
+export async function fetchTodos(sessionId: string): Promise<Todo[]> {
+  const response = await fetch(`/api/todos?session=${encodeURIComponent(sessionId)}`);
+  if (!response.ok) await parseError(response);
+  const payload = (await response.json()) as { todos?: Todo[] };
+  return payload.todos ?? [];
+}
+
+export async function createTodoApi(
+  sessionId: string,
+  input: { text: string; priority?: Todo['priority']; notes?: string },
+): Promise<Todo> {
+  const response = await fetch('/api/todos', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session: sessionId, ...input }),
+  });
+  if (!response.ok) await parseError(response);
+  const payload = (await response.json()) as { todo: Todo };
+  return payload.todo;
+}
+
+export async function patchTodoApi(
+  sessionId: string,
+  todoId: string,
+  patch: { text?: string; done?: boolean; priority?: Todo['priority']; notes?: string },
+): Promise<Todo> {
+  const response = await fetch(`/api/todos/${encodeURIComponent(todoId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session: sessionId, ...patch }),
+  });
+  if (!response.ok) await parseError(response);
+  const payload = (await response.json()) as { todo: Todo };
+  return payload.todo;
+}
+
+export async function deleteTodoApi(sessionId: string, todoId: string): Promise<void> {
+  const response = await fetch(
+    `/api/todos/${encodeURIComponent(todoId)}?session=${encodeURIComponent(sessionId)}`,
+    { method: 'DELETE' },
+  );
+  if (!response.ok) await parseError(response);
 }
 
 export async function cancelReminderApi(sessionId: string, reminderId: string): Promise<void> {
@@ -1845,3 +1892,52 @@ export async function reloadHarness(): Promise<void> {
   );
 }
 
+
+/** AGENT WORKFLOWS — merged catalog (built-ins + the user's own). */
+export interface AgentWorkflowDTO {
+  id: string;
+  label: string;
+  hint: string;
+  content: string;
+  builtin: boolean;
+  modified: boolean;
+}
+
+export async function fetchWorkflows(): Promise<AgentWorkflowDTO[]> {
+  try {
+    const response = await fetch('/api/workflows', { cache: 'no-store' });
+    if (!response.ok) return [];
+    const payload = (await response.json()) as { workflows?: AgentWorkflowDTO[] };
+    return Array.isArray(payload.workflows) ? payload.workflows : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveWorkflow(input: {
+  id?: string;
+  label: string;
+  hint: string;
+  content: string;
+}): Promise<AgentWorkflowDTO> {
+  const response = await fetch('/api/workflows', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(text || `workflow save failed (${response.status})`);
+  }
+  const payload = (await response.json()) as { workflow?: AgentWorkflowDTO };
+  if (!payload.workflow) throw new Error('workflow save returned no workflow');
+  return payload.workflow;
+}
+
+export async function deleteWorkflow(id: string): Promise<void> {
+  const response = await fetch(`/api/workflows/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(text || `workflow delete failed (${response.status})`);
+  }
+}

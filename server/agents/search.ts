@@ -15,7 +15,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 
-import { getActiveWorkspace } from './workspace.js';
+import { addonsSrcRoot, getActiveWorkspace } from './workspace.js';
 
 const BLOCK_LINES = 50;
 const MAX_INDEX_FILES = 4000;
@@ -36,6 +36,30 @@ const SKIP_EXTENSIONS = new Set([
   '.pdf', '.docx', '.xlsx', '.pptx',
   '.lock', '.snapshot.json',
 ]);
+
+/**
+ * SEARCH ROOTS — the union the index covers: the ACTIVE workspace root plus
+ * the builtin addon sources (addons-src/, the Addon Manager workspace). The
+ * addon roots ride along in every session — the agent never has to switch
+ * workspaces to search addon code. The second entry is null in packaged
+ * builds, and is dropped when it IS the workspace (the self-hosted case).
+ */
+function searchRoots(sessionId?: string): Array<{ root: string; prefix: string }> {
+  const roots: Array<{ root: string; prefix: string }> = [];
+  const ws = getActiveWorkspace(sessionId);
+  if (ws) roots.push({ root: ws.path, prefix: '' });
+  const src = addonsSrcRoot();
+  if (src && !roots.some((entry) => isSameRoot(entry.root, src))) {
+    roots.push({ root: src, prefix: 'addons-src/' });
+  }
+  return roots;
+}
+
+function isSameRoot(a: string, b: string): boolean {
+  return process.platform === 'win32'
+    ? a.toLowerCase() === b.toLowerCase()
+    : a === b;
+}
 
 interface Doc {
   file: string;
@@ -132,61 +156,92 @@ function walkTextFiles(root: string): string[] {
   return files;
 }
 
-/** Build (or rebuild) the BM25 index for a workspace root. */
-function buildIndex(root: string): Index {
-  const files = walkTextFiles(root);
+/** Build (or rebuild) the BM25 index over the SEARCH ROOTS (workspace +
+ *  addons-src). Docs from the addon roots carry an `addons-src/` path prefix
+ *  so the file references are directly follow-up-able with read_file. */
+function buildIndex(roots: Array<{ root: string; prefix: string }>): Index {
   const docs: Doc[] = [];
   const inverted = new Map<string, Set<number>>();
   let totalBytes = 0;
 
-  for (const file of files) {
-    if (totalBytes >= MAX_INDEX_BYTES) break;
-    let content: string;
-    try { content = readFileSync(path.join(root, file), 'utf8'); } catch { continue; }
-    if (content.includes('\0')) continue;
-    totalBytes += content.length;
-    const pathTokens = new Set(tokenize(file));
-    const lines = content.split('\n');
-    for (let i = 0; i < lines.length; i += BLOCK_LINES) {
-      const block = lines.slice(i, i + BLOCK_LINES).join('\n');
-      const tokens = tokenize(block);
-      if (tokens.length === 0) continue;
-      const docIdx = docs.length;
-      docs.push({ file, lineStart: i + 1, lineCount: Math.min(BLOCK_LINES, lines.length - i), tokens, boostTokens: pathTokens, text: block });
-      for (const token of new Set(tokens)) {
-        let bucket = inverted.get(token);
-        if (!bucket) { bucket = new Set(); inverted.set(token, bucket); }
-        bucket.add(docIdx);
+  for (const { root, prefix } of roots) {
+    for (const file of walkTextFiles(root)) {
+      if (totalBytes >= MAX_INDEX_BYTES) break;
+      let content: string;
+      try { content = readFileSync(path.join(root, file), 'utf8'); } catch { continue; }
+      if (content.includes('\0')) continue;
+      totalBytes += content.length;
+      const displayPath = `${prefix}${file}`;
+      const pathTokens = new Set(tokenize(displayPath));
+      const lines = content.split('\n');
+      for (let i = 0; i < lines.length; i += BLOCK_LINES) {
+        const block = lines.slice(i, i + BLOCK_LINES).join('\n');
+        const tokens = tokenize(block);
+        if (tokens.length === 0) continue;
+        const docIdx = docs.length;
+        docs.push({ file: displayPath, lineStart: i + 1, lineCount: Math.min(BLOCK_LINES, lines.length - i), tokens, boostTokens: pathTokens, text: block });
+        for (const token of new Set(tokens)) {
+          let bucket = inverted.get(token);
+          if (!bucket) { bucket = new Set(); inverted.set(token, bucket); }
+          bucket.add(docIdx);
+        }
       }
     }
   }
 
   const totalLen = docs.reduce((sum, doc) => sum + doc.tokens.length, 0);
-  return { docs, inverted, avgDocLen: docs.length > 0 ? totalLen / docs.length : 0, docCount: docs.length, root };
+  return {
+    docs,
+    inverted,
+    avgDocLen: docs.length > 0 ? totalLen / docs.length : 0,
+    docCount: docs.length,
+    root: roots[0]?.root ?? '',
+  };
 }
 
-/** Get or create the index for the active workspace. */
+/** Cache key for the search-root union (stable even without a workspace). */
+function indexKey(sessionId?: string): string | null {
+  const roots = searchRoots(sessionId);
+  if (roots.length === 0) return null;
+  return roots.map((entry) => entry.root).join('|');
+}
+
+/** Get or create the index covering the workspace + addon sources. */
 function getIndex(sessionId?: string): Index | null {
-  const ws = getActiveWorkspace(sessionId);
-  if (!ws) return null;
-  let idx = indices.get(ws.path);
+  const key = indexKey(sessionId);
+  if (!key) return null;
+  let idx = indices.get(key);
   if (!idx) {
-    idx = buildIndex(ws.path);
-    indices.set(ws.path, idx);
+    idx = buildIndex(searchRoots(sessionId));
+    indices.set(key, idx);
   }
   return idx;
 }
 
-/** F1.3 — incremental invalidation: re-index one file, or drop the whole index. */
+/**
+ * F1.3 — incremental invalidation. `absolutePath` is the written file; the
+ * index that covers its owning root (workspace OR addons-src) re-indexes it.
+ * With no relPath the whole index is dropped (mass change / full rebuild).
+ */
 export function invalidateSearchIndex(root: string, relPath?: string): void {
   if (relPath === undefined) {
-    indices.delete(root);
+    for (const key of indices.keys()) {
+      if (key.split('|').includes(root)) indices.delete(key);
+    }
     return;
   }
-  const idx = indices.get(root);
-  if (!idx) return;
-  const keep = idx.docs.filter((doc) => doc.file !== relPath);
-  const rebuilt: Index = { docs: keep, inverted: new Map(), avgDocLen: idx.avgDocLen, docCount: keep.length, root };
+  for (const [key, idx] of indices) {
+    if (!key.split('|').includes(root)) continue;
+    invalidateInIndex(root, idx, relPath);
+    indices.set(key, idx);
+  }
+}
+
+/** Re-index one file inside one already-built index (old F1.3 behavior). */
+function invalidateInIndex(root: string, idx: Index, relPath: string): void {
+  const displayPath = root === idx.root ? relPath : `addons-src/${relPath}`;
+  const keep = idx.docs.filter((doc) => doc.file !== displayPath);
+  const rebuilt: Index = { docs: keep, inverted: new Map(), avgDocLen: idx.avgDocLen, docCount: keep.length, root: idx.root };
   for (let i = 0; i < keep.length; i += 1) {
     for (const token of new Set(keep[i].tokens)) {
       let bucket = rebuilt.inverted.get(token);
@@ -197,14 +252,14 @@ export function invalidateSearchIndex(root: string, relPath?: string): void {
   try {
     const content = readFileSync(path.join(root, relPath), 'utf8');
     if (!content.includes('\0')) {
-      const pathTokens = new Set(tokenize(relPath));
+      const pathTokens = new Set(tokenize(displayPath));
       const lines = content.split('\n');
       for (let i = 0; i < lines.length; i += BLOCK_LINES) {
         const block = lines.slice(i, i + BLOCK_LINES).join('\n');
         const tokens = tokenize(block);
         if (tokens.length === 0) continue;
         const docIdx = rebuilt.docs.length;
-        rebuilt.docs.push({ file: relPath, lineStart: i + 1, lineCount: Math.min(BLOCK_LINES, lines.length - i), tokens, boostTokens: pathTokens, text: block });
+        rebuilt.docs.push({ file: displayPath, lineStart: i + 1, lineCount: Math.min(BLOCK_LINES, lines.length - i), tokens, boostTokens: pathTokens, text: block });
         for (const token of new Set(tokens)) {
           let bucket = rebuilt.inverted.get(token);
           if (!bucket) { bucket = new Set(); rebuilt.inverted.set(token, bucket); }
@@ -218,7 +273,7 @@ export function invalidateSearchIndex(root: string, relPath?: string): void {
   const totalLen = rebuilt.docs.reduce((sum, doc) => sum + doc.tokens.length, 0);
   rebuilt.avgDocLen = rebuilt.docs.length > 0 ? totalLen / rebuilt.docs.length : 0;
   rebuilt.docCount = rebuilt.docs.length;
-  indices.set(root, rebuilt);
+  Object.assign(idx, rebuilt);
 }
 
 /** BM25 score for a single document given query terms. */
@@ -245,7 +300,7 @@ export interface SearchResult {
   snippet: string;
 }
 
-/** Run a BM25 query against the workspace index. Returns top-K results. */
+/** Run a BM25 query across the workspace + addon sources. Top-K results. */
 export function searchWorkspace(
   query: string,
   limit = 10,
@@ -271,7 +326,6 @@ export function searchWorkspace(
   scored.sort((a, b) => b.score - a.score);
 
   const top = scored.slice(0, limit);
-  const ws = getActiveWorkspace(sessionId)!;
   const results: SearchResult[] = top.map(({ docIdx, score }) => {
     const doc = index.docs[docIdx];
     // F1.3 snippet: window with the highest query-term density in the block.
@@ -293,5 +347,5 @@ export function searchWorkspace(
     return { file: doc.file, line, score: parseFloat(score.toFixed(3)), snippet };
   });
 
-  return { results, totalDocs: index.docs.length, root: ws.path };
+  return { results, totalDocs: index.docs.length, root: index.root };
 }

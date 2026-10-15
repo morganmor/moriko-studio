@@ -97,6 +97,10 @@ export const MESSAGE_CATALOG = {
   'goal.deleted': { text: 'Goal deleted.', tone: 'success', surface: 'notice' },
   'goal.reminderCancelFailed': { text: 'Could not cancel the reminder.', tone: 'error', surface: 'notice' },
 
+  'todo.addFailed': { text: 'Could not add the todo.', tone: 'error', surface: 'notice' },
+  'todo.updateFailed': { text: 'Could not update the todo.', tone: 'error', surface: 'notice' },
+  'todo.deleteFailed': { text: 'Could not delete the todo.', tone: 'error', surface: 'notice' },
+
   'conversations.cleared': { text: 'All conversations cleared.', tone: 'success', surface: 'notice' },
   'conversations.restored': { text: 'Conversation restored.', tone: 'success', surface: 'notice' },
 
@@ -211,6 +215,9 @@ export const MESSAGE_CATALOG = {
 
   'settings.reset': { text: 'Settings reset to defaults.', tone: 'success', surface: 'notice' },
   'settings.presetApplied': { text: 'Applied "{label}".', tone: 'success', surface: 'notice' },
+  'settings.workflowApplied': { text: 'Workflow set to {label}.', tone: 'success', surface: 'notice' },
+  'settings.workflowSaved': { text: 'Workflow "{label}" saved.', tone: 'success', surface: 'notice' },
+  'settings.workflowDeleted': { text: 'Workflow removed.', tone: 'info', surface: 'notice' },
   'settings.modelSelected': { text: '{model} selected.', tone: 'success', surface: 'notice' },
   'settings.modelSelectedImage': { text: '{model} selected for Image Studio.', tone: 'success', surface: 'notice' },
   'settings.promptEmpty': { text: 'Write a system prompt first, then save it.', tone: 'info', surface: 'notice' },
@@ -298,6 +305,14 @@ export const MESSAGE_CATALOG = {
     tone: 'info',
     surface: 'notice',
   },
+
+  /** Addon v2 (A5) — addon UI surfaces (NotificationHost mirror + Hub). */
+  'addon.notify': { text: '{detail}', tone: 'info', surface: 'notice' },
+  'addon.notifyError': { text: '{detail}', tone: 'error', surface: 'notice' },
+  'addon.reloaded': { text: 'Addon reloaded — changes are live.', tone: 'success', surface: 'notice' },
+  'addon.reloadFailed': { text: 'Reload failed — check the Addon Hub logs.', tone: 'error', surface: 'notice' },
+  'addon.reseeded': { text: '{detail} replaced with the newest built-in source.', tone: 'success', surface: 'notice' },
+  'addon.consentGranted': { text: 'Permissions granted — {detail} is now active.', tone: 'success', surface: 'notice' },
 
   'device.unreachableSave': {
     text: 'Device store unreachable — preferences changed now will not be saved.',

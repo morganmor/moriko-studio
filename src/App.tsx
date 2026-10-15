@@ -4,7 +4,9 @@ import { AgentAskUserDialog } from './components/AgentAskUserDialog';
 import { CheckpointRail } from './components/CheckpointRail';
 import { Composer } from './components/Composer';
 import { AddonWidgetHost } from './components/AddonWidgetHost';
+import { AddonNotificationHost } from './components/AddonNotificationHost';
 import { GoalsPanel } from './components/GoalsPanel';
+import { TodoPanel } from './components/TodoPanel';
 import { Sidebar } from './components/Sidebar';
 import { Thread } from './components/Thread';
 import type { ThreadNavigation } from './components/Thread';
@@ -48,11 +50,19 @@ const LazyExplore = lazy(() =>
 const LazyProjectTreePanel = lazy(() =>
   import('./components/ProjectTreePanel').then((m) => ({ default: m.ProjectTreePanel })),
 );
-const LazyAddonPanel = lazy(() =>
-  import('./components/AddonPanel').then((m) => ({ default: m.AddonPanel })),
-);
+// AddonPanel's dock tab is now the AddonDockShortcut → the Hub (A6).
+// LazyAddonPanel intentionally removed; the full manager lives in AddonHub.
 const LazyDiffPanel = lazy(() =>
   import('./components/DiffPanel').then((m) => ({ default: m.DiffPanel })),
+);
+const LazyAddonViewHost = lazy(() =>
+  import('./components/AddonViewHost').then((m) => ({ default: m.AddonViewHost })),
+);
+const LazyAddonHub = lazy(() =>
+  import('./components/AddonHub').then((m) => ({ default: m.AddonHub })),
+);
+const LazyAddonDockShortcut = lazy(() =>
+  import('./components/AddonHub').then((m) => ({ default: m.AddonDockShortcut })),
 );
 
 /**
@@ -254,7 +264,304 @@ export default function App() {
     void useStore.getState().ensureModelMeta();
   }, []);
 
-  const { send, stop, regenerate, regenerateFrom, compactNow } = useChatController();
+  const { send, stop, stopRun, regenerate, regenerateFrom, compactNow } = useChatController();
+
+  /**
+   * RSA/T DISPATCH (agent identity feature): an addon panel asks the host to
+   * spawn a NEW conversation bound to a named agent and auto-send the task.
+   * Flow: newConversation(provider/model of the agent) → title → bind the
+   * conversation to the agent's registry id (rpc bindAgentSession) → send the
+   * prompt. The board then attributes that session's claims/guard/memory to
+    * the agent identity — two sessions on the same model stay two agents.
+    *
+    * COUNCIL: when the ACTIVE conversation is a council, the dispatched agent
+    * lands in a SUB SESSION of that council instead of a new top-level chat —
+    * one RSAT project stays one sidebar row, each agent keeps its own context.
+    * Re-dispatching an agent that already owns a sub session of this council
+    * REUSES it (sends into the existing session) rather than opening another.
+    */
+  useEffect(() => {
+    const onDispatchAgent = async (event: Event) => {
+      const detail = (event as CustomEvent).detail as {
+        providerId: string; model: string; agentId: string; agentName: string;
+        questId: string; questTitle: string; prompt: string; thinkingLevel?: string;
+      };
+      const store = useStore.getState();
+      const host = store.activeConversation();
+      const workspaceId = host?.workspaceId ?? undefined;
+
+      // COUNCIL routing: reuse this agent's sub session when it already has one.
+      const conversationId = host?.councilId
+        ? ensureCouncilSubSession(detail)
+        : (() => {
+            const id = store.newConversation({
+              providerId: detail.providerId,
+              model: detail.model,
+              ...(workspaceId ? { workspaceId } : {}),
+            });
+            store.patchConversation(id, { title: `${detail.agentName} · ${detail.questId}` });
+            return id;
+          })();
+      if (!conversationId) return;
+      applyAgentSessionSettings(conversationId, detail.thinkingLevel);
+      // Bind SEBELUM send — dan TUNGGU hasilnya: prompt fragment identitas
+      // dibangun di server saat request pertama, jadi bind yang masih
+      // in-flight membuat turn pertama (dan klaim pertamanya) tanpa identitas.
+      await bindAgentSessionRpc(detail.agentId, conversationId, detail.questId);
+      void send(detail.prompt, conversationId);
+    };
+    window.addEventListener('moriko:dispatch-agent', onDispatchAgent as EventListener);
+    return () => window.removeEventListener('moriko:dispatch-agent', onDispatchAgent as EventListener);
+  }, [send]);
+
+  /** COUNCIL: create (or reuse) this agent's sub session inside the ACTIVE council. */
+  function ensureCouncilSubSession(agent: {
+    agentId: string; agentName: string; providerId: string; model: string; questId?: string;
+  }): string | null {
+    const store = useStore.getState();
+    const host = store.activeConversation();
+    const councilId = host?.councilId;
+    if (!councilId || !host) return null;
+    const existing = store.conversations.find(
+      (entry) => entry.councilId === councilId && entry.councilRole === 'sub' && entry.councilAgentId === agent.agentId,
+    );
+    if (existing) return existing.id;
+    const subId = store.newConversation({
+      providerId: agent.providerId || undefined,
+      model: agent.model || undefined,
+      workspaceId: host.workspaceId,
+      councilId,
+      councilRole: 'sub',
+      councilAgentId: agent.agentId,
+    });
+    store.patchConversation(subId, { title: agent.questId ? `${agent.agentName} · ${agent.questId}` : `${agent.agentName} · council` });
+    return subId;
+  }
+
+  /** COUNCIL/RSAT: dispatched sessions run as agents with the agent's effort. */
+  function applyAgentSessionSettings(conversationId: string, thinkingLevel?: string): void {
+    const fresh = useStore.getState().conversations.find((entry) => entry.id === conversationId);
+    if (!fresh) return;
+    useStore.getState().patchConversation(conversationId, {
+      settings: {
+        ...fresh.settings,
+        agentMode: true,
+        ...(thinkingLevel ? { thinkingLevel: thinkingLevel as typeof fresh.settings.thinkingLevel } : {}),
+      },
+    });
+  }
+
+  /** RSAT registry bind — await it: the identity fragment builds on first request. */
+  async function bindAgentSessionRpc(agentId: string, sessionId: string, questId: string): Promise<void> {
+    try {
+      const res = await fetch('/api/addons/rsat/rpc/bindAgentSession', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId, sessionId, questId }),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        console.warn(`[rsat] agent bind failed (${res.status}) for ${agentId}:`, text.slice(0, 200));
+      }
+    } catch (error) {
+      console.warn('[rsat] agent bind request failed:', error);
+    }
+  }
+  /**
+   * COUNCIL (Council Agent addon) — the panel asks the host to (a) turn the
+   * ACTIVE conversation into a council container, (b) add a sub session to
+   * the active conversation's council and switch to it, (c) delete a sub
+   * session, or (d) DISPATCH an RSAT agent into a sub session as pure CONTEXT
+   * injection: the directive is queued server-side (council rpc `dispatch`)
+   * and rides the council prompt fragment at the sub session's first fetch —
+   * no user message, no auto-started round. Creation/deletion stays host-owned:
+   * only the store writes conversations; the addon owns membership/policy.
+   */
+  useEffect(() => {
+    const onCreateCouncil = () => {
+      const store = useStore.getState();
+      const active = store.activeConversation();
+      if (!active || active.councilId) return;
+      const councilId = `CL-${Math.random().toString(36).slice(2, 8)}`;
+      store.patchConversation(active.id, { councilId, councilRole: 'main' });
+    };
+    const onCreateSubSession = (event: Event) => {
+      const detail = (event as CustomEvent).detail as { title?: string; agentId?: string } | undefined;
+      const store = useStore.getState();
+      const active = store.activeConversation();
+      const councilId = active?.councilId;
+      if (!active || !councilId) return;
+      const subId = store.newConversation({
+        providerId: active.providerId || undefined,
+        model: active.model || undefined,
+        workspaceId: active.workspaceId,
+        councilId,
+        councilRole: 'sub',
+        councilAgentId: detail?.agentId,
+      });
+      if (detail?.title) store.patchConversation(subId, { title: detail.title });
+      store.selectConversation(subId);
+    };
+    const onDeleteSubSession = (event: Event) => {
+      const detail = (event as CustomEvent).detail as { id?: string } | undefined;
+      if (!detail?.id) return;
+      useStore.getState().executeDeleteConversation(detail.id);
+    };
+    const onCouncilDispatch = (event: Event) => {
+      const detail = (event as CustomEvent).detail as {
+        providerId: string; model: string; agentId: string; agentName: string;
+        thinkingLevel?: string; directive?: string;
+      } | undefined;
+      if (!detail) return;
+      void (async () => {
+        const subId = ensureCouncilSubSession(detail);
+        if (!subId) return;
+        applyAgentSessionSettings(subId, detail.thinkingLevel);
+        await bindAgentSessionRpc(detail.agentId, subId, 'council');
+        const sub = useStore.getState().conversations.find((entry) => entry.id === subId);
+        try {
+          await fetch('/api/addons/council/rpc/dispatch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sessionId: subId,
+              councilId: sub?.councilId,
+              agentName: detail.agentName,
+              text: detail.directive ||
+                `You were dispatched into this council as ${detail.agentName}. Your identity, fellow members and the shared brief are already in your context: run council_status, absorb the brief, then ack with council_ack and await the operator's task.`,
+            }),
+          });
+        } catch { /* directive is best-effort; identity fragment still applies */ }
+        useStore.getState().selectConversation(subId);
+      })();
+    };
+    /**
+     * ORCHESTRATOR (poin 1): user designates an RSAT agent as the orchestrator
+     * of the active council. The main session is bound to that agent's identity
+     * (provider/model/agentMode/thinkingLevel) so speaking to the main session =
+     * speaking to the orchestrator. The council doc records orchestratorAgentId.
+     */
+    const onSetOrchestrator = (event: Event) => {
+      const detail = (event as CustomEvent).detail as {
+        agentId: string; agentName: string; providerId: string; model: string;
+        thinkingLevel?: string;
+      } | undefined;
+      if (!detail) return;
+      const store = useStore.getState();
+      const active = store.activeConversation();
+      if (!active || !active.councilId) return;
+      store.patchConversation(active.id, {
+        providerId: detail.providerId || active.providerId,
+        model: detail.model || active.model,
+        councilAgentId: detail.agentId,
+        settings: {
+          ...active.settings,
+          agentMode: true,
+          ...(detail.thinkingLevel ? { thinkingLevel: detail.thinkingLevel as typeof active.settings.thinkingLevel } : {}),
+        },
+      });
+      void bindAgentSessionRpc(detail.agentId, active.id, 'council');
+      void fetch('/api/addons/council/rpc/setOrchestrator', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // sessionId WAJIB: without it the server resolves the wrong workspace
+        // and the designation is written to a file the panel never reads.
+        body: JSON.stringify({ sessionId: active.id, councilId: active.councilId, orchestratorAgentId: detail.agentId }),
+      }).catch(() => undefined);
+    };
+    /**
+     * COUNCIL STOP (poin 3): the orchestrator's council_stop tool (via bus →
+     * panel → this event) asks the host to abort a sub-agent's running stream.
+     * Server-side abort already happened via api.sessions.abort; this mirrors
+     * the client-side cleanup that stop() does for the active conversation.
+     */
+    const onCouncilStop = (event: Event) => {
+      const detail = (event as CustomEvent).detail as { id?: string } | undefined;
+      if (!detail?.id) return;
+      stopRun(detail.id);
+    };
+    window.addEventListener('moriko:council-create', onCreateCouncil as EventListener);
+    window.addEventListener('moriko:council-sub-create', onCreateSubSession as EventListener);
+    window.addEventListener('moriko:council-sub-delete', onDeleteSubSession as EventListener);
+    window.addEventListener('moriko:council-dispatch', onCouncilDispatch as EventListener);
+    window.addEventListener('moriko:set-orchestrator', onSetOrchestrator as EventListener);
+    window.addEventListener('moriko:council-stop', onCouncilStop as EventListener);
+    return () => {
+      window.removeEventListener('moriko:council-create', onCreateCouncil as EventListener);
+      window.removeEventListener('moriko:council-sub-create', onCreateSubSession as EventListener);
+      window.removeEventListener('moriko:council-sub-delete', onDeleteSubSession as EventListener);
+      window.removeEventListener('moriko:council-dispatch', onCouncilDispatch as EventListener);
+      window.removeEventListener('moriko:set-orchestrator', onSetOrchestrator as EventListener);
+      window.removeEventListener('moriko:council-stop', onCouncilStop as EventListener);
+    };
+  }, [stopRun]);
+
+  /**
+   * COUNCIL BUS BRIDGE — the always-mounted host side of two orchestrator
+   * powers that need a client-side run:
+   *  · 'council:stopped' → mirror the client-side cleanup (abort stream).
+   *  · 'council:wake'    → an IDLE sub-session has no running adapter to drain
+   *    an injected message, so a message to it would sit queued forever (the
+   *    "orchestrator message never arrives" bug). The council addon publishes
+   *    the targets here; this bridge starts their run with the instruction.
+   */
+  useEffect(() => {
+    const onStop = (frame: { id?: number; payload?: Record<string, unknown> }) => {
+      const seen = (window as unknown as { __councilSeenStop?: number }).__councilSeenStop ?? 0;
+      if ((frame.id ?? 0) <= seen) return;
+      (window as unknown as { __councilSeenStop?: number }).__councilSeenStop = frame.id ?? 0;
+      const payload = frame.payload as { conversationId?: string } | null;
+      if (!payload?.conversationId) return;
+      window.dispatchEvent(new CustomEvent('moriko:council-stop', { detail: { id: payload.conversationId } }));
+    };
+    const onWake = (frame: { id?: number; payload?: Record<string, unknown> }) => {
+      // Bus frames replay on reconnect — a monotonic guard keeps each wake once.
+      const seen = (window as unknown as { __councilSeenWake?: number }).__councilSeenWake ?? 0;
+      if ((frame.id ?? 0) <= seen) return;
+      (window as unknown as { __councilSeenWake?: number }).__councilSeenWake = frame.id ?? 0;
+      const payload = frame.payload as { items?: Array<{ sessionId?: string; text?: string }> } | null;
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      for (const item of items) {
+        if (!item?.sessionId || !item?.text) continue;
+        const exists = useStore.getState().conversations.some((entry) => entry.id === item.sessionId);
+        if (!exists) continue;
+        void send(item.text, item.sessionId);
+      }
+    };
+    // HARNESS-EVENT bridge: an addon event for a conversation this tab knows
+    // about lands as a dedicated event turn (own panel) — even while idle.
+    const onHarnessEvent = (frame: { id?: number; payload?: Record<string, unknown> }) => {
+      const seen = (window as unknown as { __seenHarnessEvent?: number }).__seenHarnessEvent ?? 0;
+      if ((frame.id ?? 0) <= seen) return;
+      (window as unknown as { __seenHarnessEvent?: number }).__seenHarnessEvent = frame.id ?? 0;
+      const payload = frame.payload as {
+        conversationId?: string;
+        event?: { id?: string; addonId?: string; level?: string; text?: string; at?: number };
+      } | null;
+      if (!payload?.conversationId || !payload.event?.id || !payload.event.text) return;
+      const known = useStore.getState().conversations.some((entry) => entry.id === payload.conversationId);
+      if (!known) return; // per-session: never leak into other conversations
+      useStore.getState().upsertHarnessEvent(payload.conversationId, {
+        id: payload.event.id,
+        role: 'user',
+        kind: 'harness-event',
+        content: `[${payload.event.addonId ?? 'addon'}] [${payload.event.level ?? 'info'}] ${payload.event.text}`,
+        createdAt: payload.event.at ?? Date.now(),
+        eventAddon: payload.event.addonId ?? 'addon',
+        eventLevel: (payload.event.level ?? 'info') as 'info' | 'warn' | 'block',
+      } as import('./types').Turn);
+    };
+    let unsubscribe: (() => void) | undefined;
+    void import('./addons/host').then(({ onAddonBusFrame }) => {
+      unsubscribe = onAddonBusFrame((frame) => {
+        if (frame.topic === 'council:stopped') onStop(frame);
+        else if (frame.topic === 'council:wake') onWake(frame);
+        else if (frame.topic === 'harness:event') onHarnessEvent(frame);
+      });
+    });
+    return () => { unsubscribe?.(); };
+  }, [send]);
+
   const handleEditTurn = useCallback((turnId: string, content: string) => {
     const conversation = useStore.getState().activeConversation();
     if (conversation) useStore.getState().updateTurn(conversation.id, turnId, { content });
@@ -276,6 +583,7 @@ export default function App() {
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const [goalsOpen, setGoalsOpen] = useState(false);
+  const [todosOpen, setTodosOpen] = useState(false);
 
   /** TURN NAVIGATION — the composer band's arrows call INTO the thread's
    *  pin/glide owner (via onNavigationReady) instead of scrolling raw DOM. */
@@ -582,9 +890,9 @@ export default function App() {
   );
 
   /**
-   * SEND REMINDER — the manual counterpart of the automatic e2e classifier:
-   * one click pushes the server-owned Writing-Rules reminder into the running
-   * generation's context. The bubble shows a fixed label, not the full text.
+   * SEND REMINDER — the user manually pushes the server-owned Writing-Rules
+   * reminder into the running generation's context. The bubble shows a fixed
+   * label, not the full text.
    */
   const handleSendReminder = useCallback((): Promise<
     { id: string | null } | import('./lib/api').SteerFailure
@@ -828,7 +1136,7 @@ export default function App() {
                 {rightPanelMode === 'tree' ? (
                   <LazyProjectTreePanel />
                 ) : rightPanelMode === 'addons' ? (
-                  <LazyAddonPanel />
+                  <LazyAddonDockShortcut />
                 ) : rightPanelMode === 'diff' ? (
                   <LazyDiffPanel />
                 ) : (
@@ -849,22 +1157,25 @@ export default function App() {
         id="workspace"
         className="work"
       >
-        <TopBar
-          title={title}
-          onPickWorkspace={handlePickWorkspace}
-          workspaceLabel={workspaceLabel}
-          onOpenNav={() => setNavOpen(true)}
-          onShare={() => {
-            if (!activeConversation) {
-              showNotice('share.nothing');
-              return;
-            }
-            void navigator.clipboard
-              ?.writeText(`${window.location.origin}/?chat=${activeConversation.id}`)
-              .then(() => showNotice('share.copied'))
-              .catch(() => showNotice('share.clipboardFailed'));
-          }}
-        />
+        {/* View addon = EKSKLUSIF: TopBar chat tidak dirender di atasnya. */}
+        {typeof view === 'string' && view.startsWith('addon:') ? null : (
+          <TopBar
+            title={title}
+            onPickWorkspace={handlePickWorkspace}
+            workspaceLabel={workspaceLabel}
+            onOpenNav={() => setNavOpen(true)}
+            onShare={() => {
+              if (!activeConversation) {
+                showNotice('share.nothing');
+                return;
+              }
+              void navigator.clipboard
+                ?.writeText(`${window.location.origin}/?chat=${activeConversation.id}`)
+                .then(() => showNotice('share.copied'))
+                .catch(() => showNotice('share.clipboardFailed'));
+            }}
+          />
+        )}
 
         {}
         {view === 'imagestudio' ? (
@@ -932,6 +1243,7 @@ export default function App() {
                 onPickWorkspace={handlePickWorkspace}
                 onToggleGoals={() => setGoalsOpen((value) => !value)}
                 goalsOpen={goalsOpen}
+                onToggleTodos={() => setTodosOpen((value) => !value)}
                 onSteer={handleSteer}
                 onSendReminder={handleSendReminder}
                 onNavigateFirstTurn={() => turnNavigation?.toFirstTurn()}
@@ -965,6 +1277,18 @@ export default function App() {
                 <LazyViewBoundary label="Image History">
                   <Suspense fallback={<LazyViewFallback label="Image History" />}>
                     <LazyImageHistoryView />
+                  </Suspense>
+                </LazyViewBoundary>
+              ) : view === 'addons' ? (
+                <LazyViewBoundary label="Addon Hub">
+                  <Suspense fallback={<LazyViewFallback label="Addon Hub" />}>
+                    <LazyAddonHub />
+                  </Suspense>
+                </LazyViewBoundary>
+              ) : typeof view === 'string' && view.startsWith('addon:') ? (
+                <LazyViewBoundary label={view}>
+                  <Suspense fallback={<LazyViewFallback label="Addon view" />}>
+                    <LazyAddonViewHost viewKey={view} />
                   </Suspense>
                 </LazyViewBoundary>
               ) : null}
@@ -1005,7 +1329,7 @@ export default function App() {
                 {rightPanelMode === 'tree' ? (
                   <LazyProjectTreePanel width={dockWidth} />
                 ) : rightPanelMode === 'addons' ? (
-                  <LazyAddonPanel width={dockWidth} />
+                  <LazyAddonDockShortcut width={dockWidth} />
                 ) : rightPanelMode === 'diff' ? (
                   <LazyDiffPanel width={dockWidth} />
                 ) : (
@@ -1037,6 +1361,11 @@ export default function App() {
           <GoalsPanel open onClose={() => setGoalsOpen(false)} />
         </Suspense>
       ) : null}
+      {todosOpen ? (
+        <Suspense fallback={null}>
+          <TodoPanel open onClose={() => setTodosOpen(false)} />
+        </Suspense>
+      ) : null}
       {pendingConfirmDelete ? (
         <Modal
           open
@@ -1063,6 +1392,7 @@ export default function App() {
       ) : null}
       <AgentPermissionDialog />
       <AgentAskUserDialog />
+      <AddonNotificationHost />
       {}
       <AddonWidgetHost site="floating" streaming={streaming} />
     </div>

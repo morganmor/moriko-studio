@@ -18,8 +18,14 @@ export interface ViewAnchor {
   savedAt: number;
 }
 
-/** Valid ViewId members — loadView rejects anything else from a stale file. */
-const VIEW_IDS: readonly ViewId[] = ['playground', 'history', 'imagehistory', 'gallery', 'dashboard', 'imagestudio'];
+/** Valid ViewId members — loadView rejects anything else from a stale file.
+ *  Addon v2 (A6): `addon:<id>/<view>` opens addon-contributed sidebar views;
+ *  `addons` opens the Addon Hub. */
+const VIEW_IDS: readonly ViewId[] = ['playground', 'history', 'imagehistory', 'gallery', 'dashboard', 'imagestudio', 'addons'];
+
+function isValidViewId(value: string): value is ViewId {
+  return VIEW_IDS.includes(value as ViewId) || /^addon:[a-z0-9][a-z0-9-]*\/[\w.-]+$/.test(value);
+}
 
 /**
  * DEVICE STATE — THE BROWSER STORES NOTHING.
@@ -416,6 +422,7 @@ function normalizeStoredConversation(conversation: Conversation): Conversation {
           conversation.settings?.useMcp ??
           (conversation.settings as { functionCalling?: unknown } | undefined)?.functionCalling === true,
         agentMode: conversation.settings?.agentMode ?? false,
+        agentWorkflow: conversation.settings?.agentWorkflow ?? '',
         terminalMode: conversation.settings?.terminalMode ?? 'auto',
         confirmDeletes: conversation.settings?.confirmDeletes ?? false,
         maxContextTokens: conversation.settings?.maxContextTokens ?? null,
@@ -518,7 +525,7 @@ export const storage = {
   /** G2: active top-level view — validated against the ViewId allowlist. */
   loadView: (): ViewId => {
     const value = read<string>(DEVICE_KEYS.view, 'playground');
-    return VIEW_IDS.includes(value as ViewId) ? (value as ViewId) : 'playground';
+    return isValidViewId(value) ? (value as ViewId) : 'playground';
   },
   saveView: (view: ViewId): void => write(DEVICE_KEYS.view, view),
 

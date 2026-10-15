@@ -1,8 +1,0 @@
-{
-  "id": "visual-context",
-  "name": "Visual Context",
-  "version": "0.1.0",
-  "description": "OpenGhost-style conversation visuals: structured stats, timelines, glossaries and bars rendered inline as visual cards. Pure addon - no core engine changes.",
-  "author": "moriko",
-  "enabled": true
-}

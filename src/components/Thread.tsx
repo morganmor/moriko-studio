@@ -1383,6 +1383,20 @@ const MessageRow = memo(function MessageRow({
     );
   }
 
+  // HARNESS-EVENT turn: dedicated addon-event panel — never a user bubble.
+  if (turn.kind === 'harness-event') {
+    return (
+      <div className="cv-auto hevent-row" style={{ width: '100%', padding: '2px 0' }}>
+        <HarnessEventPanel
+          addonId={turn.eventAddon ?? 'addon'}
+          level={turn.eventLevel ?? 'info'}
+          text={turn.content.replace(/^\[[^\]]+\] \[[^\]]+\] /, '')}
+          at={turn.createdAt}
+        />
+      </div>
+    );
+  }
+
   if (turn.role === 'user') {
     return (
       <div className={cx('msg u', isEffectivelyLast && 'last')} style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
@@ -1709,6 +1723,11 @@ const MessageRow = memo(function MessageRow({
         .map((entry, index) => (
           <SteerBubble key={entry.id} entry={entry} offset={index * 2} />
         ))}
+
+      {}
+      {(turn.harnessEvents ?? []).map((entry) => (
+        <HarnessEventPanel key={entry.id} addonId={entry.addonId} level={entry.level} text={entry.text} at={entry.at} />
+      ))}
 
       {turn.finishReason && FINISH_NOTES[turn.finishReason] ? (
         <div className="card" style={{ width: '100%', padding: '10px 16px', borderColor: 'rgb(var(--c-warn) / 0.3)', background: 'rgb(var(--c-warn) / 0.05)' }}>
@@ -2107,7 +2126,7 @@ function InjectionGroupCard({ injections }: { injections: TurnInjection[] }) {
                       </span>
                       <ChevronDown
                         className="chev"
-                        style={{ width: 13, height: 13, flexShrink: 0, color: 'var(--faint)', transition: 'transform .15s', transform: rowOpen ? 'rotate(90deg)' : undefined }}
+                        style={{ width: 13, height: 13, flexShrink: 0, color: 'var(--faint)', transition: 'transform .15s', transform: rowOpen ? 'rotate(180deg)' : undefined }}
                         aria-hidden="true"
                       />
                     </button>
@@ -2143,8 +2162,45 @@ function InjectionGroupCard({ injections }: { injections: TurnInjection[] }) {
  * in and the model output that followed it — never as the thread's last
  * message. Attached images render inline (wire refs become HTTP URLs).
  */
-function SteerBubble({
-  entry,
+/**
+ * HARNESS-EVENT PANEL — an addon event on its own channel. Never a "You"
+ * bubble: a slim full-width strip labeled with the addon id, tinted by level
+ * (info = accent, warn = c-warn, block = c-danger). Rendered for the dedicated
+ * kind:'harness-event' turns (persisted, visible idle) and for live
+ * harnessEvents on the assistant turn.
+ */
+function HarnessEventPanel({ addonId, level, text, at }: { addonId: string; level: 'info' | 'warn' | 'block'; text: string; at?: number }) {
+  const color = level === 'warn' ? 'rgb(var(--c-warn))' : level === 'block' ? 'rgb(var(--c-danger))' : 'rgb(var(--c-accent))';
+  const time = at ? new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
+  return (
+    <div
+      className="hevent"
+      style={{
+        width: '100%', display: 'flex', alignItems: 'flex-start', gap: 8,
+        padding: '7px 12px', borderRadius: 8,
+        border: '1px solid rgb(var(--c-line))',
+        background: 'rgb(var(--c-card))',
+        borderLeft: `2px solid ${color}`,
+      }}
+    >
+      <span
+        aria-hidden="true"
+        style={{ width: 7, height: 7, borderRadius: 999, background: color, marginTop: 5, flexShrink: 0 }}
+      />
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+          <span style={{ fontSize: 10.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--faint)' }}>
+            Harness-Event · {addonId}
+          </span>
+          {time ? <span style={{ fontSize: 10, color: 'var(--faint)' }}>{time}</span> : null}
+        </div>
+        <div style={{ fontSize: 12.5, color: 'var(--ink)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{text}</div>
+      </div>
+    </div>
+  );
+}
+
+function SteerBubble({  entry,
   offset,
 }: {
   entry: { id: string; text: string; parts?: import('../types').TurnSteerPart[] };
@@ -2946,6 +3002,19 @@ function CallRow({
           />
         ) : null}
       </button>
+      {segment.toolName.startsWith('browser_') ? (
+        <button
+          type="button"
+          className="btn xs"
+          style={{ marginTop: -2, marginBottom: 4, marginLeft: 24, fontSize: 10.5, fontFamily: 'var(--f-mono)', borderColor: 'rgb(var(--c-accent) / 0.4)', color: 'rgb(var(--c-accent))' }}
+          onClick={(event) => {
+            event.stopPropagation();
+            openBrowserPanelOnce();
+          }}
+        >
+          ▶ Open Live Browser Panel
+        </button>
+      ) : null}
       <CollapsePanel
         open={open}
         className="tc-panel"
@@ -3017,6 +3086,21 @@ function RunAskBox({ request }: { request: AgentPermissionRequest }) {
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * run-st saat running — cincin 8 piksel + inti bernapas. Piksel tetap lurus di
+ * grid; geraknya gelombang CSS .pxspin (index.css), bukan rotasi. Urutan anak =
+ * posisi cincin lewat :nth-child di sana, jadi jangan menyisipkan <i> di tengah.
+ */
+function PxSpin() {
+  return (
+    <span className="pxspin" aria-hidden="true">
+      <i /><i /><i /><i />
+      <i /><i /><i /><i />
+      <i className="core" />
+    </span>
   );
 }
 
@@ -3259,7 +3343,7 @@ function RunPill({
             {running ? (
               waiting
                 ? <Hand className="ic st-w" aria-hidden="true" />
-                : <span className="pxspin" />
+                : <PxSpin />
             ) : stopped ? (
               <Square className="ic st-s" aria-hidden="true" />
             ) : errCount ? (
@@ -3656,7 +3740,7 @@ function ToolCallCard({
         ) : null}
       </button>
       {}
-      {/^browser_(open|click|type|cursor_move|scroll|screenshot|handover|release|tabs|switch_tab|close_tab)$/.test(call.toolName) ? (
+      {call.toolName.startsWith('browser_') ? (
         <button
           type="button"
           className="btn xs"

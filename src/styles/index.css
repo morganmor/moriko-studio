@@ -43,6 +43,9 @@
     --c-paper:255 255 255;--c-danger:220 38 38;--c-ok:22 163 74;--c-warn:217 119 6;
     /* soft = turunan accent (bukan literal per-theme) → ikut data-accent. */
     --c-accent-soft:color-mix(in srgb, rgb(var(--c-accent)) 14%, #fff);--c-rail-dot:140 146 158;
+    --c-todo-high:220 38 38;--c-todo-medium:217 119 6;--c-todo-low:22 163 74;
+    /* Addon v2 notification host (A5) — center-top toasts. */
+    --c-notify-bg:255 255 255;--c-notify-ink:30 24 20;--c-notify-line:232 226 220;
   }
 
   /* dark theme (neutral charcoal + ember) */
@@ -53,6 +56,8 @@
     --c-accent:var(--ad);--c-accent-ink:24 12 4;--c-bubble:38 38 38;
     --c-shadow:0 0 0;--a-sh:.5;--c-hot:255 236 200;--c-dot:236 236 236;
     --c-accent-soft:color-mix(in srgb, rgb(var(--c-accent)) 22%, rgb(var(--c-canvas)));--c-rail-dot:64 68 78;
+    --c-todo-high:248 113 113;--c-todo-medium:251 191 36;--c-todo-low:74 222 128;
+    --c-notify-bg:30 30 30;--c-notify-ink:236 236 236;--c-notify-line:44 44 44;
   }
 
   /* mocha theme (warm brown) */
@@ -61,6 +66,8 @@
     --c-pop:44 36 32;--c-field:28 23 20;--c-elev:54 43 38;
     --c-line:64 52 46;--c-bubble:54 43 38;
     --c-accent-soft:color-mix(in srgb, rgb(var(--c-accent)) 26%, rgb(var(--c-canvas)));--c-rail-dot:82 70 62;
+    --c-todo-high:248 113 113;--c-todo-medium:251 191 36;--c-todo-low:74 222 128;
+    --c-notify-bg:44 36 32;--c-notify-ink:242 234 228;--c-notify-line:64 52 46;
   }
 
   /* swatch toggle (settings preview) */
@@ -318,6 +325,16 @@
 .title{min-width:60px;max-width:44vw;border:1px solid transparent;border-radius:8px;background:none;padding:4px 8px;font-weight:600;font-size:15px;outline:0;text-overflow:ellipsis}
 .title:not([readonly]):hover{border-color:var(--line)}
 .title:not([readonly]):focus{border-color:rgb(var(--c-accent)/.6);background:rgb(var(--c-field))}
+
+/* ── Council switcher (transparent dropdown below the title button) ── */
+.tb-title-col{display:flex;flex-direction:column;justify-content:center;min-width:0;flex:1;margin-left:4px;position:relative}
+.council-switch-wrap{position:absolute;top:100%;left:0;margin-top:1px;z-index:40}
+.council-switch{display:flex;align-items:center;gap:5px;max-width:min(340px,50vw);height:19px;padding:0 7px;border:1px solid transparent;border-radius:7px;background:none;color:var(--faint);font-size:11.5px;font-weight:500;outline:0}
+.council-switch:hover{border-color:var(--line);color:var(--muted);background:rgb(var(--c-field))}
+.council-switch:focus-visible{border-color:rgb(var(--c-accent)/.6)}
+.council-switch .ic{width:12px;height:12px;flex:none}
+.council-switch-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.council-dot{width:6px;height:6px;border-radius:999px;flex:none;background:rgb(var(--c-accent)/.75)}
 .crumb{display:flex;align-items:center;gap:5px;height:26px;padding:0 9px;border-radius:999px;font-size:12px;color:var(--muted);border:1px solid var(--line);white-space:nowrap}
 .crumb:hover{color:rgb(var(--c-ink));border-color:rgb(var(--c-accent)/.5)}
 .crumb .ic{width:13px;height:13px}
@@ -1731,7 +1748,10 @@ code{font-family:var(--f-mono)}
 .st-w { color: rgb(var(--c-warn)); }
 .st-e { color: rgb(var(--c-danger)); }
 .st-s { color: rgb(var(--c-ink) / 0.42); }
-/* Pixel spinner dari desain: empat titik 2px mengorbit (steps(4)). */
+/* Pixel spinner (2026-10) — cincin 8 piksel 2px pada grid 12px + inti bernapas.
+   Piksel SELALU lurus di grid: geraknya gelombang opacity + glow yang berjalan
+   mengelilingi cincin (pxwave), bukan rotasi. Rotasi kotak piksel (pxs lama,
+   steps(4)) membuat tepinya blur begitu mendarat di 45°. */
 .pxspin {
   position: relative;
   display: inline-block;
@@ -1739,21 +1759,53 @@ code{font-family:var(--f-mono)}
   height: 12px;
   flex: none;
 }
-.pxspin::before {
-  content: "";
+.pxspin i {
   position: absolute;
-  left: 5px;
-  top: 5px;
   width: 2px;
   height: 2px;
   background: rgb(var(--c-accent));
-  box-shadow:
-    -4px -4px 0 rgb(var(--c-accent)),
-    0 -4px 0 rgb(var(--c-accent) / 0.6),
-    4px -4px 0 rgb(var(--c-accent) / 0.3);
-  animation: pxs 0.9s steps(4) infinite;
+  opacity: 0.12;
+  animation: pxwave 0.9s linear infinite;
 }
-@keyframes pxs { to { transform: rotate(360deg); } }
+/* Indeks anak = posisi cincin, urut berlawanan jarum jam: delay negatif
+   memajukan fase, sehingga kepala gelombang (fase 0) berjalan searah jarum jam. */
+.pxspin i:nth-child(1) { left: 0;    top: 0;    animation-delay: 0s; }
+.pxspin i:nth-child(2) { left: 0;    top: 5px;  animation-delay: -0.1125s; }
+.pxspin i:nth-child(3) { left: 0;    top: 10px; animation-delay: -0.225s; }
+.pxspin i:nth-child(4) { left: 5px;  top: 10px; animation-delay: -0.3375s; }
+.pxspin i:nth-child(5) { left: 10px; top: 10px; animation-delay: -0.45s; }
+.pxspin i:nth-child(6) { left: 10px; top: 5px;  animation-delay: -0.5625s; }
+.pxspin i:nth-child(7) { left: 10px; top: 0;    animation-delay: -0.675s; }
+.pxspin i:nth-child(8) { left: 5px;  top: 0;    animation-delay: -0.7875s; }
+.pxspin i.core {
+  left: 5px;
+  top: 5px;
+  animation: pxcore 1.8s ease-in-out infinite alternate;
+}
+/* Profil komet: naik cepat di ujung siklus, ekor meluruh panjang. */
+@keyframes pxwave {
+  0%   { opacity: 1;    box-shadow: 0 0 4px rgb(var(--c-accent) / 0.45); }
+  8%   { opacity: 0.72; box-shadow: 0 0 2px rgb(var(--c-accent) / 0.2); }
+  20%  { opacity: 0.46; box-shadow: none; }
+  34%  { opacity: 0.31; box-shadow: none; }
+  50%  { opacity: 0.23; box-shadow: none; }
+  66%  { opacity: 0.18; box-shadow: none; }
+  82%  { opacity: 0.15; box-shadow: none; }
+  94%  { opacity: 0.13; box-shadow: none; }
+  100% { opacity: 1;    box-shadow: 0 0 4px rgb(var(--c-accent) / 0.45); }
+}
+@keyframes pxcore {
+  from { opacity: 0.16; }
+  to   { opacity: 0.42; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Beku sebagai komet statis: kepala + dua ekor tetap terbaca. */
+  .pxspin i { animation: none; }
+  .pxspin i:nth-child(1) { opacity: 1; }
+  .pxspin i:nth-child(2),
+  .pxspin i:nth-child(8) { opacity: 0.32; }
+  .pxspin i.core { opacity: 0.3; }
+}
 .run-now {
   flex: 1;
   min-width: 0;
@@ -2086,6 +2138,153 @@ code{font-family:var(--f-mono)}
 .rail-dot {
   background-color: rgb(var(--c-rail-dot));
   opacity: 0.7;
+}
+
+/* TODO PRIORITY — small foreground badges; one token per level per theme. */
+.todo-priority {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  line-height: 1.5;
+}
+.todo-priority--high { color: rgb(var(--c-todo-high)); background: rgb(var(--c-todo-high) / 0.12); }
+.todo-priority--medium { color: rgb(var(--c-todo-medium)); background: rgb(var(--c-todo-medium) / 0.12); }
+.todo-priority--low { color: rgb(var(--c-todo-low)); background: rgb(var(--c-todo-low) / 0.12); }
+.todo-priority--high .ic { color: rgb(var(--c-todo-high)); }
+.todo-priority--medium .ic { color: rgb(var(--c-todo-medium)); }
+.todo-priority--low .ic { color: rgb(var(--c-todo-low)); }
+
+/* ============================================================================
+   TODO PANEL — standalone todos (redesign 2026-10): progress bar, quick-add,
+   priority chips, segmented filter, hover row actions. Semua warna baca token
+   --c-* per theme (light/dark/mocha) — tanpa literal.
+   ========================================================================== */
+.todop-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: rgb(var(--c-line));
+  overflow: hidden;
+}
+.todop-bar > div {
+  height: 100%;
+  border-radius: 2px;
+  background: rgb(var(--c-accent));
+  transition: width .25s var(--ease);
+}
+.todop-seg {
+  display: flex;
+  gap: 4px;
+  background: rgb(var(--c-elev) / 0.5);
+  padding: 3px;
+  border-radius: 10px;
+}
+.todop-seg button {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font-size: 12px;
+  height: 28px;
+  padding: 0;
+  border-radius: 8px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.todop-seg button.on {
+  background: rgb(var(--c-canvas));
+  color: rgb(var(--c-ink));
+  box-shadow: 0 0 0 1px rgb(var(--c-line));
+}
+.todop-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  font-size: 11px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.todop-chip:hover { color: rgb(var(--c-ink)); }
+.todop-chip.on {
+  background: rgb(var(--c-accent) / 0.12);
+  border-color: rgb(var(--c-accent) / 0.4);
+  color: rgb(var(--c-ink));
+}
+.todop-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex: none;
+}
+.todop-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 9px 4px;
+  border-bottom: 1px solid rgb(var(--c-line) / 0.6);
+}
+.todop-row:last-child { border-bottom: none; }
+.todop-cb {
+  width: 19px;
+  height: 19px;
+  min-width: 19px;
+  margin-top: 1px;
+  border-radius: 50%;
+  border: 1.5px solid rgb(var(--c-line));
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: transparent;
+  cursor: pointer;
+}
+.todop-cb:hover { border-color: rgb(var(--c-accent)); }
+.todop-cb.done {
+  background: rgb(var(--c-accent));
+  border-color: rgb(var(--c-accent));
+  color: rgb(var(--c-accent-ink));
+}
+.todop-act {
+  opacity: 0;
+  border: none;
+  background: transparent;
+  padding: 4px;
+  height: auto;
+  color: var(--faint);
+  cursor: pointer;
+}
+.todop-row:hover .todop-act,
+.todop-act:focus-visible,
+.todop-act.danger { opacity: 1; }
+.todop-act.danger { color: rgb(var(--c-danger)); }
+.todop-text {
+  border: none;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  line-height: 1.4;
+  overflow-wrap: break-word;
+}
+.todop-text:hover { color: rgb(var(--c-accent)); }
+.todop-empty {
+  text-align: center;
+  padding: 28px 8px;
+  color: var(--muted);
 }
 
 .rail-dot--active {
@@ -3088,3 +3287,233 @@ kbd {
   animation: shimmer 2s infinite ease-in-out;
   pointer-events: none;
 }
+
+
+/* ---------------------------------------------------------------------------
+ * ADDON v2 (A5) — NotificationHost (center-top toasts) + addon UI kit.
+ * All colors read theme tokens (--c-*); no literals.
+ * --------------------------------------------------------------------------- */
+.addon-notify-stack {
+  position: fixed;
+  top: calc(14px + env(safe-area-inset-top, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  z-index: 90;
+  pointer-events: none;
+}
+.addon-notify {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(480px, 86vw);
+  padding: 10px 14px;
+  border: 1px solid rgb(var(--c-notify-line));
+  border-radius: var(--r-md);
+  background: rgb(var(--c-notify-bg));
+  color: rgb(var(--c-notify-ink));
+  box-shadow: 0 10px 32px rgb(var(--c-shadow) / calc(var(--a-sh, .1) * 2.4));
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  animation: addon-notify-in var(--ease) 0.24s both;
+}
+.addon-notify:hover { filter: brightness(1.03); }
+.addon-notify-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: rgb(var(--c-accent-soft));
+  color: rgb(var(--c-accent));
+  font-size: 13px;
+}
+.addon-notify-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.addon-notify-title { font-weight: 600; }
+.addon-notify-sub { color: rgb(var(--c-ink) / var(--a-muted, .66)); font-size: 11.5px; }
+.addon-notify-achievement { border-color: rgb(var(--c-accent) / .55); }
+.addon-notify-achievement .addon-notify-icon { color: rgb(var(--c-accent)); }
+.addon-notify-warn { border-color: rgb(var(--c-warn) / .5); }
+.addon-notify-warn .addon-notify-icon { background: rgb(var(--c-warn) / .14); color: rgb(var(--c-warn)); }
+.addon-notify-error { border-color: rgb(var(--c-danger) / .5); }
+.addon-notify-error .addon-notify-icon { background: rgb(var(--c-danger) / .12); color: rgb(var(--c-danger)); }
+@keyframes addon-notify-in {
+  from { opacity: 0; transform: translateY(-10px) scale(.97); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .addon-notify { animation: none; }
+}
+
+/* Themed kit pieces the addon host surface re-exports (A5). */
+.addon-card {
+  border: 1px solid rgb(var(--c-line));
+  border-radius: var(--r-md);
+  background: rgb(var(--c-card));
+  padding: 12px;
+}
+.addon-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid rgb(var(--c-line));
+  background: rgb(var(--c-elev) / .5);
+  color: rgb(var(--c-ink) / var(--a-muted, .66));
+  font-size: 10.5px;
+  font-weight: 500;
+}
+.addon-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.addon-tab {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: rgb(var(--c-ink) / var(--a-muted, .66));
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.addon-tab.on { background: rgb(var(--c-accent-soft)); color: rgb(var(--c-accent)); font-weight: 600; }
+.addon-progress {
+  height: 6px;
+  border-radius: 4px;
+  background: rgb(var(--c-ink) / .08);
+  overflow: hidden;
+}
+.addon-progress-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: rgb(var(--c-accent));
+  transition: width var(--ease) .3s;
+}
+.addon-widget-slot:empty { display: none; }
+
+/* --- Addon Hub (A6) ------------------------------------------------------ */
+.addon-hub {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 24px 20px 48px;
+}
+.addon-hub-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.addon-hub-title { font-size: 18px; font-weight: 700; }
+.addon-hub-sub { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.addon-hub-list { display: flex; flex-direction: column; gap: 10px; }
+.addon-hub-empty { padding: 24px; font-size: 12.5px; color: var(--muted); text-align: center; }
+.addon-hub-card { display: flex; flex-direction: column; gap: 8px; }
+.addon-hub-card-error { border-color: rgb(var(--c-danger) / .45); }
+.addon-hub-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.addon-hub-id { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.addon-hub-ver { font-size: 11px; color: var(--muted); }
+.addon-hub-legacy {
+  padding: 0 6px;
+  border: 1px solid rgb(var(--c-line));
+  border-radius: 999px;
+  font-size: 10px;
+  color: rgb(var(--c-ink) / var(--a-faint, .42));
+}
+.addon-hub-status {
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.addon-hub-status.tone-ok { background: rgb(var(--c-ok) / .14); color: rgb(var(--c-ok)); }
+.addon-hub-status.tone-warn { background: rgb(var(--c-warn) / .14); color: rgb(var(--c-warn)); }
+.addon-hub-status.tone-danger { background: rgb(var(--c-danger) / .12); color: rgb(var(--c-danger)); }
+.addon-hub-status.tone-muted { background: rgb(var(--c-ink) / .07); color: rgb(var(--c-ink) / var(--a-muted, .66)); }
+.addon-hub-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.addon-hub-desc { font-size: 12px; color: var(--muted); }
+.addon-hub-error { font-size: 12px; color: rgb(var(--c-danger)); }
+.addon-hub-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.addon-hub-detail {
+  border-top: 1px dashed rgb(var(--c-line));
+  padding-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.addon-hub-consent {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid rgb(var(--c-warn) / .45);
+  border-radius: var(--r-sm);
+  background: rgb(var(--c-warn) / .07);
+  font-size: 12px;
+}
+.addon-perm-table { width: 100%; margin-top: 8px; border-collapse: collapse; font-size: 12px; }
+.addon-perm-table td { padding: 4px 8px 4px 0; border-bottom: 1px solid rgb(var(--c-line) / .6); color: var(--muted); }
+.addon-hub-logcard {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--f-mono);
+  font-size: 11.5px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.addon-log-line { display: flex; gap: 10px; padding: 2px 0; color: rgb(var(--c-ink) / .85); }
+.addon-log-line.lvl-error { color: rgb(var(--c-danger)); }
+.addon-log-line.lvl-warn { color: rgb(var(--c-warn)); }
+.addon-log-time { flex: none; color: rgb(var(--c-ink) / var(--a-faint, .42)); }
+
+/* --- Addon sidebar section (A6) — reuses SectionLabel/NavGroup/SubItem;
+     only the status dot on the group icon is custom. ----------------------- */
+.addon-ic { position: relative; display: inline-flex; }
+/* Logo bawaan addon (manifest icon) — mask + currentColor agar ikut tema. */
+.addon-ic-img {
+  display: block;
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+.addon-ic-dot {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: rgb(var(--c-rail-dot));
+}
+/* TopBar "Open RSA/T board": gem pixel yang sama dengan logo addon di sidebar. */
+.rsat-gem-ic {
+  display: block;
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+.addon-ic-dot.dot-ok { background: rgb(var(--c-ok)); box-shadow: 0 0 0 2px rgb(var(--c-ok) / .18); }
+.addon-ic-dot.dot-warn { background: rgb(var(--c-warn)); }
+.addon-ic-dot.dot-danger { background: rgb(var(--c-danger)); }
+.addon-ic-dot.dot-muted { background: rgb(var(--c-rail-dot)); }

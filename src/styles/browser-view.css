@@ -119,7 +119,10 @@
   width: 100%;
   height: 100%;
   display: block;
-  object-fit: fill;
+  /* contain, never fill: `fill` stretches the video to the frame and breaks
+   * the aspect ratio (elongated/squashed pages). The panel JS keeps the frame
+   * matched to the viewport aspect, so contain never letterboxes in practice. */
+  object-fit: contain;
   background: #0b0c0e;
 }
 

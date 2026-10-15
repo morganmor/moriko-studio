@@ -13,31 +13,15 @@
 import { createHash } from 'node:crypto';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, num, truncateOutput, requireGoalSession } from './shared.js';
+import { resolveAddonsSrcTarget } from './shared.js';
 import { queryDeps } from '../deps.js';
 import { fuzzyHint } from '../fuzzy.js';
 import { getActiveWorkspace, isInsideRoot } from '../workspace.js';
 import { createReminder, listReminders, renderReminder } from '../../reminders/store.js';
 import path from 'node:path';
 
-export function depsTool(args: Record<string, unknown>, ctx: AgentToolContext): HarnessToolResult {
-  const inputPath = str(args, 'path').trim();
-  if (!inputPath) {
-    return { ok: false, isError: true, text: 'deps needs a "path" (file relative to the workspace root).' };
-  }
-  const ws = getActiveWorkspace(ctx.sessionId);
-  if (!ws) return { ok: false, isError: true, text: 'No active workspace — set one in the workspace picker first.' };
-  const absolute = path.resolve(ws.path, inputPath);
-  if (!isInsideRoot(absolute, ws.path)) {
-    return { ok: false, isError: true, text: `"${inputPath}" is outside the workspace root.` };
-  }
-  const report = queryDeps(ws.path, absolute);
-  if (!report) {
-    return {
-      ok: false,
-      isError: true,
-      text: `No import-graph edges for "${inputPath}"${fuzzyHint(absolute)} — it is outside the JS/TS family (ts/tsx/js/jsx/mjs/cjs), or nothing imports it and it imports nothing tracked.`,
-    };
-  }
+/** Render a queryDeps report as the tool's text output. */
+function renderDeps(report: NonNullable<ReturnType<typeof queryDeps>>): string {
   const parts: string[] = [`# import graph — ${report.file} (${report.filesScanned} file(s) scanned)`];
   parts.push('');
   parts.push(`imports (${report.imports.length}):`);
@@ -56,7 +40,39 @@ export function depsTool(args: Record<string, unknown>, ctx: AgentToolContext): 
     `blast radius: ${report.reachableDependents} file(s) reachable through the import chain (BFS radius ≤ 3). ` +
       'Signature/type changes here propagate to all of them — run their tests after editing.',
   );
-  return { ok: true, isError: false, text: truncateOutput(parts.join('\n')) };
+  return truncateOutput(parts.join('\n'));
+}
+
+export function depsTool(args: Record<string, unknown>, ctx: AgentToolContext): HarnessToolResult {
+  const inputPath = str(args, 'path').trim();
+  if (!inputPath) {
+    return { ok: false, isError: true, text: 'deps needs a "path" (file relative to the workspace root).' };
+  }
+  // Addon Manager: addons-src/… resolves against the addon source root
+  // even without a workspace.
+  const addonsSrc = resolveAddonsSrcTarget(inputPath);
+  if (addonsSrc) {
+    const report = queryDeps(path.dirname(addonsSrc.absolute), addonsSrc.absolute);
+    if (!report) {
+      return { ok: false, isError: true, text: `No import-graph edges for "${inputPath}" — it is outside the JS/TS family (ts/tsx/js/jsx/mjs/cjs), or nothing imports it and it imports nothing tracked.` };
+    }
+    return { ok: true, isError: false, text: renderDeps(report) };
+  }
+  const ws = getActiveWorkspace(ctx.sessionId);
+  if (!ws) return { ok: false, isError: true, text: 'No active workspace — set one in the workspace picker first.' };
+  const absolute = path.resolve(ws.path, inputPath);
+  if (!isInsideRoot(absolute, ws.path)) {
+    return { ok: false, isError: true, text: `"${inputPath}" is outside the workspace root.` };
+  }
+  const report = queryDeps(ws.path, absolute);
+  if (!report) {
+    return {
+      ok: false,
+      isError: true,
+      text: `No import-graph edges for "${inputPath}"${fuzzyHint(absolute)} — it is outside the JS/TS family (ts/tsx/js/jsx/mjs/cjs), or nothing imports it and it imports nothing tracked.`,
+    };
+  }
+  return { ok: true, isError: false, text: renderDeps(report) };
 }
 
 export function hashTool(args: Record<string, unknown>): HarnessToolResult {

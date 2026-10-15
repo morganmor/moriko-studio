@@ -19,6 +19,7 @@ import { insertAtLineTool } from './insertAtLine.js';
 import { writeTool } from './write.js';
 import { renameTool, moveTool, copyTool, deleteTool } from './transfer.js';
 import { goalCreateTool, goalUpdateTool, goalListTool } from './goals.js';
+import { todoCreateTool, todoUpdateTool, todoListTool, todoDeleteTool } from './todos.js';
 import { fetchTool, downloadTool } from './net.js';
 import { vaultListTool, vaultRestoreTool } from './vault.js';
 import { runTool, gitTool } from './terminal.js';
@@ -129,6 +130,14 @@ export async function callAgentTool(
         return await goalUpdateTool(callArgs, callCtx);
       case 'goal_list':
         return await goalListTool(callArgs, callCtx);
+      case 'todo_create':
+        return await todoCreateTool(callArgs, callCtx);
+      case 'todo_update':
+        return await todoUpdateTool(callArgs, callCtx);
+      case 'todo_list':
+        return await todoListTool(callArgs, callCtx);
+      case 'todo_delete':
+        return await todoDeleteTool(callArgs, callCtx);
       case 'fetch':
         return await fetchTool(callArgs, callCtx);
       case 'download':
@@ -337,6 +346,7 @@ export async function callAgentTool(
           text:
             `Unknown agent tool "${call.wireName}". Available: agent__list, agent__grep, agent__read_file, agent__read_all, agent__edit_file, agent__write, agent__multi_edit, agent__edit_lines, agent__edit_between, agent__insert_at_line, ` +
             'agent__rename, agent__move, agent__copy, agent__delete, agent__goal_create, agent__goal_update, agent__goal_list, ' +
+            'agent__todo_create, agent__todo_update, agent__todo_list, agent__todo_delete, ' +
             'agent__fetch, agent__download, agent__vault_list, agent__vault_restore, agent__run, agent__git, ' +
             'agent__remind, agent__harness_reload, agent__vision, agent__vision_status, ' +
             'agent__explain_error, agent__search, agent__batch_read, agent__checkpoint, agent__undo, ' +

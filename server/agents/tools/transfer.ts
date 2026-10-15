@@ -13,12 +13,13 @@ import path from 'node:path';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import {
   str, bool,
-  resolveWithPermission, resolveManyWithPermission, requireWorkspace,
+  resolveWithPermission, resolveManyWithPermission, requireWorkspace, isInsideAddonsSrc,
   MAX_WALK_DEPTH,
 } from './shared.js';
 import { requestApproval } from '../permissions.js';
 import { snapshotFile, snapshotTree } from '../vault.js';
 import { fuzzyHint } from '../fuzzy.js';
+import { recordFsChange } from '../read-policy.js';
 
 /**
  * Shared move/copy core. Both source and destination resolve through the
@@ -113,6 +114,16 @@ async function transferTool(
   }
 
   const verb = mode === 'copy' ? 'Copied' : 'Moved';
+  // Addon v2 (A3): fs.change — move/rename/copy.
+  try {
+    recordFsChange({
+      sessionId: ctx.sessionId,
+      path: to.absolute,
+      op: mode === 'copy' ? 'copy' : 'rename',
+      tool: mode === 'copy' ? 'agent__copy' : 'agent__move',
+      from: from.absolute,
+    });
+  } catch { /* best-effort */ }
   return {
     ok: true,
     isError: false,
@@ -159,6 +170,10 @@ export async function renameTool(args: Record<string, unknown>, ctx: AgentToolCo
   const newRelative = source.outside
     ? destination
     : path.join(path.dirname(source.relative), name).split(path.sep).join('/');
+  // Addon v2 (A3): fs.change — rename.
+  try {
+    recordFsChange({ sessionId: ctx.sessionId, path: destination, op: 'rename', tool: 'agent__rename', from: source.absolute });
+  } catch { /* best-effort */ }
   return { ok: true, isError: false, text: `Renamed ${source.relative} → ${newRelative}.` };
 }
 
@@ -178,6 +193,18 @@ export async function deleteTool(args: Record<string, unknown>, ctx: AgentToolCo
 
   const { root } = requireWorkspace(ctx);
   const { absolute, relative } = await resolveWithPermission('delete', inputPath, ctx, 'write');
+
+  // Addon Manager: addon sources are USER-ONLY. The agent never deletes
+  // addons — the user removes them via the Addon Hub's Remove button.
+  if (isInsideAddonsSrc(absolute)) {
+    return {
+      ok: false,
+      isError: true,
+      text:
+        `Refusing to delete "${relative}" — addon sources under addons-src/ are user-only. ` +
+        'The agent cannot delete addons; ask the user to remove the addon via the Addon Hub.',
+    };
+  }
 
   if (path.resolve(absolute) === path.resolve(root)) {
     return { ok: false, isError: true, text: 'Refusing to delete the workspace root itself.' };
@@ -231,6 +258,10 @@ export async function deleteTool(args: Record<string, unknown>, ctx: AgentToolCo
       text: `Delete failed: ${error instanceof Error ? error.message : 'filesystem error'}`,
     };
   }
+  // Addon v2 (A3): fs.change — delete.
+  try {
+    recordFsChange({ sessionId: ctx.sessionId, path: absolute, op: 'delete', tool: 'agent__delete' });
+  } catch { /* best-effort */ }
   return {
     ok: true,
     isError: false,

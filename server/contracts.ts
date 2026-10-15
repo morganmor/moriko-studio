@@ -160,6 +160,11 @@ export interface ChatSettingsDTO {
    */
   agentMode: boolean;
   /**
+   * AGENT WORKFLOW: which working doctrine the harness injects each agent
+   * turn. Empty string = follow the server default (frontend-first).
+   */
+  agentWorkflow: string;
+  /**
    * Terminal execution for the agent harness: 'off' (no run/git tools at
    * all), 'ask' (each command shows a permission dialog with the exact
    * command line), 'auto' (commands run without dialogs — clone/push still
@@ -452,11 +457,26 @@ export type StreamEvent =
       goals: import('./goals/store.js').Goal[];
     }
   | {
+      /** The standalone todo store changed for this session (agent tool or user action). */
+      type: 'todos_state';
+      sessionId: string;
+      todos: import('./todos/store.js').Todo[];
+    }
+  | {
       /** A built-in system prompt block the harness added to the context. */
       type: 'harness_injection';
       id: string;
       title: string;
       content: string;
+    }
+  | {
+      /** HARNESS-EVENT: an addon event for THIS conversation only (own panel). */
+      type: 'harness_event';
+      id: string;
+      addonId: string;
+      level: 'info' | 'warn' | 'block';
+      text: string;
+      at: number;
     }
   | {
       /** The agent wants to touch paths OUTSIDE the workspace — user must decide. */

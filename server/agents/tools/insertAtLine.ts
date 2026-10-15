@@ -8,6 +8,7 @@
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, bool } from './shared.js';
 import { resolveWriteTarget, loadEditable, finishEdit } from './edit-core.js';
+import { isInsertionPointCovered, formatReadIntervals } from '../read-policy.js';
 
 interface InsertSpec {
   line: number | null;
@@ -38,10 +39,13 @@ export async function insertAtLineTool(args: Record<string, unknown>, ctx: Agent
 
   const crlf = content.includes('\r\n');
   const base = crlf ? content.replace(/\r\n/g, '\n') : content;
-  const rawLines = base.split('\n');
+  // BUG (file kosong): base === '' dulu di-split jadi [''] sehingga append
+  // menghasilkan "\nhello" — baris kosong ekstra di baris 1. Sekarang file
+  // kosong = tidak ada baris ([]) dan trailing newline ditambahkan eksplisit.
+  const rawLines = base === '' ? [] : base.split('\n');
   const view = rawLines.length > 1 && rawLines[rawLines.length - 1] === '' ? rawLines.slice(0, -1) : rawLines;
 
-  const insertAt = insert.spec.append ? view.length + 1 : insert.spec.line as number;
+  const insertAt = insert.spec.append ? view.length + 1 : (insert.spec.line as number);
   if (insertAt > view.length + 1) {
     return {
       ok: false, isError: true,
@@ -50,12 +54,11 @@ export async function insertAtLineTool(args: Record<string, unknown>, ctx: Agent
   }
 
   if (readEntry && readEntry.toLine < Number.MAX_SAFE_INTEGER) {
-    const touches = insertAt >= readEntry.fromLine && insertAt <= readEntry.toLine + 1;
-    if (!touches) {
+    if (!isInsertionPointCovered(readEntry, insertAt)) {
       return {
         ok: false, isError: true,
         text:
-          `insertion before line ${insertAt} is outside your read window (${readEntry.fromLine}–${readEntry.toLine}) for "${relative}". ` +
+          `insertion before line ${insertAt} is outside your read window (${formatReadIntervals(readEntry)}) for "${relative}". ` +
           `Insert only where you have actually seen the neighborhood. ` +
           `Next step: agent__read_file path="${relative}" offsetLine=${Math.max(1, insertAt - 10)} maxLines=25, then retry.`,
       };
@@ -66,9 +69,26 @@ export async function insertAtLineTool(args: Record<string, unknown>, ctx: Agent
   if (newLines.length === 0) {
     return { ok: false, isError: true, text: 'Insert needs non-empty "newString" content (an empty insert would be a no-op).' };
   }
+
   const at = insertAt - 1;
+  // Guard idempoten: panggilan insert_at_line ganda dengan blok identik di
+  // titik yang sama tidak menulis duplikat — dilaporkan sebagai sudah ada.
+  const nonEmptyNew = newLines.filter((l) => l.trim().length > 0);
+  if (nonEmptyNew.length >= 2) {
+    const sliceAfter = view.slice(at, at + newLines.length).join('\n');
+    const sliceBefore = at >= newLines.length ? view.slice(at - newLines.length, at).join('\n') : '';
+    const candidate = newLines.join('\n');
+    if (sliceAfter === candidate || sliceBefore === candidate) {
+      return {
+        ok: true,
+        isError: false,
+        text: `already inserted — the exact ${newLines.length}-line block is already present adjacent to line ${insertAt} in ${relative}. No duplicate lines were written.`,
+      };
+    }
+  }
+
   let next = [...view.slice(0, at), ...newLines, ...view.slice(at)].join('\n');
-  if (base.endsWith('\n') && !next.endsWith('\n')) next += '\n';
+  if ((base.endsWith('\n') || base === '') && !next.endsWith('\n')) next += '\n';
   if (crlf) next = next.replace(/\n/g, '\r\n');
 
   return finishEdit(

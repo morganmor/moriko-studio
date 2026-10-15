@@ -25,6 +25,7 @@ import {
 } from '../read-policy.js';
 import { sha256 } from '../edit-diagnostics.js';
 import { fuzzyHint } from '../fuzzy.js';
+import { normalizeHashInput } from './edit-core.js';
 import { noteImageRead } from './vision-policy.js';
 
 /**
@@ -33,7 +34,16 @@ import { noteImageRead } from './vision-policy.js';
  */
 export function foldModeResult(content: string, relative: string, maxDepthRaw: unknown): HarnessToolResult {
   const result = foldContent(content, relative);
+  const rawDepth = typeof maxDepthRaw === 'number' && Number.isFinite(maxDepthRaw) ? maxDepthRaw : undefined;
+  const maxDepth = Math.min(Math.max(Math.trunc(rawDepth ?? 2), 1), 8);
+
+  // MARKDOWN HEADING FOLD: no brace scanner for .md/.mdx — fold by the
+  // #/##/### heading hierarchy instead of refusing.
   if (result.scanned === 'none') {
+    const ext = path.extname(relative).toLowerCase();
+    if (ext === '.md' || ext === '.mdx') {
+      return markdownHeadingFold(content, relative, maxDepth);
+    }
     return {
       ok: true,
       isError: false,
@@ -42,17 +52,7 @@ export function foldModeResult(content: string, relative: string, maxDepthRaw: u
         'Fall back to read_file (window mode).',
     };
   }
-  if (!result.balanced) {
-    return {
-      ok: true,
-      isError: false,
-      text:
-        `# fold ${relative} — no map: braces/quotes did not balance, so the scan would be unreliable. ` +
-        'Fall back to read_file (window mode) — or fix the file first if it is actually broken.',
-    };
-  }
-  const rawDepth = typeof maxDepthRaw === 'number' && Number.isFinite(maxDepthRaw) ? maxDepthRaw : undefined;
-  const maxDepth = Math.min(Math.max(Math.trunc(rawDepth ?? 2), 1), 8);
+
   const countBlocks = (list: FoldBlock[]): number => list.reduce((n, x) => n + 1 + countBlocks(x.children), 0);
   const totalBlocks = countBlocks(result.blocks);
   const rows: string[] = [];
@@ -75,6 +75,23 @@ export function foldModeResult(content: string, relative: string, maxDepthRaw: u
     budgetLeft -= row.length + 1;
     for (const child of block.children) render(child, depth + 1);
   };
+
+  // FAULT-TOLERANT FOLD: unbalanced braces/quotes used to discard the whole
+  // map; if the scanner still produced blocks, show the PARTIAL map with a
+  // loud warning instead of leaving the model mapless.
+  const partialNote = !result.balanced
+    ? 'WARNING: unbalanced braces/quotes — partial fold map; line ranges past the first imbalance may be shifted'
+    : '';
+  if (!result.balanced && result.blocks.length === 0) {
+    return {
+      ok: true,
+      isError: false,
+      text:
+        `# fold ${relative} — no map: braces/quotes did not balance, so the scan would be unreliable. ` +
+        'Fall back to read_file (window mode) — or fix the file first if it is actually broken.',
+    };
+  }
+
   for (const block of result.blocks) render(block, 0);
   if (rows.length === 0) {
     return {
@@ -84,6 +101,7 @@ export function foldModeResult(content: string, relative: string, maxDepthRaw: u
     };
   }
   const notes: string[] = [];
+  if (partialNote) notes.push(partialNote);
   if (shown < totalBlocks) {
     notes.push(
       capStopped
@@ -98,6 +116,46 @@ export function foldModeResult(content: string, relative: string, maxDepthRaw: u
     text: truncateOutput(
       `# fold ${relative} — ${shown}/${totalBlocks} block(s), depth ≤ ${maxDepth}\n${rows.join('\n')}` +
         (notes.length > 0 ? `\n[${notes.join(' · ')}]` : ''),
+    ),
+  };
+}
+
+function markdownHeadingFold(content: string, relative: string, maxDepth: number): HarnessToolResult {
+  const lines = content.replace(/\r\n/g, '\n').split('\n');
+  interface HeadingBlock { level: number; from: number; title: string; }
+  const headings: HeadingBlock[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const m = /^(#{1,6})\s+\S/.exec(lines[i]);
+    if (m) headings.push({ level: m[1].length, from: i + 1, title: lines[i].trim() });
+  }
+  if (headings.length === 0) {
+    return {
+      ok: true,
+      isError: false,
+      text: `# fold ${relative} — no markdown headings found. read_file it directly (window mode).`,
+    };
+  }
+  const rows: string[] = [];
+  let budgetLeft = MAX_OUTPUT_CHARS - 400;
+  for (let h = 0; h < headings.length; h += 1) {
+    if (budgetLeft <= 0) { rows.push('  … (stopped at the output budget)'); break; }
+    const head = headings[h];
+    let to = lines.length;
+    for (let k = h + 1; k < headings.length; k += 1) {
+      if (headings[k].level <= head.level) { to = headings[k].from - 1; break; }
+    }
+    const indent = '  '.repeat(Math.min(head.level - 1, maxDepth - 1));
+    const row = `${indent}${head.title}   ⋯ ${to - head.from + 1} line(s) (${head.from}–${to})`;
+    rows.push(row);
+    budgetLeft -= row.length + 1;
+  }
+  const depth = Math.min(maxDepth, 6);
+  return {
+    ok: true,
+    isError: false,
+    text: truncateOutput(
+      `# fold ${relative} — ${headings.length} heading block(s), depth ≤ ${depth} (markdown heading fold)\n${rows.join('\n')}` +
+        `\n[fold map only — NOT a read receipt; read_file the heading region you intend to edit]`,
     ),
   };
 }
@@ -280,7 +338,9 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
     };
   }
 
-  const lastHash = str(args, 'lastHash').trim();
+  // Hash dari footer read_file tercetak "sha256:a1b2c3d4e5f6" — model sering
+  // menyalin string itu UTUH; normalizeHashInput melucuti prefix-nya.
+  const lastHash = normalizeHashInput(str(args, 'lastHash'));
   if (lastHash) {
     if (lastHash.length < 8) {
       return {
@@ -289,12 +349,20 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
       };
     }
     if (contentHash.startsWith(lastHash)) {
-      const refreshed = recordRead(ctx.sessionId, absolute, content, stats.mtimeMs, 1, Math.max(view.length, 1));
+      // Temuan A: jangan pernah recordRead(1..view.length) di sini — itu
+      // membuka paksa izin baca SELURUH file walau model hanya pernah membaca
+      // sebagian kecil. Pertahankan interval baca yang sudah ada persis.
+      // recordRead menggabungkan interval dengan hash yang sama, sehingga
+      // memasok kembali rentang milik existing adalah no-union + rev bump.
+      const existing = getReadEntry(ctx.sessionId, absolute);
+      const refreshed = existing
+        ? recordRead(ctx.sessionId, absolute, content, stats.mtimeMs, existing.fromLine, existing.fromLine)
+        : undefined;
       return {
         ok: true,
         isError: false,
         text:
-          `unchanged — ${relative} still matches sha256:${contentHash.slice(0, 12)} (receipt read#${refreshed?.rev ?? 1} refreshed); ` +
+          `unchanged — ${relative} still matches sha256:${contentHash.slice(0, 12)} (receipt read#${refreshed?.rev ?? existing?.rev ?? 1} preserved); ` +
           'the window you already hold stays authoritative. Pass lastHash again to re-check, or drop it to re-render.',
       };
     }
@@ -414,13 +482,16 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
     const header = `# ${relative} — multi-range read of ${view.length}-line file`;
     const slices: string[] = [header];
     let budgetLeft = MAX_OUTPUT_CHARS - header.length - 300;
-    let lastFrom = 1;
-    let lastTo = 1;
+    // Receipt PER RANGE, pada baris yang BENAR-BENAR ter-render (bukan harga
+    // awal range) — recordRead penggabungan intervalnya (multi-interval)
+    // menjaga semua range tetap sah untuk diedit, bukan hanya range terakhir.
+    const recordedRanges: Array<{ from: number; to: number }> = [];
     let lastRev = 1;
     for (const range of parsed) {
       const label = `── lines ${range.from}–${range.to}`;
       slices.push(label);
       budgetLeft -= label.length + 1;
+      let actualRangeEnd = range.from - 1;
       for (let n = range.from; n <= range.to; n += 1) {
         const row = `${String(n).padStart(5)}| ${view[n - 1]}${showWhitespace ? whitespaceAnnotation(view[n - 1]) : ''}`;
         if (row.length + 1 > budgetLeft) {
@@ -430,16 +501,21 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
         }
         slices.push(row);
         budgetLeft -= row.length + 1;
+        actualRangeEnd = n;
       }
-      const receipt = recordRead(ctx.sessionId, absolute, content, stats.mtimeMs, range.from, range.to);
-      lastFrom = range.from;
-      lastTo = range.to;
-      lastRev = receipt?.rev ?? 1;
+      if (actualRangeEnd >= range.from) {
+        const receipt = recordRead(ctx.sessionId, absolute, content, stats.mtimeMs, range.from, actualRangeEnd);
+        recordedRanges.push({ from: range.from, to: actualRangeEnd });
+        lastRev = receipt?.rev ?? lastRev;
+      }
       if (budgetLeft < 0) break;
     }
+    const rangesLabel = recordedRanges.length > 0
+      ? recordedRanges.map((r) => `${r.from}–${r.to}`).join(', ')
+      : 'none rendered';
     slices.push(
-      `[${relative} | ranges ${parsed.map((r) => `${r.from}–${r.to}`).join(', ')} of ${view.length} | ${eol} | utf-8 | ` +
-        `sha256:${contentHash.slice(0, 12)} | read#${lastRev} retained for lines ${lastFrom}–${lastTo}]`,
+      `[${relative} | ranges ${rangesLabel} of ${view.length} | ${eol} | utf-8 | ` +
+        `sha256:${contentHash.slice(0, 12)} | read#${lastRev} receipt retained per range]`,
     );
     return { ok: true, isError: false, text: truncateOutput(slices.join('\n')) };
   }
@@ -466,16 +542,16 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
   const editedTag = priorEntry?.lastOp === 'write' ? ' · edited' : '';
 
   const plannedEnd = Math.min(startLine - 1 + windowMax, view.length);
-  const plannedNext = plannedEnd < view.length ? `r:${plannedEnd + 1}:${windowMax}` : null;
-  const footer =
-    `[${relative} | lines ${startLine}–${plannedEnd} of ${view.length} | ${eol} | utf-8 | sha256:${contentHash.slice(0, 12)}]` +
-    (plannedNext ? `\n[next: "${plannedNext}"]` : '');
 
-  const header = `# ${relative} — lines ${startLine}–${plannedEnd} of ${view.length}${editedTag}`;
+  // BUG (baris hilang saat budgetStopped): header/footer/token `next` dulu
+  // dibangun dari plannedEnd SEBELUM loop render. Output terpotong anggaran
+  // membuat continueFrom melompati baris endLine+1..plannedEnd. Sekarang
+  // semuanya dibangun dari endLine AKTUAL pasca-loop.
+  const headerEstimate = `# ${relative} — lines ${startLine}–${plannedEnd} of ${view.length}${editedTag}`;
 
   const rendered: string[] = [];
   let endLine = startLine - 1;
-  let budgetLeft = MAX_OUTPUT_CHARS - header.length - footer.length - 400;
+  let budgetLeft = MAX_OUTPUT_CHARS - headerEstimate.length - 400;
   let budgetStopped = false;
   for (let index = startLine - 1; index < plannedEnd; index += 1) {
     const numbered = `${String(index + 1).padStart(5)}| ${view[index]}${showWhitespace ? whitespaceAnnotation(view[index]) : ''}`;
@@ -488,17 +564,25 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
     endLine = index + 1;
   }
 
+  const header = `# ${relative} — lines ${startLine}–${endLine} of ${view.length}${editedTag}`;
+  const actualNext = endLine < view.length ? `r:${endLine + 1}:${windowMax}` : null;
+  const footer =
+    `[${relative} | lines ${startLine}–${endLine} of ${view.length} | ${eol} | utf-8 | sha256:${contentHash.slice(0, 12)}]` +
+    (actualNext ? `\n[next: "${actualNext}"]` : '');
+
   const slices: string[] = [header, rendered.join('\n')];
   const notes: string[] = [];
   if (endLine < view.length) {
-    const nextToken = plannedNext;
+    const nextToken = actualNext;
     if (budgetStopped) {
       notes.push(`window stopped at the output budget after line ${endLine} — continueFrom: "${nextToken}" (or offsetLine: ${endLine + 1})`);
     } else {
       notes.push(`(${view.length - endLine} more lines — continueFrom: "${nextToken}" or offsetLine: ${endLine + 1})`);
     }
   }
-  recordRead(ctx.sessionId, absolute, content, stats.mtimeMs, startLine, endLine);
+  if (endLine >= startLine) {
+    recordRead(ctx.sessionId, absolute, content, stats.mtimeMs, startLine, endLine);
+  }
   if (startLine === 1 && plannedEnd < view.length && !hasStructuralRead(ctx.sessionId, absolute)) {
     notes.unshift(
       `fold-first hint: ${view.length} lines, not mapped this session — call agent__read_all ` +

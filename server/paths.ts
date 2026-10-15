@@ -61,6 +61,8 @@ export const agentsFile = path.join(HOME_ROOT, 'agents.json');
 export const settingsFile = path.join(HOME_ROOT, 'settings.json');
 /** Scheduled agent reminders. */
 export const remindersFile = path.join(HOME_ROOT, 'reminders.json');
+/** User-authored / user-customized agent workflows. */
+export const workflowsFile = path.join(HOME_ROOT, 'workflows.json');
 /**
  * CLIENT/UI STATE — the small per-device preferences that used to live in the
  * browser's localStorage: theme, zoom, font, sidebar, saved prompts, the last
@@ -96,6 +98,8 @@ export const conversationIndexFile = path.join(conversationDir, 'index.json');
 export const conversationManifestFile = path.join(conversationDir, 'manifest.json');
 /** Goals of sessions with no chat folder (synthetic/test session ids). */
 export const detachedGoalsDir = path.join(conversationDir, 'detached');
+/** Standalone todos of sessions with no chat folder (synthetic/test session ids). */
+export const detachedTodosDir = path.join(conversationDir, 'detached');
 
 /**
  * P2 EXTERNALIZATION — the byte store for everything a conversation record

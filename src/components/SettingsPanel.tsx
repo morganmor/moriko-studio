@@ -13,12 +13,14 @@ import {
   Lock,
   MapPin,
   Plus,
+  Pencil,
   Plug,
   RefreshCw,
   Save,
   Search,
   ShieldCheck,
   Sparkles,
+  Route,
   Trash2,
   ToyBrick,
   Wand2,
@@ -27,13 +29,17 @@ import {
 } from './icons';
 
 import { PROMPT_PRESETS } from '../lib/prompts';
+import { AGENT_WORKFLOW_OPTIONS, DEFAULT_AGENT_WORKFLOW_ID, resolveAgentWorkflowOption } from '../lib/workflows';
 import {
   fetchVisionConfig,
+  fetchWorkflows,
   providerHasKey,
   saveVisionConfig,
   updateBuiltInProvider,
+  type AgentWorkflowDTO,
   type VisionConfig,
 } from '../lib/api';
+import { WorkflowEditor } from './WorkflowEditor';
 import { lookupModelMeta, nearestThinkingLevel, thinkingLadderFor } from '../lib/modelMeta';
 import {
   ASPECT_RATIOS,
@@ -129,6 +135,23 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
   const [presetsOpen, setPresetsOpen] = useState(false);
   /** Design pop-presets: an anchored menu instead of a full modal. */
   const presetsRef = useRef<HTMLSpanElement>(null);
+  const [workflowOpen, setWorkflowOpen] = useState(false);
+  const workflowRef = useRef<HTMLSpanElement>(null);
+  /** Merged workflow catalog from the server (built-ins + the user's own). */
+  const [workflows, setWorkflows] = useState<AgentWorkflowDTO[]>([]);
+  const [workflowEditorOpen, setWorkflowEditorOpen] = useState(false);
+  /** The workflow the editor was opened on (the selector's current pick). */
+  const [editorWorkflowId, setEditorWorkflowId] = useState('');
+  /** Load the merged catalog once the panel mounts (selector + editor). */
+  useEffect(() => {
+    let cancelled = false;
+    void fetchWorkflows().then((list) => {
+      if (!cancelled && list.length > 0) setWorkflows(list);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [savedOpen, setSavedOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   /** Image Studio's "switch to edit model" chip asks for the picker. */
@@ -433,6 +456,115 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
             as its automated counterpart. */}
         {}
         <ProbationSection conversationId={activeConversation?.id ?? ''} settings={settings} updateSettings={updateSettings} />
+
+        {}
+        {/* AGENT WORKFLOW — the working doctrine the harness injects on every
+            agent turn. Selector mirrors the System prompt Presets menu; Edit
+            opens the book-style editor; the server falls back to its default
+            when nothing is picked. */}
+        <section className="card" style={{ padding: 14 }}>
+          <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <span style={{ fontSize: 11.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--faint)' }}>
+              Agent workflow
+            </span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditorWorkflowId(settings.agentWorkflow || DEFAULT_AGENT_WORKFLOW_ID);
+                  setWorkflowEditorOpen(true);
+                }}
+                className="btn ghost xs"
+                aria-label="Edit agent workflow"
+              >
+                <Pencil className="ic" aria-hidden="true" />
+              </button>
+              <span ref={workflowRef} style={{ position: 'relative' }}>
+                <button
+                  type="button"
+                  onClick={() => setWorkflowOpen((value) => !value)}
+                  aria-haspopup="menu"
+                  aria-expanded={workflowOpen}
+                  className="btn xs"
+                >
+                  <Route className="ic" aria-hidden="true" />
+                  {workflows.find((workflow) => workflow.id === (settings.agentWorkflow || DEFAULT_AGENT_WORKFLOW_ID))?.label
+                    ?? resolveAgentWorkflowOption(settings.agentWorkflow).label}
+                </button>
+                <Popover
+                  open={workflowOpen}
+                  onClose={() => setWorkflowOpen(false)}
+                  anchorRef={workflowRef}
+                  label="Agent workflows"
+                  placement="bottom-end"
+                  width={340}
+                >
+                    <p className="pop-h">Agent workflows</p>
+                    {(workflows.length > 0
+                      ? workflows.map((workflow) => ({ id: workflow.id, label: workflow.label, hint: workflow.hint }))
+                      : AGENT_WORKFLOW_OPTIONS
+                    ).map((workflow: { id: string; label: string; hint: string }) => (
+                      <button
+                        key={workflow.id}
+                        type="button"
+                        role="menuitem"
+                        className="mi"
+                        onClick={() => {
+                          updateSettings({ agentWorkflow: workflow.id });
+                          setWorkflowOpen(false);
+                          showNotice('settings.workflowApplied', { label: workflow.label });
+                        }}
+                      >
+                        <Route className="ic" aria-hidden="true" />
+                        <span>
+                          {workflow.label}
+                          <small>{workflow.hint}</small>
+                        </span>
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="mi"
+                      onClick={() => {
+                        setWorkflowOpen(false);
+                        setEditorWorkflowId('');
+                        setWorkflowEditorOpen(true);
+                      }}
+                    >
+                      <Plus className="ic" aria-hidden="true" />
+                      <span>
+                        Add or Make Workflow
+                        <small>Write a new working doctrine</small>
+                      </span>
+                    </button>
+                </Popover>
+              </span>
+            </span>
+          </div>
+          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.6, color: 'var(--faint)' }}>
+            Working doctrine injected by the harness on every agent turn. Without a pick, Frontend-First (outside-in stage-gating) applies.
+          </p>
+        </section>
+        <WorkflowEditor
+          open={workflowEditorOpen}
+          onClose={() => setWorkflowEditorOpen(false)}
+          workflows={workflows}
+          selectedId={editorWorkflowId}
+          onSaved={(saved) => {
+            setWorkflows((current) => {
+              const next = current.filter((workflow) => workflow.id !== saved.id);
+              next.push(saved);
+              next.sort((a, b) => (a.builtin === b.builtin ? 0 : a.builtin ? -1 : 1));
+              return next;
+            });
+            showNotice('settings.workflowSaved', { label: saved.label });
+          }}
+          onDeleted={(deletedId) => {
+            setWorkflows((current) => current.filter((workflow) => workflow.id !== deletedId));
+            showNotice('settings.workflowDeleted');
+          }}
+        />
 
         {}
         <section className="card" style={{ padding: 14 }}>

@@ -385,6 +385,53 @@ function shortArgs(args: string | undefined): string {
 }
 
 /**
+ * WIRE-SAFE ARGUMENTS — a truncated arguments string (e.g.
+ * {"height":860,"variants":) poisons the wire: providers that JSON.parse
+ * tool-call arguments (Python backends) reject the WHOLE request. Close the
+ * dangling keys/braces the same way the server's repairPartialJson does, so
+ * stored segments from older runs heal on the rebuilt wire.
+ */
+function repairPartialArgs(raw: string): string {
+  let work = raw.trim();
+  if (!work || work === '{}') return '{}';
+  try {
+    JSON.parse(work);
+    return work;
+  } catch {
+    // fall through to repair
+  }
+  if (!work.startsWith('{')) return '{}';
+  let inString = false;
+  let escaped = false;
+  let lastCompleteValueEnd = -1;
+  for (let i = 1; i < work.length; i += 1) {
+    const char = work[i];
+    if (escaped) { escaped = false; continue; }
+    if (char === '\\') { escaped = true; continue; }
+    if (char === '"') { inString = !inString; continue; }
+    if (!inString && (char === ',' || char === '}' || char === ']')) lastCompleteValueEnd = i;
+  }
+  if (lastCompleteValueEnd > 0) work = work.slice(0, lastCompleteValueEnd + 1);
+  work = work.replace(/,\s*$/, '');
+  let depth = 0;
+  const stack: string[] = [];
+  let inner = false;
+  for (let i = 1; i < work.length; i += 1) {
+    const char = work[i];
+    if (char === '"') inner = !inner;
+    if (inner) continue;
+    if (char === '{' || char === '[') { depth += 1; stack.push(char === '{' ? '}' : ']'); }
+    else if (char === '}' || char === ']') { depth -= 1; stack.pop(); }
+  }
+  try {
+    const parsed = JSON.parse(work + stack.reverse().join('')) as unknown;
+    return parsed && typeof parsed === 'object' ? JSON.stringify(parsed) : '{}';
+  } catch {
+    return '{}';
+  }
+}
+
+/**
  * A bounded tool-result digest. Normal wires cap at TOOL_DIGEST_CHARS (a
  * legacy guard — the server already prunes at the source); a PRUNED wire
  * (pre-pass) cuts to head + marker + tail, the DSH pruner shape, keeping the
@@ -536,7 +583,7 @@ export function wireMessages(
       for (const call of pendingCalls) {
         parts.push(
           wireToolSegment(
-            { toolName: call.wireName, args: call.args, summary: call.result },
+            { toolName: call.wireName, args: repairPartialArgs(call.args), summary: call.result },
             withDigest,
             opts,
           ),
@@ -556,7 +603,7 @@ export function wireMessages(
       tool_calls: pendingCalls.map((call) => ({
         id: call.id,
         type: 'function' as const,
-        function: { name: call.wireName, arguments: call.args || '{}' },
+        function: { name: call.wireName, arguments: repairPartialArgs(call.args || '{}') },
       })),
     });
     for (const call of pendingCalls) {
@@ -816,6 +863,19 @@ export function contextPlan(conversation: Conversation, opts?: WireOptions): Con
     const wireOpts: WireOptions = { prune: opts?.prune, offloadImages };
 
     if (turn.kind === 'probation') continue;
+
+    // HARNESS-EVENT turn: a labeled SYSTEM-ish user block (its own channel —
+    // never presented as the user's words), so the model sees addon events
+    // from past rounds without them polluting the visible user stream.
+    if (turn.kind === 'harness-event') {
+      const addon = turn.eventAddon ?? 'addon';
+      messages.push({
+        role: 'user',
+        content: `[Harness event · ${addon}] ${turn.content.replace(/^\[[^\]]+\] \[[^\]]+\] /, '')}\n(The line above is an automated addon event, NOT a user message.)`,
+      });
+      tags.push(turn.id);
+      continue;
+    }
 
     if (turn.role === 'user') {
       const next = turns[index + 1];
@@ -1130,7 +1190,8 @@ export function compactCandidate(conversation: Conversation): {
       (turn.role === 'user' || turn.role === 'assistant') &&
       turn.kind !== 'compaction' &&
       turn.kind !== 'probation' &&
-      turn.kind !== 'restore',
+      turn.kind !== 'restore' &&
+      turn.kind !== 'harness-event',
   );
   if (covered.length === 0) return null;
 

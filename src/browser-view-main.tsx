@@ -36,6 +36,23 @@ const VIEWPORT = { width: 1920, height: 1080 };
 /** Live viewport ref — imperative cursor/overlay math reads this. */
 const viewportRef = { current: { ...VIEWPORT } };
 
+/** Size .bp-frame to the stage while preserving the viewport aspect ratio —
+ *  the video then fills the frame EXACTLY (no stretch, no letterbox), so the
+ *  browser renders 1:1 and cursor mapping (rect → viewport) stays correct.
+ *  PURELY LOCAL — this never sends anything to the server: the panel is a
+ *  passive viewer and must never drive the browser viewport (a feedback loop
+ *  here oscillated the canvas dozens of times per second; see ADR-0001). */
+function fitFrame(): void {
+  const stage = document.querySelector('.bp-stage');
+  const frame = document.querySelector<HTMLElement>('.bp-frame');
+  if (!stage || !frame) return;
+  const vp = viewportRef.current;
+  if (!(vp.width > 0) || !(vp.height > 0)) return;
+  const scale = Math.min(stage.clientWidth / vp.width, stage.clientHeight / vp.height);
+  frame.style.width = `${Math.max(1, Math.floor(vp.width * scale))}px`;
+  frame.style.height = `${Math.max(1, Math.floor(vp.height * scale))}px`;
+}
+
 type PanelMode = 'agent' | 'takeover';
 
 interface PanelTab {
@@ -103,10 +120,7 @@ function BrowserView() {
     const onWindowResize = () => {
       if (resizeTimer) clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
-        const frame = document.querySelector('.bp-frame');
-        if (frame && ws?.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'resize', width: frame.clientWidth, height: frame.clientHeight }));
-        }
+        fitFrame();
       }, 150);
     };
     window.addEventListener('resize', onWindowResize);
@@ -125,10 +139,7 @@ function BrowserView() {
           height: screen.availHeight,
           dpr: window.devicePixelRatio || 1,
         }));
-        const frame = document.querySelector('.bp-frame');
-        if (frame) {
-          ws?.send(JSON.stringify({ type: 'resize', width: frame.clientWidth, height: frame.clientHeight }));
-        }
+        fitFrame();
       };
 
       ws.onmessage = (event) => {
@@ -159,6 +170,7 @@ function BrowserView() {
             if (vp && vp.width > 0 && vp.height > 0) {
               viewportRef.current = { width: vp.width, height: vp.height };
             }
+            fitFrame();
             setState((s) => ({
               ...s,
               mode,
@@ -185,6 +197,7 @@ function BrowserView() {
                 ? { width: msg.width, height: msg.height }
                 : undefined);
             if (vp && vp.width > 0 && vp.height > 0) viewportRef.current = { ...vp };
+            fitFrame();
             break;
           }
           case 'cursorUpdate': {

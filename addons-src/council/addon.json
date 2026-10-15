@@ -1,0 +1,39 @@
+{
+  "apiVersion": "2",
+  "id": "council",
+  "name": "Council Agent — Sub-Session Councils",
+  "shortName": "Council",
+  "version": "1.1.0",
+  "kind": "mod",
+  "author": "Moriko",
+  "description": "One conversation, many agent sessions: turns a chat into a council with a Main Session plus N Sub Sessions (one per RSA/T agent) — switchable from the TopBar dropdown, never cluttering the sidebar.",
+  "main": "server/main.ts",
+  "client": "client/panel.tsx",
+  "icon": "resources/icon.svg",
+  "permissions": [
+    "tools.register",
+    "commands",
+    "store",
+    "bus",
+    "ui.view",
+    "ui.notify",
+    "session.observe",
+    "session.inject",
+    "prompt.inject",
+    "workspace.write:.moriko/council/**"
+  ],
+  "activation": ["onStartup"],
+  "contributes": {
+    "views": [
+      { "id": "panel", "title": "Council", "icon": "users", "location": "sidebar", "component": "./client/panel.tsx" }
+    ],
+    "settings": {
+      "title": "Council",
+      "properties": {
+        "briefBudget": { "type": "number", "default": 400, "minimum": 100, "maximum": 1200, "title": "Brief budget (chars)", "scope": "workspace" }
+      }
+    },
+    "statusItems": [{ "id": "council" }],
+    "resources": {}
+  }
+}

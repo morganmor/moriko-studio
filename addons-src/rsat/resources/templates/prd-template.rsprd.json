@@ -1,0 +1,60 @@
+{
+  "format": "rs-prd",
+  "version": 1,
+  "rev": 0,
+  "prd": {
+    "id": "prd_template",
+    "title": "Project title",
+    "summary": "One paragraph: what this project delivers and for whom.",
+    "status": "draft",
+    "createdAt": "1970-01-01T00:00:00Z",
+    "createdBy": { "kind": "user", "name": "user" },
+    "language": "en",
+    "goals": ["Goal 1", "Goal 2"],
+    "nonGoals": ["Explicitly out of scope"],
+    "constraints": [{ "id": "c1", "text": "No new npm deps", "enforce": "advisory" }],
+    "globalScope": { "include": ["src/**"], "exclude": ["**/*.env", ".data/**"] },
+    "architecture": "High-level system description: layers, boundaries, data flow.",
+    "modules": [
+      { "id": "m01", "name": "Core", "desc": "Shared foundation.", "scope": { "include": ["src/core/**"], "exclude": [] } }
+    ],
+    "milestones": [
+      { "id": "M01", "title": "Walking skeleton", "goal": "End-to-end happy path runs." }
+    ],
+    "nonFunctional": [
+      { "id": "nf1", "text": "Stay responsive", "metric": "<100ms p50 input latency" }
+    ],
+    "risks": [
+      { "id": "r1", "text": "Scope creep", "mitigation": "Milestone gates", "severity": "medium" }
+    ],
+    "technicalDecisions": [
+      { "text": "Use zustand", "reason": "Minimal boilerplate", "at": "1970-01-01T00:00:00Z" }
+    ]
+  },
+  "achievements": [
+    {
+      "id": "A-001",
+      "no": 1,
+      "title": "First achievement",
+      "kind": "feature",
+      "tier": "bronze",
+      "points": 10,
+      "description": "What done looks like.",
+      "technical": "Optional technical detail for the agent.",
+      "acceptance": [{ "id": "ac1", "text": "Measurable criterion", "done": false }],
+      "scope": { "include": ["src/**"], "exclude": [], "maxFiles": 12, "allowCreate": true, "allowDelete": false },
+      "dependsOn": [],
+      "moduleId": "m01",
+      "milestoneId": "M01",
+      "tags": [],
+      "state": "available",
+      "comments": [],
+      "scopeChanges": [],
+      "files": [],
+      "createdAt": "1970-01-01T00:00:00Z",
+      "updatedAt": "1970-01-01T00:00:00Z",
+      "createdBy": { "kind": "user", "name": "user" }
+    }
+  ],
+  "history": []
+}

@@ -55,7 +55,14 @@ export function ensureEsbuildCopies() {
     }
     mkdirSync(destDir, { recursive: true });
     const dest = join(destDir, `esbuild-${es.version}.exe`);
-    copyFileSync(src, dest);
+    try {
+      copyFileSync(src, dest);
+    } catch (error) {
+      // A running dev process can hold the staged exe (EBUSY) — an identical
+      // copy already on disk is good enough; never block startup over it.
+      if (!existsSync(dest)) throw error;
+      console.warn(`[setup-esbuild] ${side}: keeping existing ${dest} (${error.code ?? 'copy failed'}).`);
+    }
     out[side] = { version: es.version, exe: dest };
     console.log(`[setup-esbuild] ${side} (${host}, esbuild ${es.version}) -> ${dest}`);
   }
