@@ -34,7 +34,6 @@ export function watchRouter(): Router {
       res.status(400).json({ error: `Unknown platform target "${target}".` });
       return;
     }
-    // Already installed → skip silently (spec). Otherwise kick off in background.
     const result = await ensureInstalled(target).catch((error: unknown) => {
       res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
       return null;
@@ -77,7 +76,6 @@ export function watchRouter(): Router {
     res.type('image/svg+xml').send(svg);
   });
 
-  // Progress mirror so polling clients can watch a running download.
   router.get('/install-progress', (_req, res) => {
     res.json({ ...installState });
   });

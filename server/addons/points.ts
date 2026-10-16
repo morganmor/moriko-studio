@@ -40,7 +40,6 @@ export const POINTS: Record<string, PointDef> = {
   'workspace.active': { name: 'workspace.active', semantics: 'observe', timeoutMs: 1500 },
   'command.run': { name: 'command.run', semantics: 'cancel', timeoutMs: 5000 },
   'ui.render': { name: 'ui.render', semantics: 'observe', timeoutMs: 1500 },
-  // v1 event names kept as aliases so legacy hooks keep firing.
   'message.user': { name: 'message.user', semantics: 'mutate', timeoutMs: 1500 },
   'prompt.build': { name: 'prompt.build', semantics: 'mutate', timeoutMs: 1500 },
   'tools.catalogue': { name: 'tools.catalogue', semantics: 'mutate', timeoutMs: 1500 },
@@ -71,9 +70,6 @@ function isKnownPoint(name: string): boolean {
 export async function emitPoint(name: string, payload: unknown): Promise<PointOutcome> {
   if (!isKnownPoint(name)) return {};
   if (addonHookCount() === 0) return {};
-  // Delegate to the v1 chain (it already handles matchers, per-owner APIs,
-  // error isolation). Point semantics are enforced by the CALLER reading the
-  // outcome (deny/value/result).
   const { emitAddonEvent } = await import('./registry.js');
   const { createAddonApi } = await import('./api.js');
   try {
@@ -86,7 +82,7 @@ export async function emitPoint(name: string, payload: unknown): Promise<PointOu
 
 /** Synchronous fire-and-forget for observe points (fs.change, goal.change…). */
 export function emitPointAsync(name: string, payload: unknown): void {
-  void emitPoint(name, payload).catch(() => { /* isolated in emitPoint */ });
+  void emitPoint(name, payload).catch(() => {  });
 }
 
 export type { AddonHook, AddonMatcher };

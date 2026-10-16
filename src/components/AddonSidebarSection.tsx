@@ -121,7 +121,7 @@ export const AddonSidebarSection = memo(function AddonSidebarSection({ go }: { g
         if (cancelled) return;
         if (a?.addons) setAddons(a.addons as AddonClientEntry[]);
         if (v?.views) setViews(v.views as AddonViewClientEntry[]);
-      } catch { /* offline sidebar = empty section, never a crash */ }
+      } catch {  }
     };
     void load();
     const onReload = () => void load();
@@ -136,8 +136,7 @@ export const AddonSidebarSection = memo(function AddonSidebarSection({ go }: { g
 
   return (
     <div>
-      {/* Dropdown seperti Workspace / Recent Chat: header men-toggle collapse,
-          tombol plug di kanan tetap membuka Addon Hub. */}
+      {}
       <div className="sec-row">
         <button
           type="button"

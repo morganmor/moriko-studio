@@ -24,7 +24,7 @@ export async function state(api, sessionId, body) {
     if (rsat && typeof rsat.listAgents === 'function') {
       rsatAgents = rsat.listAgents(sessionId) ?? [];
     }
-  } catch { /* RSAT not installed — roster stays empty */ }
+  } catch {  }
   return ok({ councilId, brief, members: mem?.members ?? [], rsatAgents, orchestratorAgentId: getOrchestrator(api, sessionId, councilId) });
 }
 
@@ -49,7 +49,7 @@ export async function setOrchestratorRpc(api, sessionId, body) {
   const agentId = typeof body?.orchestratorAgentId === 'string' ? body.orchestratorAgentId : '';
   if (!councilId) throw new Error('No active council.');
   await setOrchestrator(api, sessionId, councilId, agentId);
-  try { void api.bus.publish('council.changed', { event: { type: 'orchestrator', target: councilId, agentId }, at: Date.now() }); } catch { /* best-effort */ }
+  try { void api.bus.publish('council.changed', { event: { type: 'orchestrator', target: councilId, agentId }, at: Date.now() }); } catch {  }
   return ok({ saved: true, orchestratorAgentId: agentId });
 }
 
@@ -76,8 +76,6 @@ export async function sendMessage(api, sessionId, body) {
   const text = typeof body?.text === 'string' ? body.text.trim() : '';
   if (!target || !text) throw new Error('sendMessage requires sessionId and text.');
   const message = `Message from operator: ${text}`;
-  // RUNNING target: inject (drained at the next round boundary). IDLE target:
-  // wake it — a queued injection alone never reaches a session that is not running.
   if (isSessionActive(api, target)) {
     try {
       await api.sessions.inject([target], {

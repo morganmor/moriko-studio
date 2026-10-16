@@ -69,9 +69,6 @@ export function consentNeeded(perms: string[]): string[] {
   return perms.filter((p) => !isNormal(p));
 }
 
-// ---------------------------------------------------------------------------
-// Persistent grant store
-// ---------------------------------------------------------------------------
 
 export interface AddonPermRecord {
   granted: string[];

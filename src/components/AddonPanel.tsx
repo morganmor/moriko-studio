@@ -54,7 +54,6 @@ export const AddonPanel = memo(function AddonPanel({ width: _width }: { width?: 
 
   useEffect(() => { void refresh(); }, []);
 
-  // LIVE REGISTRY: toggle/reload/delete from any client repaints the panel.
   useEffect(() => {
     const onReload = () => void refresh();
     window.addEventListener('moriko:addons-reloaded', onReload);
@@ -123,7 +122,6 @@ export const AddonPanel = memo(function AddonPanel({ width: _width }: { width?: 
           onClick={() =>
             fetch('/api/addons/reload', { method: 'POST' }).then(() => {
               refresh();
-              // SlashMenu re-fetches /api/addons/commands on this event.
               window.dispatchEvent(new CustomEvent('moriko:addons-reloaded'));
             })
           }

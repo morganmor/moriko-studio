@@ -34,7 +34,6 @@ import type {
   NormalizedImage,
 } from './types.js';
 
-// ─── helpers ──────────────────────────────────────────────────────────
 
 /** Strip trailing slashes; ComfyUI has no /v1 prefix. */
 function base(host: string): string {
@@ -65,7 +64,6 @@ async function fetchJson<T>(url: string, opts?: RequestInit): Promise<T | null> 
   }
 }
 
-// ─── CLIP / VAE auto-detection ────────────────────────────────────────
 
 interface ClipVae {
   clip1?: string;
@@ -101,7 +99,6 @@ async function autoDetectClipVae(baseUrl: string, modelFilename: string): Promis
   return { clip1, clip2, vae };
 }
 
-// ─── image upload ─────────────────────────────────────────────────────
 
 interface UploadedImage {
   name: string;
@@ -130,7 +127,6 @@ async function uploadImage(baseUrl: string, dataUrl: string): Promise<UploadedIm
   return (await res.json()) as UploadedImage;
 }
 
-// ─── workflow builder ──────────────────────────────────────────────────
 
 interface WorkflowParams {
   model: string;
@@ -157,15 +153,11 @@ function buildWorkflow(p: WorkflowParams): Record<string, { class_type: string; 
   const isFlux = isFluxFamily(filename);
   const wf: Record<string, { class_type: string; inputs: Record<string, unknown> }> = {};
 
-  // ── Model loader ──
   if (loader === 'checkpoint') {
-    // CheckpointLoaderSimple → MODEL [0], CLIP [1], VAE [2]
     wf['4'] = { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: filename } };
   } else {
-    // UNETLoader → MODEL [0] only; separate CLIP + VAE
     wf['10'] = { class_type: 'UNETLoader', inputs: { unet_name: filename, weight_dtype: 'default' } };
 
-    // DualCLIPLoader or CLIPLoader
     if (p.clipVae.clip1 && p.clipVae.clip2) {
       wf['11'] = { class_type: 'DualCLIPLoader', inputs: { clip_name1: p.clipVae.clip1, clip_name2: p.clipVae.clip2 } };
     } else if (p.clipVae.clip1) {
@@ -177,7 +169,6 @@ function buildWorkflow(p: WorkflowParams): Record<string, { class_type: string; 
       );
     }
 
-    // VAELoader
     if (!p.clipVae.vae) {
       throw new Error(
         'No VAE model found in ComfyUI /models/vae. Diffusion models require a separate VAE file. ' +
@@ -187,14 +178,11 @@ function buildWorkflow(p: WorkflowParams): Record<string, { class_type: string; 
     wf['12'] = { class_type: 'VAELoader', inputs: { vae_name: p.clipVae.vae } };
   }
 
-  // ── CLIP text encoders ──
   const clipRef = loader === 'checkpoint' ? ['4', 1] : ['11', 0];
   wf['6'] = { class_type: 'CLIPTextEncode', inputs: { text: p.prompt, clip: clipRef } };
   wf['7'] = { class_type: 'CLIPTextEncode', inputs: { text: p.negative || '', clip: clipRef } };
 
-  // ── Latent source ──
   if (p.referenceName) {
-    // i2i: LoadImage → VAEEncode → latent
     wf['14'] = { class_type: 'LoadImage', inputs: { image: p.referenceName } };
     const vaeRef = loader === 'checkpoint' ? ['4', 2] : ['12', 0];
     wf['13'] = { class_type: 'VAEEncode', inputs: { pixels: ['14', 0], vae: vaeRef } };
@@ -211,7 +199,6 @@ function buildWorkflow(p: WorkflowParams): Record<string, { class_type: string; 
       },
     };
   } else {
-    // t2i: EmptyLatentImage → latent
     wf['5'] = { class_type: 'EmptyLatentImage', inputs: { width: p.width, height: p.height, batch_size: 1 } };
     wf['3'] = {
       class_type: 'KSampler',
@@ -227,7 +214,6 @@ function buildWorkflow(p: WorkflowParams): Record<string, { class_type: string; 
     };
   }
 
-  // ── VAE decode + save ──
   const vaeDecodeRef = loader === 'checkpoint' ? ['4', 2] : ['12', 0];
   wf['8'] = { class_type: 'VAEDecode', inputs: { samples: ['3', 0], vae: vaeDecodeRef } };
   wf['9'] = { class_type: 'SaveImage', inputs: { filename_prefix: 'Moriko', images: ['8', 0] } };
@@ -235,7 +221,6 @@ function buildWorkflow(p: WorkflowParams): Record<string, { class_type: string; 
   return wf;
 }
 
-// ─── adapter ──────────────────────────────────────────────────────────
 
 const ACCEPTS =
   'ComfyUI POST /prompt — workflow JSON with model, prompt, negative, ' +
@@ -256,7 +241,6 @@ export const comfyuiAdapter: ImageAdapter = {
   async submit(req: ImageSubmitRequest, { credentials }: AdapterContext): Promise<{ taskId: string }> {
     const host = base(credentials.baseUrl);
 
-    // Health check
     const stats = await fetchJson<{ system?: unknown }>(`${host}/system_stats`);
     if (!stats) {
       throw {
@@ -269,20 +253,17 @@ export const comfyuiAdapter: ImageAdapter = {
     const { loader, filename } = parseModelId(req.model);
     const isFlux = isFluxFamily(filename);
 
-    // Auto-detect CLIP/VAE for diffusion models
     let clipVae: ClipVae = {};
     if (loader === 'diffusion') {
       clipVae = await autoDetectClipVae(host, filename);
     }
 
-    // Upload reference image if i2i
     let referenceName: string | undefined;
     if (req.images && req.images.length > 0) {
       const uploaded = await uploadImage(host, req.images[0]);
       referenceName = uploaded.name;
     }
 
-    // Determine dimensions
     const width = req.width && req.width >= 64 ? Math.round(req.width) : 1024;
     const height = req.height && req.height >= 64 ? Math.round(req.height) : 1024;
 
@@ -291,11 +272,10 @@ export const comfyuiAdapter: ImageAdapter = {
     const steps = isFlux ? 20 : 20;
     const denoise = referenceName ? 0.5 : 1.0;
 
-    // Build workflow
     const workflow = buildWorkflow({
       model: req.model,
       prompt: req.prompt,
-      negative: '', // ComfyUI gets negative via the prompt's "negative" field if provided
+      negative: '',
       width,
       height,
       seed,
@@ -306,7 +286,6 @@ export const comfyuiAdapter: ImageAdapter = {
       clipVae,
     });
 
-    // Submit
     const clientId = randomUUID();
     const promptRes = await fetch(`${host}/prompt`, {
       method: 'POST',
@@ -353,7 +332,6 @@ export const comfyuiAdapter: ImageAdapter = {
     const entry = history[taskId];
     if (!entry) return { status: 'RUNNING', images: [] };
 
-    // Check for error
     const statusInfo = entry.status;
     if (statusInfo && statusInfo.status_str === 'error') {
       return {
@@ -365,7 +343,6 @@ export const comfyuiAdapter: ImageAdapter = {
       };
     }
 
-    // Check for completed outputs
     if (!entry.outputs) return { status: 'RUNNING', images: [] };
 
     const images: NormalizedImage[] = [];
@@ -398,7 +375,6 @@ export const comfyuiAdapter: ImageAdapter = {
   },
 };
 
-// ─── ComfyUI history response types ───────────────────────────────────
 
 interface ComfyHistoryEntry {
   outputs?: Record<string, { images?: Array<{ filename: string; subfolder?: string; type?: string }> }>;

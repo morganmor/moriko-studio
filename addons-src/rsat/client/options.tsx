@@ -114,7 +114,6 @@ export default function Options() {
   const [toasts, setToasts] = useState(true);
   const [sound, setSound] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
-  // TTL efektif dari server (claimTtlSec) — seg pilihan 5/15/30 menit.
   const ttl = String(Math.max(1, Math.round(s.claimTtlSec / 60)));
 
   return (

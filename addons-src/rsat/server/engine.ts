@@ -73,9 +73,6 @@ export function summarize(doc) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// PRD
-// ---------------------------------------------------------------------------
 
 export async function createPrd(api, sessionId, actor, fields) {
   const existing = loadDoc(api, sessionId);
@@ -153,9 +150,6 @@ export function commentPrd(api, sessionId, actor, text, kind) {
   return saveDoc(api, sessionId, doc, { by: actor, type: 'commented', target: doc.prd.id, data: { kind: entry.kind } });
 }
 
-// ---------------------------------------------------------------------------
-// Achievements
-// ---------------------------------------------------------------------------
 
 export async function createAchievement(api, sessionId, actor, fields) {
   const doc = requireDoc(api, sessionId);
@@ -217,7 +211,6 @@ export async function updateAchievement(api, sessionId, actor, id, fields) {
   }
   if (Array.isArray(fields.acceptance)) {
     // AC review flow (user request): agents REPORT each criterion via
-    // rsat_progress; only the user ticks the boxes on the board.
     a.acceptance = fields.acceptance.slice(0, 30).map((t, i) => ({ id: `ac${i + 1}`, text: String(t).slice(0, 200), done: false, requiresUser: true }));
   }
   a.updatedAt = new Date().toISOString();
@@ -272,9 +265,6 @@ export function commentAchievement(api, sessionId, actor, id, text, kind) {
   return saveDoc(api, sessionId, doc, { by: actor, type: 'commented', target: id });
 }
 
-// ---------------------------------------------------------------------------
-// Claim / release / progress / complete (R2 core loop)
-// ---------------------------------------------------------------------------
 
 export async function claim(api, sessionId, actor, id, label) {
   const doc = requireDoc(api, sessionId);
@@ -403,9 +393,6 @@ export async function rejectReview(api, sessionId, actor, id, reason) {
   return saveDoc(api, sessionId, doc, { by: actor, type: 'review_rejected', target: id, data: { reason } });
 }
 
-// ---------------------------------------------------------------------------
-// Scope changes (P3)
-// ---------------------------------------------------------------------------
 
 export async function changeScope(api, sessionId, actor, id, op, paths, reason) {
   const doc = requireDoc(api, sessionId);
@@ -554,7 +541,6 @@ export async function autoHeartbeat(api, sessionId, actor) {
   for (const a of doc.achievements) {
     if (!a.claim || !['claimed', 'in_progress', 'review'].includes(a.state)) continue;
     if (a.claim.by?.sessionId !== sessionId && a.claim.by?.agentId !== actor?.agentId) continue;
-    // Skip if heartbeat is fresh (< 60s old) to avoid write churn.
     const beat = Date.parse(a.claim.heartbeat ?? '') || 0;
     if (Date.now() - beat < 60_000) continue;
     a.claim.heartbeat = now;

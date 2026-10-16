@@ -116,7 +116,6 @@ function agentText(d: Draft, t: (k: string) => string): string {
   return L.join('\n');
 }
 
-/* Contoh isi cepat per section. */
 const EXAMPLES: Record<string, Partial<Draft>> = {
   sum: { title: 'Interlinked — Architectural Perception', summary: 'Panel node ComfyUI-style + format @RSLK agar agent memahami arsitektur workspace secara nyata sebelum menulis kode.' },
   goals: { goals: ['Agent memahami layer & ketergantungan antar file sebelum edit', 'Blast radius perubahan terlihat dari panel arsitektur'] },
@@ -186,7 +185,6 @@ export default function PrdForm({ lang, prd, onSave, onCancel }: {
   const fillExample = () => patch(EXAMPLES[cur.k] as Partial<Draft>);
   const copyAgent = () => { void navigator.clipboard?.writeText(agentText(d, t)); };
 
-  /* ── editor kecil reusable ── */
   const listEditor = (key: 'goals' | 'cons') => {
     if (key === 'goals') {
       return (
@@ -360,7 +358,6 @@ export default function PrdForm({ lang, prd, onSave, onCancel }: {
 
   const jump = (i: number) => { setStep(i); setMode('w'); setWarn(null); };
 
-  /* ── Pratinjau dokumen ── */
   const preview = () => {
     const sec = (i: number, body: React.ReactNode) => (
       <h3><span className="no">{SEC[i].n}</span>{t(SEC[i].hk)}
@@ -398,7 +395,7 @@ export default function PrdForm({ lang, prd, onSave, onCancel }: {
 
   return (
     <section className="prdw">
-      {/* Kop dokumen */}
+      {}
       <div className="prdw-top">
         <div className="prdw-brand">
           <div className="prdw-seal">RSA/T</div>
@@ -415,7 +412,7 @@ export default function PrdForm({ lang, prd, onSave, onCancel }: {
       </div>
 
       <div className="prdw-body">
-        {/* Rail section bernomor + dot status */}
+        {}
         <aside className="prdw-rail">
           <div className="prdw-rail-h">{t('prdwSections')}</div>
           {SEC.map((s, i) => (
@@ -428,7 +425,7 @@ export default function PrdForm({ lang, prd, onSave, onCancel }: {
           </div>
         </aside>
 
-        {/* Main: editor satu langkah / pratinjau */}
+        {}
         <div className="prdw-main">
           {mode === 'v' ? (
             <div className="prdw-prev">
@@ -470,7 +467,7 @@ export default function PrdForm({ lang, prd, onSave, onCancel }: {
         </div>
       </div>
 
-      {/* Publish gate */}
+      {}
       {warn ? (
         <div className="prdw-warn">
           <b>{warn.length} {t('prdwIncomplete')}</b>{' '}
@@ -482,7 +479,7 @@ export default function PrdForm({ lang, prd, onSave, onCancel }: {
         </div>
       ) : null}
 
-      {/* Footer */}
+      {}
       <div className="prdw-foot">
         <span className="prdw-auto">{t('prdwAuto')} {doneCount}/{SEC.length}</span>
         <span className="grp">

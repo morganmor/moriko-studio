@@ -59,8 +59,8 @@ function normAgent(a) {
 /** Root yang mungkin menyimpan registry: registered + pin papan + sesi ini. */
 function rootsOf(api, sessionId) {
   const out = new Set();
-  try { for (const w of api.workspace.listRegistered?.() ?? []) out.add(w.path); } catch { /* none */ }
-  try { const pinned = api.store?.get?.('workspacePath'); if (pinned) out.add(String(pinned)); } catch { /* none */ }
+  try { for (const w of api.workspace.listRegistered?.() ?? []) out.add(w.path); } catch {  }
+  try { const pinned = api.store?.get?.('workspacePath'); if (pinned) out.add(String(pinned)); } catch {  }
   const own = safeRoot(api, sessionId);
   if (own) out.add(own);
   return [...out];
@@ -125,7 +125,7 @@ async function saveAgentsTo(api, root, list, actor, event) {
   const ws = api.workspace.forPath(root);
   await ws.write(FILE, JSON.stringify({ rev: Date.now(), agents: clean }, null, 2));
   if (event) await appendEventFrom(ws, { at: new Date().toISOString(), by: actor, ...event });
-  try { await api.bus.publish('rsat.changed', { event: { type: 'agents_changed', target: 'registry', by: actor }, at: Date.now() }); } catch { /* best-effort */ }
+  try { await api.bus.publish('rsat.changed', { event: { type: 'agents_changed', target: 'registry', by: actor }, at: Date.now() }); } catch {  }
   return clean;
 }
 
@@ -213,7 +213,6 @@ export async function bindSession(api, sessionId, actor, agentId, conversationId
   const found = findAgent(api, agentId, sessionId);
   if (!found) throw new Error(`Agent "${agentId}" not found.`);
   const { root, list, agent: rec } = found;
-  // Satu sesi hanya satu agent; sesi lama agent ini dibebaskan.
   for (const a of list) {
     if (a.activeSessionId === conversationId && a.id !== agentId) a.activeSessionId = null;
   }
@@ -272,7 +271,7 @@ export function memoryOfSession(api, sessionId) {
     const map = readMemoryMap(api, root);
     const entries = Array.isArray(map[rec.id]) ? normMemory(map[rec.id]) : [];
     if (entries.length > 0) return entries;
-  } catch { /* no workspace yet */ }
+  } catch {  }
   return rec.memory ?? [];
 }
 
@@ -299,7 +298,7 @@ export async function addMemory(api, sessionId, actor, agentId, kind, text) {
   await writeMemoryMap(api, root, map);
   const ws = api.workspace.forPath(root);
   await appendEventFrom(ws, { at: new Date().toISOString(), by: actor, type: 'memory_added', target: id, data: { kind, workspace: root } });
-  try { await api.bus.publish('rsat.changed', { event: { type: 'memory_added', target: id, by: actor }, at: Date.now() }); } catch { /* best-effort */ }
+  try { await api.bus.publish('rsat.changed', { event: { type: 'memory_added', target: id, by: actor }, at: Date.now() }); } catch {  }
   return { id, memory: clean };
 }
 

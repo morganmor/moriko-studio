@@ -31,16 +31,14 @@ function resolveTarget(raw: string): { conversationId: string; label: string; mo
   const target = raw.trim();
   if (!target) return { error: 'A "sessionId" is required — use the id from council_status or the session list.' };
 
-  // 1. Live/registered session (the authoritative mapping).
   try {
     const reg = listSessions().find((s) => s.sessionId === target || s.conversationId === target);
     if (reg) {
       const convId = reg.conversationId ?? reg.sessionId;
       return { conversationId: convId, label: convId, model: reg.model };
     }
-  } catch { /* registry unavailable — fall through */ }
+  } catch {  }
 
-  // 2. Stored conversation (council sub-sessions persist even when idle).
   const stored = getStoredConversation(target);
   if (stored) {
     const meta = stored as { model?: unknown; providerId?: unknown };
@@ -52,9 +50,8 @@ function resolveTarget(raw: string): { conversationId: string; label: string; mo
     };
   }
 
-  // Nothing matched — list what exists so the model can correct itself.
   let known: string[] = [];
-  try { known = listSessions().map((s) => s.conversationId ?? s.sessionId); } catch { /* ignore */ }
+  try { known = listSessions().map((s) => s.conversationId ?? s.sessionId); } catch {  }
   return {
     error:
       `Unknown session "${target}". Known live sessions: ${known.slice(0, 8).join(', ') || 'none'}. ` +
@@ -95,17 +92,15 @@ async function stopSubAgent(args: Record<string, unknown>, ctx: AgentToolContext
   const target = str(args, 'sessionId').trim();
   if (!target) return { ok: false, isError: true, errorCode: 'schema_error', text: 'A "sessionId" is required.' };
 
-  // Resolve the live stream FIRST — stopping needs a running generation.
   let stream: { id: string; conversationId: string | null } | undefined;
   try {
     const live = listLiveStreams();
     stream = live.find((s) => s.conversationId === target) ?? live.find((s) => s.id === target);
-  } catch { /* registry unavailable */ }
+  } catch {  }
   if (!stream) {
     return { ok: false, isError: true, text: `No live generation found for "${target}" — nothing to stop. (call-sub-agent starts runs; a finished/queued session has no stream.)` };
   }
 
-  // MANDATORY user approval — no session grant can pre-approve this.
   const root = getActiveWorkspace(ctx.sessionId)?.path ?? '';
   const granted = await requestApproval(
     { tool: 'stop-sub-agent', paths: [], root, command: `Stop the running response of session ${stream.conversationId ?? stream.id}` },

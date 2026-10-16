@@ -59,8 +59,6 @@ function usePanZoom(W: number, H: number) {
   const [drag, setDrag] = useState(false);
   const dr = useRef<{ px: number; py: number; id: number; moved: boolean } | null>(null);
 
-  // Pan dengan AMBANG 4px: capture & pan baru dimulai setelah mouse benar-benar
-  // bergeser — supaya klik (node/tombol) tidak dimakan pointer capture.
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0 && e.button !== 1) return;
     dr.current = { px: e.clientX, py: e.clientY, id: e.pointerId, moved: false };
@@ -86,7 +84,6 @@ function usePanZoom(W: number, H: number) {
   };
   const endPan = () => { dr.current = null; setDrag(false); };
 
-  // Zoom wheel: non-passive (preventDefault) — anchor di posisi kursor.
   useEffect(() => {
     const el = ref.current;
     if (!el) return undefined;

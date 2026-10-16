@@ -416,8 +416,6 @@ const hooks: ToolHook[] = [
     },
   },
   {
-    // F3.2 — post-edit diagnostics: after a successful edit on .ts/.tsx files,
-    // append NEW syntactic diagnostics (vs before the edit, max 5, 1.5s cap).
     name: 'diagnosticsHook',
     async preExecute() {
       return null;
@@ -454,7 +452,7 @@ const hooks: ToolHook[] = [
         if (notes.length === 0) return result;
         return { ...result, text: `${result.text}\n\n${notes.join('\n')}` };
       } catch {
-        return result; // never false-fail an edit
+        return result;
       }
     },
     postExecute() {
@@ -479,9 +477,6 @@ export async function runPipeline(
     }
   }
   {
-    // Addon v2 (A1/A2): the hook chain gets the session's id (A-02) and each
-    // hook receives an API bound to ITS addon (A-03) — emitAddonEvent builds
-    // per-owner facades internally; the facade here is only the chain entry.
     const { emitAddonEvent, addonHookCount } = await import('../addons/registry.js');
     if (addonHookCount() > 0) {
       const { createAddonApi } = await import('../addons/api.js');
@@ -516,8 +511,6 @@ export async function runPipeline(
   }
   call.durationMs = Date.now() - started;
   {
-    // Addon v2: tool.result now carries args + sessionId (A-02) and can MUTATE
-    // the result via outcome.result (A-19, handled in A3's emitPoint).
     const { emitAddonEvent, addonHookCount } = await import('../addons/registry.js');
     if (addonHookCount() > 0) {
       const { createAddonApi } = await import('../addons/api.js');

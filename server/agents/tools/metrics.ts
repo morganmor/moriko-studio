@@ -29,7 +29,6 @@ async function codeMetricsTool(args: Record<string, unknown>, ctx: AgentToolCont
     return { ok: true, isError: false, text: `No TS/JS files under "${subpath}".` };
   }
 
-  // Git churn (best effort; fallback = 1).
   const churn = new Map<string, number>();
   try {
     const { runShellCommand } = await import('../exec.js');
@@ -44,7 +43,7 @@ async function codeMetricsTool(args: Record<string, unknown>, ctx: AgentToolCont
         churn.set(t, (churn.get(t) ?? 0) + 1);
       }
     }
-  } catch { /* git not available */ }
+  } catch {  }
 
   interface Row {
     file: string;

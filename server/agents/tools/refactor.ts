@@ -16,8 +16,8 @@ import { recordAfterWrite } from '../read-policy.js';
 import { defineTool } from './registry.js';
 
 interface PlannedEdit {
-  file: string; // absolute
-  from: number; // 0-based offset
+  file: string;
+  from: number;
   to: number;
   text: string;
 }
@@ -51,7 +51,6 @@ async function refactorTool(args: Record<string, unknown>, ctx: AgentToolContext
     if (!filePath || !newName) return { ok: false, isError: true, text: 'rename needs "path", "line", "column", "newName".' };
     const resolved = await resolveWithPermission('refactor', filePath, ctx, 'write');
     const content = readFileSync(resolved.absolute, 'utf8');
-    // 1-based line/col → 0-based offset
     const lines = content.split('\n');
     let offset = 0;
     for (let i = 0; i < Math.min(line - 1, lines.length - 1); i += 1) offset += lines[i].length + 1;
@@ -90,7 +89,7 @@ async function refactorTool(args: Record<string, unknown>, ctx: AgentToolContext
           edits.push({ file: change.fileName, from: tc.span.start, to: tc.span.start + tc.span.length, text: tc.newText });
         }
       }
-    } catch { /* import rewrite best-effort */ }
+    } catch {  }
     const header = `move ${fromRel} → ${toRel} (+${edits.length} import edit(s) in ${new Set(edits.map((e) => e.file)).size} file(s)).`;
     if (dryRun) {
       const diffParts: string[] = [header];
@@ -104,13 +103,11 @@ async function refactorTool(args: Record<string, unknown>, ctx: AgentToolContext
       }
       return { ok: true, isError: false, text: truncateOutput(diffParts.join('\n')) };
     }
-    // Apply: vault both the moved file and every import-edit target, then write.
     try {
       snapshotFile(ctx.sessionId, from.absolute, 'move_file');
       const { mkdirSync, writeFileSync, renameSync } = await import('node:fs');
       mkdirSync(path.dirname(toAbs), { recursive: true });
       renameSync(from.absolute, toAbs);
-      // Preserve server-ESM `.js` extension style in rewritten imports.
       for (const edit of edits) {
         let file = edit.file;
         if (edit.file === from.absolute) file = toAbs;
@@ -118,7 +115,7 @@ async function refactorTool(args: Record<string, unknown>, ctx: AgentToolContext
           snapshotFile(ctx.sessionId, file, 'move_file-import');
           const c = readFileSync(file, 'utf8');
           writeFileSync(file, c.slice(0, edit.from) + edit.text + c.slice(edit.to));
-        } catch { /* best effort */ }
+        } catch {  }
       }
       recordAfterWrite(ctx.sessionId, toAbs, readFileSync(toAbs, 'utf8'), statSync(toAbs).mtimeMs);
       return { ok: true, isError: false, text: truncateOutput(`${header}\nApplied atomically. Run agent__typecheck to confirm.`) };
@@ -139,7 +136,6 @@ async function applyEdits(
   op: string,
   header?: string,
 ): Promise<HarnessToolResult> {
-  // Group by file, apply per-file from END to start so offsets stay valid.
   const byFile = new Map<string, PlannedEdit[]>();
   for (const edit of edits) {
     const list = byFile.get(edit.file) ?? [];

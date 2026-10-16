@@ -153,11 +153,10 @@ export function addWorkspace(inputPath: string, label?: string): AgentWorkspace 
     selfHosted: detectSelfHost(normalized),
   };
   persist({ ...store, workspaces: [...store.workspaces, workspace] });
-  // Addon v2 (A3): workspace.bind — observe point.
   try {
     const { emitPointAsync } = require('../addons/points.js') as typeof import('../addons/points.js');
     emitPointAsync('workspace.bind', { workspaceId: workspace.id, path: workspace.path });
-  } catch { /* best-effort */ }
+  } catch {  }
   return workspace;
 }
 
@@ -196,11 +195,10 @@ export function setActiveWorkspace(id: string, sessionId?: string): AgentWorkspa
   } else {
     persist({ ...store, activeId: id });
   }
-  // Addon v2 (A3): workspace.active — observe point.
   try {
     const { emitPointAsync } = require('../addons/points.js') as typeof import('../addons/points.js');
     emitPointAsync('workspace.active', { workspaceId: workspace.id, path: workspace.path, sessionId });
-  } catch { /* best-effort */ }
+  } catch {  }
   return workspace;
 }
 

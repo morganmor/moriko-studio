@@ -12,7 +12,7 @@ export interface ModuleNode {
   id: string;
   fanIn: number;
   fanOut: number;
-  instability: number; // out / (in + out); 1 = purely dependent
+  instability: number;
 }
 
 export interface ModuleEdge {
@@ -44,10 +44,10 @@ function moduleOf(relFile: string, depth: number, focus?: string): string {
 
 /** Build the module-level graph from the file-level deps graph. */
 export function buildArchMap(root: string, subpath: string, depth: number, focus?: string): ArchReport {
-  invalidateDepsGraph(root); // fresh graph for accuracy
+  invalidateDepsGraph(root);
   const files = walkFiles(subpath).files.filter((f) => /\.(ts|tsx|js|jsx)$/.test(f)).slice(0, 2000);
 
-  const edgeWeights = new Map<string, number>(); // "from\u0000to" -> weight
+  const edgeWeights = new Map<string, number>();
   const fanIn = new Map<string, number>();
   const fanOut = new Map<string, number>();
   const fileImports = new Map<string, Set<string>>();
@@ -83,7 +83,6 @@ export function buildArchMap(root: string, subpath: string, depth: number, focus
     })
     .sort((a, b) => b.weight - a.weight);
 
-  // Tarjan SCC at FILE level within the scoped set.
   const cycles = tarjanCycles(files, fileImports);
 
   return { modules, edges, cycles, filesScanned: files.length };
@@ -125,17 +124,14 @@ function tarjanCycles(files: string[], imports: Map<string, Set<string>>): strin
     }
   };
 
-  // Iterative guard: recursion depth is fine for ≤2000 files.
   for (const f of files) {
     if (!index.has(f)) strongConnect(f);
   }
 
-  // Shortest cycle per SCC: BFS within SCC for a path back to start.
   const cycles: string[][] = [];
   for (const scc of sccs.slice(0, 20)) {
     const memberSet = new Set(scc);
     const start = scc[0];
-    // BFS from start back to start
     const queue: Array<{ node: string; path: string[] }> = [{ node: start, path: [start] }];
     const visited = new Set<string>();
     let found: string[] | null = null;
@@ -194,7 +190,6 @@ export function renderText(report: ArchReport): string {
   return lines.join('\n');
 }
 
-// ---------- F4.2: layer rules ----------
 
 export interface ArchitectureRules {
   layers: Array<{ name: string; paths: string[] }>;
@@ -267,7 +262,7 @@ export function checkRules(root: string, rules: ArchitectureRules): RuleViolatio
         if (loc > rules.maxFileLines) {
           violations.push({ kind: 'file-size', detail: `${file}: ${loc} lines > maxFileLines ${rules.maxFileLines}` });
         }
-      } catch { /* skip */ }
+      } catch {  }
     }
   }
 

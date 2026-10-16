@@ -55,21 +55,19 @@ async function contextPackTool(args: Record<string, unknown>, ctx: AgentToolCont
     return true;
   };
 
-  // body (numbered, with receipt)
   const bodyLines = contentLines.slice(span.startLine - 1, span.endLine);
   const body = [`── body · ${span.breadcrumb} (${span.startLine}–${span.endLine})`,
     ...bodyLines.map((l, i) => `${String(span.startLine + i).padStart(6, '|')} ${l}`)].join('\n');
   push(body, 'body');
   try {
     recordRead(ctx.sessionId, resolved.absolute, content, statSync(resolved.absolute).mtimeMs, span.startLine, span.endLine);
-  } catch { /* best effort */ }
+  } catch {  }
 
   const ext = path.extname(resolved.absolute).toLowerCase();
   const isTs = ['.ts', '.tsx', '.mts', '.cts'].includes(ext);
   if (isTs) {
     try {
       const service = getLanguageService(resolved.absolute, root);
-      // Callers via findReferences at the symbol's name position.
       const nameOffset = span.startOffset;
       const refs = service.findReferences(resolved.absolute, nameOffset);
       const callerLines: string[] = [];
@@ -85,7 +83,7 @@ async function contextPackTool(args: Record<string, unknown>, ctx: AgentToolCont
               for (let i = 0; i < ref.textSpan.start; i += 1) if (refContent[i] === '\n') line += 1;
               const refLines = refContent.split('\n');
               callerLines.push(`  ${path.relative(root, ref.fileName).replace(/\\/g, '/')}:${line}  ${(refLines[line - 1] ?? '').trim().slice(0, 120)}`);
-            } catch { /* skip */ }
+            } catch {  }
           }
         }
       }
@@ -93,16 +91,14 @@ async function contextPackTool(args: Record<string, unknown>, ctx: AgentToolCont
         push(`── callers (${callerCount}):\n${callerLines.join('\n')}`, 'callers', Math.max(callerCount - callerLines.length, 0));
       }
 
-      // Types referenced at the symbol position: quick info + type definition signatures.
       const quick = service.getQuickInfoAtPosition(resolved.absolute, nameOffset);
       if (quick) {
         const displayParts = (await import('typescript')).displayPartsToString(quick.displayParts);
         push(`── signature:\n  ${displayParts.slice(0, 400)}`, 'signature');
       }
-    } catch { /* LSP context is best-effort */ }
+    } catch {  }
   }
 
-  // tests mentioning the symbol (file names + first mention line)
   try {
     const { walkFiles } = await import('./list.js');
     const testFiles = walkFiles(root).files.filter((f) => /\.(test|spec)\.[tj]sx?$/.test(f));
@@ -117,10 +113,10 @@ async function contextPackTool(args: Record<string, unknown>, ctx: AgentToolCont
           for (let i = 0; i < idx; i += 1) if (tContent[i] === '\n') line += 1;
           mentioning.push(`  ${tf}:${line}`);
         }
-      } catch { /* skip */ }
+      } catch {  }
     }
     if (mentioning.length > 0) push(`── tests mentioning "${symbol}":\n${mentioning.join('\n')}`, 'tests');
-  } catch { /* skip */ }
+  } catch {  }
 
   const header = `# context_pack — ${resolved.relative} · "${symbol}" (${span.breadcrumb}) · ${used}/${budget} chars`;
   const tail = omitted.length > 0 ? `\n[cut for budget: ${omitted.join(', ')} — call read_symbol for the rest]` : '\nNext: edit the receipted range directly (edit_file / edit_lines).';

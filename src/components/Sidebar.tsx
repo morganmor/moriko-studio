@@ -323,7 +323,6 @@ const RecentItem = memo(function RecentItem({
                     type="button"
                     role="menuitem"
                     onClick={() => {
-                      // Design chat options: pin sorts the chat to the top of Recent.
                       patchConversation(conversation.id, { pinned: !conversation.pinned });
                       onMenuToggle(conversation.id);
                     }}
@@ -634,7 +633,7 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, onBindWor
         <SectionLabel>Playground</SectionLabel>
         <div>
           {}
-          {/* Parent panels never light up — only sub-items and conversations do. */}
+          {}
           <NavGroup
             icon={<ChatIcon />}
             label="Chat"
@@ -660,7 +659,7 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, onBindWor
           </NavGroup>
 
           {}
-          {/* Parent panels never light up — only sub-items and conversations do. */}
+          {}
           <NavGroup
             icon={<DIcon name="image" className="ic" />}
             label="Image Studio"
@@ -770,8 +769,7 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, onBindWor
         </div>
 
         <CollapseSection open={workspaceOpen}>
-          {/* BIND A FOLDER... — register+activate workspace langsung dari sidebar,
-               bukan cuma lewat pill TopBar (kebutuhan chat aktif). */}
+          {}
           <button
             type="button"
             className="ws-bind"
@@ -821,9 +819,6 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, onBindWor
                       <p className="ws-empty">No sessions bound.</p>
                     ) : (
                       chats.map((conversation) => (
-                        /* Same triple-dot options menu as Recent Chat —
-                           RecentItem is the full row (menu, rename, pin,
-                           export, delete), so workspace chats share it. */
                         <RecentItem
                           key={conversation.id}
                           conversation={conversation}

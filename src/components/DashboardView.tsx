@@ -162,9 +162,6 @@ export function DashboardView({ onOpenProviders }: { onOpenProviders: () => void
     setChecked((previous) => {
       let next: string[];
       if (previous.length === 0) {
-        // Nothing stored = every row included (totals unfiltered). First click
-        // switches to an explicit subset that excludes exactly the clicked
-        // row, so the checkbox always reflects what the design promises.
         next = (usage?.providers ?? [])
           .map((entry) => entry.providerId)
           .filter((providerId) => providerId !== id);

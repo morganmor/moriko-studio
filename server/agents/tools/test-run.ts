@@ -141,7 +141,7 @@ function detectRunner(args: Record<string, unknown>, cwd: string): RunnerKind {
     const testScript = pkg.scripts?.test ?? '';
     if (testScript.includes('vitest')) return 'vitest';
     if (testScript.includes('jest')) return 'jest';
-  } catch { /* no package.json */ }
+  } catch {  }
   if (existsSync(path.join(cwd, 'pytest.ini')) || existsSync(path.join(cwd, 'pyproject.toml'))) return 'pytest';
   if (existsSync(path.join(cwd, 'Cargo.toml'))) return 'cargo';
   if (existsSync(path.join(cwd, 'go.mod'))) return 'go';
@@ -193,7 +193,7 @@ export async function testRunTool(args: Record<string, unknown>, ctx: AgentToolC
 
   let testFiles: string[] = [];
   if (runner === 'cargo' || runner === 'go') {
-    testFiles = []; // whole-project runner, no file list
+    testFiles = [];
   } else if (explicitFiles.length > 0) {
     testFiles = explicitFiles;
   } else if (runner === 'pytest') {
@@ -259,7 +259,6 @@ export async function testRunTool(args: Record<string, unknown>, ctx: AgentToolC
   };
 
   if (runner === 'cargo' || runner === 'go' || runner === 'vitest' || runner === 'jest') {
-    // Project-level runners: one invocation for all targets.
     const label = runner === 'cargo' ? 'cargo test' : runner === 'go' ? 'go test ./...' : (testFiles.length > 0 ? testFiles.join(' ') : 'project');
     await runOne(testFiles.length > 0 ? testFiles : [], label);
   } else {

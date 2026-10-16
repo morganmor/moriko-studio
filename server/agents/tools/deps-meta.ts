@@ -48,8 +48,6 @@ export function depsTool(args: Record<string, unknown>, ctx: AgentToolContext): 
   if (!inputPath) {
     return { ok: false, isError: true, text: 'deps needs a "path" (file relative to the workspace root).' };
   }
-  // Addon Manager: addons-src/… resolves against the addon source root
-  // even without a workspace.
   const addonsSrc = resolveAddonsSrcTarget(inputPath);
   if (addonsSrc) {
     const report = queryDeps(path.dirname(addonsSrc.absolute), addonsSrc.absolute);

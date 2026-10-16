@@ -58,8 +58,6 @@ export function ensureEsbuildCopies() {
     try {
       copyFileSync(src, dest);
     } catch (error) {
-      // A running dev process can hold the staged exe (EBUSY) — an identical
-      // copy already on disk is good enough; never block startup over it.
       if (!existsSync(dest)) throw error;
       console.warn(`[setup-esbuild] ${side}: keeping existing ${dest} (${error.code ?? 'copy failed'}).`);
     }

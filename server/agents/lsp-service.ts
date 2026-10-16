@@ -93,12 +93,6 @@ function projectFor(absFile: string, root: string): ResolvedProject {
     const raw = ts.readConfigFile(found, ts.sys.readFile);
     const cfg = (raw.config ?? {}) as Record<string, unknown>;
 
-    // Solution file → pick the referenced project containing the file. Parsing
-    // a solution directly yields empty options + no roots, silently breaking the
-    // LanguageService ("Could not find source file").
-    // parseJsonConfigFileContent returns fileNames RELATIVE to the base dir;
-    // the LanguageService host must expose ABSOLUTE paths or the program
-    // reports TS6053 "Could not find source file" for every member.
     const toAbs = (baseDir: string, f: string): string =>
       path.isAbsolute(f) ? path.normalize(f) : path.resolve(baseDir, f);
 
@@ -122,11 +116,9 @@ function projectFor(absFile: string, root: string): ResolvedProject {
           };
         }
       }
-      // Not part of any referenced project — fall back to a walk + defaults.
       return fallback();
     }
 
-    // Normal (non-solution) config — parse it directly.
     const dir = path.dirname(found);
     const parsed = ts.parseJsonConfigFileContent(
       ts.readConfigFile(found, ts.sys.readFile).config ?? {}, ts.sys, dir,
@@ -172,9 +164,6 @@ export function getLanguageService(absFile: string, root: string): ts.LanguageSe
   const project = projectFor(absFile, root);
   const existing = services.find((s) => s.root === project.key);
   if (existing) {
-    // The cached program was captured at first use; register the newly
-    // requested file too. Cheap, and prevents a cached-service TS6053 when a
-    // file sat outside the originally captured root set.
     existing.entry.files.add(path.normalize(absFile));
     return existing.entry.service;
   }

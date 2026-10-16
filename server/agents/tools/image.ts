@@ -119,7 +119,6 @@ export async function imageTool(args: Record<string, unknown>, ctx: AgentToolCon
   });
   if (!target) return unconfigured();
 
-  // Reference images → edit mode.
   const rawRefs = Array.isArray(args.referencePaths) ? args.referencePaths : [];
   const refInputs = rawRefs
     .filter((entry): entry is string => typeof entry === 'string')
@@ -139,8 +138,6 @@ export async function imageTool(args: Record<string, unknown>, ctx: AgentToolCon
     images.push(resolved.dataUrl);
   }
 
-  // Capability hints: provider capacity is endpoint authority; per-model
-  // classification is advisory (same policy as the HTTP route).
   const providers = await listImageCapableProviders();
   const entry = providers.find((p) => p.providerId === target.providerId);
   if (entry && images.length > entry.maxReferences) {
@@ -164,9 +161,6 @@ export async function imageTool(args: Record<string, unknown>, ctx: AgentToolCon
     }
   }
 
-  // Size: explicit args win; else the saved Image Studio size settings.
-  // LLMs often send numbers as strings ("966") — coerce before validating,
-  // otherwise the value is silently dropped and the provider default wins.
   const coerceDim = (value: unknown): number | undefined => {
     if (typeof value === 'number' && Number.isFinite(value)) return value;
     if (typeof value === 'string' && value.trim() !== '') {
@@ -244,11 +238,8 @@ export async function imageTool(args: Record<string, unknown>, ctx: AgentToolCon
       };
     }
 
-    // User decision: results go to the Gallery automatically (never Image History).
     appendToGallery(outcome.images);
 
-    // Inline ride-back: the model SEES the result and can iterate without
-    // the user re-uploading anything.
     const inline: ToolImage[] = [];
     for (const url of outcome.images.slice(0, MAX_INLINE_IMAGES)) {
       const local = localImageByUrl(url);

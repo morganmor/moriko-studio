@@ -82,7 +82,6 @@ interface OpenAiImagesResponse {
   data?: Array<{ url?: string; b64_json?: string }>;
 }
 
-// ─── provider resolution catalog (NanoGPT-style) ─────────────────────
 
 interface DetailedImageModel {
   id?: string;
@@ -122,7 +121,7 @@ async function fetchResolutionCatalog(base: string, apiKey: string | undefined):
         }
       }
     }
-  } catch { /* catalog is optional — provider may not expose it */ }
+  } catch {  }
   catalogCache.set(base, { at: Date.now(), models });
   return models;
 }
@@ -177,7 +176,6 @@ function attemptBodies(req: ImageSubmitRequest, explicitSize?: string): Array<{ 
 
   const attempts: Array<{ label: string; body: Record<string, unknown> }> = [];
 
-  // Attempt 1: full request with the requested size
   if (customSize) {
     attempts.push({
       label: `full request (model, prompt, n, size ${customSize})`,
@@ -185,7 +183,6 @@ function attemptBodies(req: ImageSubmitRequest, explicitSize?: string): Array<{ 
     });
   }
 
-  // Attempt 2: if custom pixels, try closest standard size before giving up
   if (req.width && req.height) {
     const standard = closestStandardSize(req.width, req.height);
     if (standard && standard !== customSize) {
@@ -196,7 +193,6 @@ function attemptBodies(req: ImageSubmitRequest, explicitSize?: string): Array<{ 
     }
   }
 
-  // Attempt 3: minimal — no optional parameters
   attempts.push({
     label: 'minimal fallback (model, prompt only — no optional parameters)',
     body: { model: req.model, prompt: req.prompt },
@@ -225,10 +221,6 @@ async function execute(
   let lastText = '';
   let fellBack = false;
 
-  // Resolve a provider-supported size BEFORE sending. NanoGPT accepts any
-  // `size` string but silently renders at 1024x1024 when the value is not in
-  // the model's supported_parameters.resolutions — no HTTP 400, so the
-  // fallback ladder below never triggers. Snapping up front fixes that.
   let snapNote: string | undefined;
   let sizeOverride: string | undefined;
   const desiredSize =

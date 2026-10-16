@@ -87,13 +87,11 @@ export function unregisterAddon(id: string): void {
     if (hooks[i].addonId === id) hooks.splice(i, 1);
   }
   widgets.delete(id);
-  // v2: dispose scoped hooks/timers/listeners (A-08). The PERSISTENT store
-  // survives reloads (A-05) — only flush pending writes.
   disposeAddonScope(id);
-  try { flushAddonStores(id); } catch { /* best-effort */ }
+  try { flushAddonStores(id); } catch {  }
   clearAddonLogs(id);
   addons.delete(id);
-  try { unregisterContributions(id); } catch { /* best-effort */ }
+  try { unregisterContributions(id); } catch {  }
 }
 
 export function getAddon(id: string): LoadedAddon | undefined { return addons.get(id); }
@@ -271,9 +269,6 @@ export function addContextProvider(provider: AddonContextProvider): Disposable {
 }
 
 export function removeContextProvider(title: string): void {
-  // Legacy surface: v1 addons/revoke call sites had no addon identity — remove
-  // by title across owners ONLY for providers they own; the per-addon facade
-  // (api.ts) never calls this anymore.
   for (const key of [...contextProviders.keys()]) {
     if (key.endsWith(`\u0000${title}`) || key === title) contextProviders.delete(key);
   }
@@ -286,7 +281,7 @@ export function listContextProviders(): AddonContextProvider[] {
 
 export function clearAllAddons(): void {
   for (const id of [...addons.keys()]) disposeAddonScope(id);
-  try { flushAllStores(); } catch { /* best-effort */ }
+  try { flushAllStores(); } catch {  }
   tools.clear();
   commands.clear();
   hooks.length = 0;

@@ -50,8 +50,6 @@ const LazyExplore = lazy(() =>
 const LazyProjectTreePanel = lazy(() =>
   import('./components/ProjectTreePanel').then((m) => ({ default: m.ProjectTreePanel })),
 );
-// AddonPanel's dock tab is now the AddonDockShortcut → the Hub (A6).
-// LazyAddonPanel intentionally removed; the full manager lives in AddonHub.
 const LazyDiffPanel = lazy(() =>
   import('./components/DiffPanel').then((m) => ({ default: m.DiffPanel })),
 );
@@ -80,24 +78,17 @@ function ResizeHandle({
   onResize,
   onCommit,
 }: {
-  /** Which edge the panel is on: the handle math flips per side. */
   side: 'left' | 'right';
   value: number;
   min: number;
   max: number;
   defaultValue: number;
-  /** Live updates during the drag (store-only — cheap, every pointermove). */
   onResize: (width: number) => void;
-  /** Persisted ONCE on release (and on double-click reset) — never per move. */
   onCommit: (width: number) => void;
 }) {
   const drag = useRef<{ startClientX: number; startWidth: number } | null>(null);
   const latest = useRef(value);
 
-  /* `.resizing` kills the width transition on .rail/.dock/.fold while a drag is
-     live — otherwise the fold eases 260ms behind the handle and the panel
-     content (which resizes instantly) spills past its clipped edge. The
-     unmount cleanup guards against a drag that outlives the handle. */
   useEffect(() => () => document.body.classList.remove('resizing'), []);
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -127,7 +118,6 @@ function ResizeHandle({
     try {
       event.currentTarget.releasePointerCapture(event.pointerId);
     } catch {
-      /* capture may already be released by the browser */
     }
   };
 
@@ -143,9 +133,6 @@ function ResizeHandle({
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerCancel}
       onKeyDown={(event) => {
-        /* Reference design: the resizer is a focusable separator. Arrow keys
-           nudge by 16px (direction matches which side the panel hugs), Home
-           resets — each step persists immediately, like pointer release. */
         const step = event.key === 'ArrowLeft' ? -16 : event.key === 'ArrowRight' ? 16 : 0;
         if (!step && event.key !== 'Home') return;
         event.preventDefault();
@@ -182,7 +169,6 @@ export default function App() {
   const ambient = useStore((state) => state.ambient);
   const reduceMotion = useStore((state) => state.reduceMotion);
   const fontFamily = useStore((state) => state.fontFamily);
-  /** confirmDel (panel-settings): a chat id parked until the dialog answers. */
   const pendingConfirmDelete = useStore((state) => state.pendingConfirmDelete);
   const confirmPendingDelete = useStore((state) => state.confirmPendingDelete);
   const cancelPendingDelete = useStore((state) => state.cancelPendingDelete);
@@ -193,7 +179,6 @@ export default function App() {
   );
   const settingsOpen = useStore((state) => state.settingsOpen);
   const toggleSettings = useStore((state) => state.toggleSettings);
-  /** 6B: what the right dock shows — Configuration or the docked Tree. */
   const rightPanelMode = useStore((state) => state.rightPanelMode);
   const [settingsEverOpened, setSettingsEverOpened] = useState(false);
   const [settingsPanelReady, setSettingsPanelReady] = useState(false);
@@ -207,7 +192,6 @@ export default function App() {
   }, [settingsOpen]);
   const sidebarCollapsed = useStore((state) => state.sidebarCollapsed);
   const toggleSidebar = useStore((state) => state.toggleSidebar);
-  /** Agent mode for the design's Alt A shortcut (reads the effective chat settings). */
   const chatSettings = useEffectiveSettings();
   const sidebarWidth = useStore((state) => state.sidebarWidth);
   const setSidebarWidth = useStore((state) => state.setSidebarWidth);
@@ -246,10 +230,6 @@ export default function App() {
   const showNotice = useStore((state) => state.showNotice);
   const activeAgentWorkspaceId = useStore((state) => state.activeAgentWorkspaceId);
   const agentWorkspaces = useStore((state) => state.agentWorkspaces);
-  /* 2026-10 BUGFIX: pill TopBar dulu HANYA ikut activeAgentWorkspaceId, jadi
-   * saat chat dipindah ke Owl (Move to workspace) pill tetap "No workspace"
-   * padahal menu mencentang Owl. Sekarang pill mengikuti binding CHAT aktif;
-   * fallback ke workspace global hanya saat tidak ada chat. */
   const workspaceTargetId = activeConversation?.workspaceId ?? (activeConversation ? null : activeAgentWorkspaceId);
   const workspaceLabel = workspaceTargetId
     ? agentWorkspaces.find((workspace) => workspace.id === workspaceTargetId)?.label
@@ -260,7 +240,6 @@ export default function App() {
   }, [loadTreeView, activeAgentWorkspaceId]);
 
   useEffect(() => {
-    // P5 BUGFIX: model metadata (models.dev, 261 KB) was moved off the boot
     void useStore.getState().ensureModelMeta();
   }, []);
 
@@ -290,7 +269,6 @@ export default function App() {
       const host = store.activeConversation();
       const workspaceId = host?.workspaceId ?? undefined;
 
-      // COUNCIL routing: reuse this agent's sub session when it already has one.
       const conversationId = host?.councilId
         ? ensureCouncilSubSession(detail)
         : (() => {
@@ -304,9 +282,6 @@ export default function App() {
           })();
       if (!conversationId) return;
       applyAgentSessionSettings(conversationId, detail.thinkingLevel);
-      // Bind SEBELUM send — dan TUNGGU hasilnya: prompt fragment identitas
-      // dibangun di server saat request pertama, jadi bind yang masih
-      // in-flight membuat turn pertama (dan klaim pertamanya) tanpa identitas.
       await bindAgentSessionRpc(detail.agentId, conversationId, detail.questId);
       void send(detail.prompt, conversationId);
     };
@@ -431,7 +406,7 @@ export default function App() {
                 `You were dispatched into this council as ${detail.agentName}. Your identity, fellow members and the shared brief are already in your context: run council_status, absorb the brief, then ack with council_ack and await the operator's task.`,
             }),
           });
-        } catch { /* directive is best-effort; identity fragment still applies */ }
+        } catch {  }
         useStore.getState().selectConversation(subId);
       })();
     };
@@ -464,8 +439,6 @@ export default function App() {
       void fetch('/api/addons/council/rpc/setOrchestrator', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // sessionId WAJIB: without it the server resolves the wrong workspace
-        // and the designation is written to a file the panel never reads.
         body: JSON.stringify({ sessionId: active.id, councilId: active.councilId, orchestratorAgentId: detail.agentId }),
       }).catch(() => undefined);
     };
@@ -515,7 +488,6 @@ export default function App() {
       window.dispatchEvent(new CustomEvent('moriko:council-stop', { detail: { id: payload.conversationId } }));
     };
     const onWake = (frame: { id?: number; payload?: Record<string, unknown> }) => {
-      // Bus frames replay on reconnect — a monotonic guard keeps each wake once.
       const seen = (window as unknown as { __councilSeenWake?: number }).__councilSeenWake ?? 0;
       if ((frame.id ?? 0) <= seen) return;
       (window as unknown as { __councilSeenWake?: number }).__councilSeenWake = frame.id ?? 0;
@@ -528,8 +500,6 @@ export default function App() {
         void send(item.text, item.sessionId);
       }
     };
-    // HARNESS-EVENT bridge: an addon event for a conversation this tab knows
-    // about lands as a dedicated event turn (own panel) — even while idle.
     const onHarnessEvent = (frame: { id?: number; payload?: Record<string, unknown> }) => {
       const seen = (window as unknown as { __seenHarnessEvent?: number }).__seenHarnessEvent ?? 0;
       if ((frame.id ?? 0) <= seen) return;
@@ -540,7 +510,7 @@ export default function App() {
       } | null;
       if (!payload?.conversationId || !payload.event?.id || !payload.event.text) return;
       const known = useStore.getState().conversations.some((entry) => entry.id === payload.conversationId);
-      if (!known) return; // per-session: never leak into other conversations
+      if (!known) return;
       useStore.getState().upsertHarnessEvent(payload.conversationId, {
         id: payload.event.id,
         role: 'user',
@@ -613,11 +583,6 @@ export default function App() {
     }
   }, [addAgentWorkspace, setActiveAgentWorkspace, activeIdForPick, showNotice]);
 
-  /** HANDLE BIND + ACTIVATE (2026-10 bugfix): pilihan dari SEMUA UI workspace
-   *  (TopBar "Bind a folder...", composer folder button, dan kini sidebar)
-   *  melewati sini — setelah folder dipilih, workspace langsung jadi AKTIF
-   *  (server per-session + state) supaya pill TopBar dan tree ikut, bukan
-   *  sekadar terdaftar. */
   const handleBindWorkspace = useCallback(async () => {
     await handlePickWorkspace();
   }, [handlePickWorkspace]);
@@ -675,7 +640,6 @@ export default function App() {
         event.preventDefault();
         toggleSidebar();
       }
-      /* Reference design: Alt N spawns a fresh chat from anywhere. */
       if (
         event.altKey &&
         !event.ctrlKey &&
@@ -686,17 +650,14 @@ export default function App() {
         useStore.getState().setView('playground');
         useStore.getState().newConversation();
       }
-      /* Right-dock design: Ctrl . toggles the configuration panel. */
       if ((event.ctrlKey || event.metaKey) && event.key === '.') {
         event.preventDefault();
         toggleSettings();
       }
-      /* Canvas-chat design: Alt A flips agent mode on/off. */
       if (event.altKey && !event.ctrlKey && !event.metaKey && (event.key === 'a' || event.key === 'A')) {
         event.preventDefault();
         useStore.getState().updateSettings({ agentMode: !chatSettings.agentMode });
       }
-      /* Design More menu: F2 renames the active chat when focus is not typing. */
       if (event.key === 'F2') {
         const target = event.target instanceof Element ? event.target : null;
         const typing =
@@ -712,7 +673,6 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [toggleSidebar, toggleSettings, chatSettings.agentMode]);
 
-  /** Popovers design: Arrow/Home/End walk the focus through an open popover. */
   useEffect(() => {
     const onPopoverKeys = (event: KeyboardEvent) => {
       if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Home' && event.key !== 'End') {
@@ -745,9 +705,6 @@ export default function App() {
 
   useEffect(() => {
     if (!navOpen) return;
-    /* Reference design: growing back past the drawer breakpoint dismisses the
-       mobile nav — the desktop rail is already visible, so the overlay would
-       only sit duplicated on top of it. */
     const onResize = () => {
       if (window.matchMedia('(min-width: 768px)').matches) setNavOpen(false);
     };
@@ -757,8 +714,6 @@ export default function App() {
 
   useEffect(() => {
     if (!settingsOpen) return;
-    /* Same rule for the RIGHT drawer: at ≥lg the docked fold is already
-       mounted, so the mobile overlay would only duplicate it. */
     const onResize = () => {
       if (window.matchMedia('(min-width: 1024px)').matches) dismissSettings();
     };
@@ -783,9 +738,6 @@ export default function App() {
     };
   }, [navOpen, settingsOpen, dismissSettings]);
 
-  // Theme mechanism (design/moriko-design-1-theme-mechanism.html): ONE effect
-  // applies every appearance knob, and re-applies when the OS flips its own
-  // system-theme or reduced-motion preference.
   useEffect(() => {
     const apply = () =>
       applyAppearance({ theme, accent, density, ambient, fontFamily, reduceMotion });
@@ -800,7 +752,6 @@ export default function App() {
     };
   }, [theme, accent, density, ambient, reduceMotion, fontFamily]);
 
-  // Design :root defines --img-cat (pixel cat for .logo/.av); point it at the bundled asset.
   useEffect(() => {
     document.documentElement.style.setProperty('--img-cat', `url(${brandCatHeadSvgUrl})`);
   }, []);
@@ -933,16 +884,12 @@ export default function App() {
     composerSlotRef.current = node;
   }, []);
 
-  // While on the landing view, remember the slot's on-screen rect so the
-  // first-send reflow can be FLIP-animated down to the dock.
   useLayoutEffect(() => {
     const slot = composerSlotRef.current;
     if (!slot || hasThread) return;
     slotRectRef.current = slot.getBoundingClientRect();
   });
 
-  // First send: the slot re-flows from the landing cluster to the dock;
-  // animate it from the last landing position down to rest.
   useLayoutEffect(() => {
     const from = slotRectRef.current;
     if (!hasThread || !from) return;
@@ -1104,9 +1051,7 @@ export default function App() {
             onClick={() => setNavOpen(false)}
             aria-hidden="true"
           />
-          {/* .nav-open on this wrapper: at ≤768px Sidebar's .rail is fixed +
-              translateX(-105%) and ONLY `.nav-open .rail` un-translates it —
-              without the class the drawer's rail stays parked offscreen. */}
+          {}
           <div className="drawer-slide-left" style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: 248, boxShadow: 'var(--sh2)' }}>
             <Sidebar
               onOpenProviders={() => setProvidersOpen(true)}
@@ -1157,7 +1102,7 @@ export default function App() {
         id="workspace"
         className="work"
       >
-        {/* View addon = EKSKLUSIF: TopBar chat tidak dirender di atasnya. */}
+        {}
         {typeof view === 'string' && view.startsWith('addon:') ? null : (
           <TopBar
             title={title}

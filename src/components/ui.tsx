@@ -114,7 +114,6 @@ export function RightDockSlot({
       const box = anchorRef.current?.getBoundingClientRect();
       if (box) {
         const flip = box.bottom + 170 > window.innerHeight;
-        // Clamp horizontally: a 170px-wide menu must stay on screen on phones.
         const left = Math.max(8, Math.min(box.left, window.innerWidth - 186));
         setPos(
           flip
@@ -249,9 +248,6 @@ export function Segmented({
     if (!seg) return;
     const checked = seg.querySelector<HTMLButtonElement>(`button[data-v="${CSS.escape(value)}"]`);
     if (!checked || !checked.offsetWidth) return;
-    // A Tip (.seg-opt) wrapper is position:relative, so the button's offsetLeft
-    // is relative to THAT span — accumulate offsets up to the .seg root or the
-    // pill would pin to the first option forever (Operator/Admin looked dead).
     let x = checked.offsetLeft;
     let node = checked.offsetParent as HTMLElement | null;
     while (node && node !== seg) {
@@ -606,8 +602,7 @@ function NoticeCard({ entry, onDismiss }: { entry: NoticeEntryView; onDismiss: (
         animation: 'tIn .35s var(--spring)',
       }}
     >
-      {/* flex:1 + minWidth:0 → inner mengisi lebar kartu (min-width:200), sehingga
-          tombol X terdorong ke pojok kanan, bukan nempel setelah teks. */}
+      {}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, flex: 1, minWidth: 0 }}>
         <span
           aria-hidden="true"

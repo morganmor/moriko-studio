@@ -68,7 +68,6 @@ const BRACE_EXTENSIONS = new Set([
   '.sql', '.graphql', '.gql',
   '.vue', '.svelte',
   '.prisma', '.proto',
-  // F1.7 — shader / game script languages.
   '.glsl', '.vert', '.frag', '.geom', '.comp', '.wgsl', '.hlsl', '.fx',
   '.shader', '.compute', '.cginc', '.gdshader',
 ]);

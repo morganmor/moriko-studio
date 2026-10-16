@@ -171,10 +171,6 @@ export function CheckpointRail({
         );
       })}
       {hovered && (
-        /* Tooltip checkpoint ikut MEKANISME .tip (ui.tsx): latar --c-ink,
-         * teks --c-canvas, radius 8 — token yang sama di semua tema
-         * (light/dark/mocha). Dulu: background --c-paper (token light-only,
-         * tidak dioverride di .dark/.mocha) → kotak putih generik. */
         <div
           style={{
             pointerEvents: 'none',

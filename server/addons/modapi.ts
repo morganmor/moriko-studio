@@ -3,7 +3,7 @@
  * Minimal name-scoped registry; disposal is automatic with the addon scope.
  */
 
-const exposed = new Map<string, { addonId: string; name: string; impl: object }>(); // key owner\0name
+const exposed = new Map<string, { addonId: string; name: string; impl: object }>();
 
 export function exposeModApi(addonId: string, name: string, impl: object): () => void {
   const key = `${addonId}\u0000${name}`;

@@ -35,8 +35,6 @@ async function deadCodeTool(args: Record<string, unknown>, ctx: AgentToolContext
     }
   }
 
-  // Check 1: no importer of the FILE (deps graph).
-  // Check 2: no LS references outside the declaring file.
   const dead: Array<{ file: string; name: string; line: number; kind: string; refs: number }> = [];
   const nameToFile = new Map<string, string>();
   for (const c of candidates) {
@@ -46,7 +44,6 @@ async function deadCodeTool(args: Record<string, unknown>, ctx: AgentToolContext
   const refCache = new Map<string, number>();
   for (const c of candidates.slice(0, 400)) {
     const abs = path.join(resolved.absolute, c.file);
-    // Skip re-export barrels: files named index.* re-export for others.
     if (/\/index\.(ts|tsx|js|jsx)$/.test(c.file)) continue;
 
     const report = queryDeps(root, abs);
@@ -61,7 +58,6 @@ async function deadCodeTool(args: Record<string, unknown>, ctx: AgentToolContext
         const lines = content.split('\n');
         let offset = 0;
         for (let i = 0; i < Math.min(c.line - 1, lines.length - 1); i += 1) offset += lines[i].length + 1;
-        // Scan the declaration line for the identifier position.
         const declLine = lines[c.line - 1] ?? '';
         const col = declLine.indexOf(c.name);
         if (col >= 0) {
@@ -73,7 +69,7 @@ async function deadCodeTool(args: Record<string, unknown>, ctx: AgentToolContext
           outsideRefs = 0;
         }
       } catch {
-        outsideRefs = -1; // unknown → keep (never report a false dead)
+        outsideRefs = -1;
       }
       refCache.set(key, outsideRefs);
     }

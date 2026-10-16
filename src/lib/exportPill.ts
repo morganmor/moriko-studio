@@ -240,8 +240,6 @@ export async function buildPillExportHtml(): Promise<{
   };
   const cache = new Map<string, string>();
 
-  // 1) Harvest the real pill: prefer one whose panel content is already
-  //    mounted; otherwise open one briefly to capture rows, then restore it.
   let pillHtml = '';
   const stacks = Array.from(document.querySelectorAll('.activity-stack'));
   const withRows = stacks.find((s) => s.querySelector('.activity-panel-scroll')) ?? stacks[0];
@@ -263,8 +261,6 @@ export async function buildPillExportHtml(): Promise<{
   const harvested = pillHtml.length > 0;
   if (!harvested) pillHtml = SYNTH_PILL;
 
-  // Normalize: guarantee the dots group exists (live markup only renders it
-  // while running+collapsed) with the marker class the demo CSS gates on.
   const parsed = new DOMParser().parseFromString(pillHtml, 'text/html');
   const stack = parsed.body.firstElementChild;
   if (stack && !stack.querySelector('.demo-dots')) {
@@ -284,7 +280,6 @@ export async function buildPillExportHtml(): Promise<{
   }
   pillHtml = stack ? parsed.body.innerHTML : SYNTH_PILL;
 
-  // 2) Full stylesheet (pill rules + keyframes + tokens + utilities).
   const styleTexts: string[] = [];
   for (const el of Array.from(document.querySelectorAll('style'))) {
     styleTexts.push(el.textContent ?? '');
@@ -307,7 +302,6 @@ export async function buildPillExportHtml(): Promise<{
     stats.styles += 1;
   }
 
-  // 3) Any images inside the harvested pill → data URIs.
   const holder = parsed.createElement('div');
   holder.innerHTML = pillHtml;
   await inlineImagesIn(holder, cache, stats);
@@ -315,7 +309,6 @@ export async function buildPillExportHtml(): Promise<{
   stats.panels = 1;
   stats.pill = harvested;
 
-  // 4) Assemble the document.
   const stamp = new Date().toISOString();
   const themeClass = document.documentElement.className;
   const colorScheme =
@@ -374,7 +367,6 @@ export async function exportPill(): Promise<void> {
         savedPath = data.file ?? null;
       }
     } catch {
-      // Server save is best effort — the browser download still runs.
     }
 
     const blob = new Blob([html], { type: 'text/html;charset=utf-8' });

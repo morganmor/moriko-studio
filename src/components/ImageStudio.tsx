@@ -195,7 +195,6 @@ export function ImageStudio() {
   const generate = async () => {
     if (busy || !ready) return;
     if (!prompt.trim()) {
-      // Design mechanism: an empty prompt shakes the form instead of a dead button.
       const form = sformRef.current;
       if (form) {
         form.classList.remove('shake');
@@ -323,7 +322,6 @@ export function ImageStudio() {
       catalog HINT — it never blocks transmission, the endpoint does. */
   const requiresReference = isEditModel && !modelCaps?.modes.includes('text-to-image');
   // NOTE: a catalog hint never BLOCKS Generate — blocking is the classifier
-  // An empty prompt is NOT disabled either — it shakes the form (design mechanism).
   const canGenerate = ready && !busy && !sizeInvalid;
 
   /** Design .page-head subtitle: session stats, or the first-run hint. */
@@ -362,7 +360,7 @@ export function ImageStudio() {
     >
       <div style={{ minHeight: 0, flex: 1, overflowY: 'auto' }}>
         <div className="page" style={{ zoom: fontScale }}>
-          {/* Design .page-head: title + live subtitle + History / New session. */}
+          {}
           <div className="page-head">
             <div>
               <h2>Image Studio</h2>
@@ -407,7 +405,7 @@ export function ImageStudio() {
             </div>
           ) : null}
 
-          {/* Design .sform: prompt card + controls row (focus glow, shake). */}
+          {}
           <div className="sform" ref={sformRef}>
             {dragActive ? (
               <div style={{ position: 'absolute', inset: 0, zIndex: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 'inherit', border: '2px dashed rgb(var(--c-accent))', background: 'rgb(var(--c-accent) / 0.1)', pointerEvents: 'none', backdropFilter: 'blur(1px)' }}>
@@ -645,7 +643,7 @@ export function ImageStudio() {
             </div>
           </div>
 
-          {/* Design #sOut: empty state with sample prompts, or the session tiles. */}
+          {}
           {showHero ? (
             <div className="empty" style={{ padding: '44px 18px' }}>
               <div className="eic">

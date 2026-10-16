@@ -37,8 +37,6 @@ export function foldModeResult(content: string, relative: string, maxDepthRaw: u
   const rawDepth = typeof maxDepthRaw === 'number' && Number.isFinite(maxDepthRaw) ? maxDepthRaw : undefined;
   const maxDepth = Math.min(Math.max(Math.trunc(rawDepth ?? 2), 1), 8);
 
-  // MARKDOWN HEADING FOLD: no brace scanner for .md/.mdx — fold by the
-  // #/##/### heading hierarchy instead of refusing.
   if (result.scanned === 'none') {
     const ext = path.extname(relative).toLowerCase();
     if (ext === '.md' || ext === '.mdx') {
@@ -76,9 +74,6 @@ export function foldModeResult(content: string, relative: string, maxDepthRaw: u
     for (const child of block.children) render(child, depth + 1);
   };
 
-  // FAULT-TOLERANT FOLD: unbalanced braces/quotes used to discard the whole
-  // map; if the scanner still produced blocks, show the PARTIAL map with a
-  // loud warning instead of leaving the model mapless.
   const partialNote = !result.balanced
     ? 'WARNING: unbalanced braces/quotes — partial fold map; line ranges past the first imbalance may be shifted'
     : '';
@@ -338,8 +333,6 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
     };
   }
 
-  // Hash dari footer read_file tercetak "sha256:a1b2c3d4e5f6" — model sering
-  // menyalin string itu UTUH; normalizeHashInput melucuti prefix-nya.
   const lastHash = normalizeHashInput(str(args, 'lastHash'));
   if (lastHash) {
     if (lastHash.length < 8) {
@@ -349,11 +342,6 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
       };
     }
     if (contentHash.startsWith(lastHash)) {
-      // Temuan A: jangan pernah recordRead(1..view.length) di sini — itu
-      // membuka paksa izin baca SELURUH file walau model hanya pernah membaca
-      // sebagian kecil. Pertahankan interval baca yang sudah ada persis.
-      // recordRead menggabungkan interval dengan hash yang sama, sehingga
-      // memasok kembali rentang milik existing adalah no-union + rev bump.
       const existing = getReadEntry(ctx.sessionId, absolute);
       const refreshed = existing
         ? recordRead(ctx.sessionId, absolute, content, stats.mtimeMs, existing.fromLine, existing.fromLine)
@@ -372,8 +360,6 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
     markStructuralRead(ctx.sessionId, absolute);
     const symbols: string[] = [];
     let capped = false;
-    // F2.4 — AST outline for TS/JS files (arrow functions, object methods,
-    // overloads, enums); regex fallback for everything else.
     const ext = path.extname(relative).toLowerCase();
     let usedAst = false;
     if (['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts'].includes(ext)) {
@@ -390,7 +376,7 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
             try {
               const sp = item.spans[0];
               lineNo = content.slice(0, sp.start).split('\n').length;
-            } catch { /* keep 1 */ }
+            } catch {  }
             symbols.push(`${String(lineNo).padStart(5)}  ${indent}[${item.kind}] ${item.text}`);
             if (item.childItems && item.childItems.length > 0) flatten(item.childItems, `${indent}  `);
           }
@@ -399,7 +385,7 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
           usedAst = true;
           flatten(items, '');
         }
-      } catch { /* fall back to regex */ }
+      } catch {  }
     }
     if (!usedAst) {
       for (let index = 0; index < view.length; index += 1) {
@@ -482,9 +468,6 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
     const header = `# ${relative} — multi-range read of ${view.length}-line file`;
     const slices: string[] = [header];
     let budgetLeft = MAX_OUTPUT_CHARS - header.length - 300;
-    // Receipt PER RANGE, pada baris yang BENAR-BENAR ter-render (bukan harga
-    // awal range) — recordRead penggabungan intervalnya (multi-interval)
-    // menjaga semua range tetap sah untuk diedit, bukan hanya range terakhir.
     const recordedRanges: Array<{ from: number; to: number }> = [];
     let lastRev = 1;
     for (const range of parsed) {
@@ -544,9 +527,6 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
   const plannedEnd = Math.min(startLine - 1 + windowMax, view.length);
 
   // BUG (baris hilang saat budgetStopped): header/footer/token `next` dulu
-  // dibangun dari plannedEnd SEBELUM loop render. Output terpotong anggaran
-  // membuat continueFrom melompati baris endLine+1..plannedEnd. Sekarang
-  // semuanya dibangun dari endLine AKTUAL pasca-loop.
   const headerEstimate = `# ${relative} — lines ${startLine}–${plannedEnd} of ${view.length}${editedTag}`;
 
   const rendered: string[] = [];

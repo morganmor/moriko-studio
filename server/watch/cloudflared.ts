@@ -93,7 +93,6 @@ export function isInstalled(target: PlatformTarget): boolean {
 }
 
 async function extractTgz(archive: string, target: PlatformTarget): Promise<void> {
-  // bsdtar ships with Windows 10+; POSIX has tar. Extract then rename.
   const outDir = path.join(BIN_DIR, `.extract-${target.id}`);
   fs.mkdirSync(outDir, { recursive: true });
   await execFileAsync('tar', ['-xzf', archive, '-C', outDir], { windowsHide: true });
@@ -269,7 +268,7 @@ export async function stopTunnel(): Promise<void> {
     if (process.platform === 'win32') {
       await execFileAsync('taskkill', ['/PID', String(live.pid), '/T', '/F'], { windowsHide: true }).catch(() => undefined);
     } else {
-      try { process.kill(live.pid); } catch { /* already gone */ }
+      try { process.kill(live.pid); } catch {  }
     }
   }
   live.child = null;

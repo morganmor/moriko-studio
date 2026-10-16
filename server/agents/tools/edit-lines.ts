@@ -16,8 +16,6 @@ export async function editLinesTool(args: Record<string, unknown>, ctx: AgentToo
   const preserveEol = args.preserveEol === undefined ? true : bool(args, 'preserveEol');
   const verifySyntax = args.verifySyntax === undefined ? true : bool(args, 'verifySyntax');
 
-  // Anchor baris OPSIONAL: bila model melampirkan teks yang ia yakin ada di
-  // baris from/to, mismate off-by-one tertangkap SEBELUM penulisan.
   const expectedStartLine = str(args, 'expectedStartLine').trim();
   const expectedEndLine = str(args, 'expectedEndLine').trim();
 
@@ -44,8 +42,6 @@ export async function editLinesTool(args: Record<string, unknown>, ctx: AgentToo
     });
   }
 
-  // Verifikasi anchor: muat file sekali, cocokkan teks baris, lalu lempar
-  // hasil muatannya ke replaceLineRange (tanpa pembacaan disk kedua).
   if (expectedStartLine || expectedEndLine) {
     const loaded = loadEditable(resolved.target, ctx, 'edit_lines', expectedReadHash);
     if (!loaded.ok) return loaded.result;

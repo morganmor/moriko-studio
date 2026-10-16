@@ -77,7 +77,6 @@ export function touchedPaths(tool: string, args: Record<string, unknown>): Touch
     case 'task_output':
       return [{ unknown: true }];
     default:
-      // Unknown tool — do not guess.
       return [];
   }
 }

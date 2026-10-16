@@ -28,7 +28,6 @@ export function addonLog(addonId: string, level: AddonLogLevel, text: string): v
   list.push({ at: Date.now(), level, text });
   if (list.length > MAX) list.splice(0, list.length - MAX);
   const prefix = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'log';
-  // Mirror to the server console like v1 did.
   (console[prefix as 'log'] as (...args: unknown[]) => void)(`[addon:${addonId}] ${text}`);
 }
 

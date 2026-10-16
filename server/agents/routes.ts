@@ -240,7 +240,6 @@ export function agentRouter(): Router {
       const candidates = [
         path.join(os.homedir(), '.moriko-studio', 'visual-vendor', `${lib}.js`),
       ];
-      // repo-local fallback for moriko-gl (kept in-tree)
       if (lib === 'moriko-gl') {
         candidates.unshift(path.join(process.cwd(), 'server', 'agents', 'vendor', 'moriko-gl.js'));
       }
@@ -248,7 +247,7 @@ export function agentRouter(): Router {
         try {
           content = readFileSync(candidate, 'utf8');
           break;
-        } catch { /* try next */ }
+        } catch {  }
       }
     } catch {
       content = null;

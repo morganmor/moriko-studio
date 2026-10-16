@@ -15,13 +15,13 @@ export interface StatusPatch {
   id: string;
   text?: string;
   tone?: 'ok' | 'warn' | 'danger' | 'info' | 'muted';
-  progress?: number; // 0..1
+  progress?: number;
   badge?: number;
   pulse?: boolean;
 }
 
 const views: RegisteredView[] = [];
-const statusItems = new Map<string, StatusPatch & { addonId: string }>(); // key addonId\0id
+const statusItems = new Map<string, StatusPatch & { addonId: string }>();
 const toolRenderers = new Map<string, { addonId: string; tool: string; component: string }>();
 
 /** Register the STATIC contributions from a validated manifest (on load). */
@@ -71,5 +71,5 @@ export function setStatus(addonId: string, patch: StatusPatch): void {
   statusItems.set(key, next);
   try {
     void publishBusEvent('addon.status', { addonId, status: { ...next } }, addonId);
-  } catch { /* best-effort */ }
+  } catch {  }
 }

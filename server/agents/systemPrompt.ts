@@ -807,9 +807,6 @@ export async function buildHarnessInjections(
   }
 
   if (settings.agentMode) {
-    // AGENT WORKFLOW — the user-selected working doctrine (defaults to
-    // frontend-first). Injected before the harness prompt so the doctrine
-    // governs HOW the agent works while the harness governs its tools.
     const workflow = await resolveStoredWorkflow(settings.agentWorkflow);
     injections.push({
       id: 'agent-workflow',
@@ -823,7 +820,6 @@ export async function buildHarnessInjections(
     if (attachments) injections.push(attachments);
     const agent = agentHarnessInjection(settings.terminalMode ?? 'auto', sessionId, settings.webAccess === true);
     if (agent) injections.push(agent);
-    // F6.4 — domain packs (3D/game, architecture), cached per workspace.
     try {
       const { getActiveWorkspace } = await import('./workspace.js');
       const { domainPackInjections } = await import('./domain-packs.js');
@@ -838,7 +834,7 @@ export async function buildHarnessInjections(
           });
         }
       }
-    } catch { /* domain packs are best-effort */ }
+    } catch {  }
     const imageGen = await imageGenInjection();
     if (imageGen) injections.push(imageGen);
     const agentsMd = agentsMdInjection(sessionId);
@@ -874,9 +870,6 @@ export async function buildHarnessInjections(
     }
   }
 
-  // Addon v2 (A3): per-session prompt fragments (budgeted, ordered) — the
-  // successor of the global context providers. Same visible channel so the
-  // user can inspect what was injected for THIS conversation.
   try {
     const { buildPromptFragments } = await import('../addons/promptFragments.js');
     const built = await buildPromptFragments({ sessionId, workspacePath: getActiveWorkspace(sessionId)?.path });
@@ -895,7 +888,7 @@ export async function buildHarnessInjections(
         ].join('\n'),
       });
     }
-  } catch { /* fragments are best-effort */ }
+  } catch {  }
 
   return injections;
 }

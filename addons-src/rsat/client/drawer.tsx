@@ -23,14 +23,12 @@ const OP: Record<string, [string, string]> = {
   ref: ['refactor', 'ref'], ren: ['rename', 'ren'],
 };
 
-/* ── derived scope (khusus drawer) ──────────────────────────── */
 const effScope = (a: Ach) => {
   const inc = new Set(a.scope.inc), exc = new Set(a.scope.exc);
   a.sc.forEach((s) => { if (s.approved) (s.op === 'widen' ? inc : exc).add(s.path); });
   return { inc: [...inc], exc: [...exc] };
 };
 
-/* ── bagian visual kecil (port medal/seg/hearts desain) ─────────────────── */
 function Seg({ pct, n = 10, cls = '' }: { pct: number; n?: number; cls?: string }) {
   const on = Math.round((pct / 100) * n);
   return (
@@ -87,7 +85,6 @@ const Holder = ({ a }: { a: Ach }) => {
   ) : null;
 };
 
-/* ── tab Detail ─────────────────────────────────────────────────────────── */
 function DetailTab({ a, list, lang, onAc, onOpen }: {
   a: Ach; list: Ach[]; lang: string;
   onAc: (i: number) => void; onOpen: (id: string) => void;
@@ -160,7 +157,6 @@ function DetailTab({ a, list, lang, onAc, onOpen }: {
   );
 }
 
-/* ── tab Scope ──────────────────────────────────────────────────────────── */
 function ScopeHist({ a, lang, onApprove }: { a: Ach; lang: string; onApprove: (i: number) => void }) {
   const t = (k: string) => tr(lang, k);
   if (!a.sc.length) return null;
@@ -268,7 +264,6 @@ function ScopeTab(props: {
   );
 }
 
-/* ── tab Comments ───────────────────────────────────────────────────────── */
 function CommentsTab({ a, lang, draft, setDraft, onSend }: {
   a: Ach; lang: string; draft: string; setDraft: (v: string) => void; onSend: () => void;
 }) {
@@ -305,7 +300,6 @@ function CommentsTab({ a, lang, draft, setDraft, onSend }: {
   );
 }
 
-/* ── tab Files ──────────────────────────────────────────────────────────── */
 function FileRowView({ f, i, lang, onSave }: {
   f: FileRow; i: number; lang: string; onSave: (i: number, v: string) => void;
 }) {
@@ -352,7 +346,6 @@ function FilesTab({ a, lang, onSave }: { a: Ach; lang: string; onSave: (i: numbe
   );
 }
 
-/* ── action bar (pixel actionsFor baris 928-944) ────────────────────────── */
 /** Tombol aksi per state — board dijalankan sebagai USER (aktor RPC). */
 function actionButtons(
   a: Ach, e: string, mine: boolean, t: (k: string) => string,
@@ -422,14 +415,11 @@ function ActionsRow({ a, list, lang, notice, onAct }: {
   );
 }
 
-/* ── dispatch (kirim tugas ke agent) ─────────────────────────────────── */
 /** Pilih agent dari roster → dispatchQuest → host membuat sesi chat baru. */
 function DispatchBlock({ a }: { a: Ach }) {
   const agents = useAgents();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  // Agent "in session" menuntut konfirmasi eksplisit — dispatch melepas sesi
-  // lamanya (bindSession mengganti activeSessionId tanpa bertanya).
   const [rebind, setRebind] = useState<string | null>(null);
   const fire = (ag: AgentRec) => {
     setBusy(ag.id);
@@ -503,7 +493,6 @@ function DispatchBlock({ a }: { a: Ach }) {
   );
 }
 
-/* ── drawer utama ───────────────────────────────────────────────────────── */
 type Gres = { kind: string; actor: string; msg: string } | null;
 
 /** Efek fokus: capture opener saat buka, restore saat tutup, Escape menutup (pixel 883–891, 347). */

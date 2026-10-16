@@ -16,7 +16,6 @@ export function uiExportRouter(): Router {
 
   router.post(
     '/export',
-    // text/html never matches the global JSON parser, so this parser wins.
     express.text({ type: ['text/html', 'text/plain'], limit: '30mb' }),
     (req, res) => {
       const body = typeof req.body === 'string' ? req.body : '';

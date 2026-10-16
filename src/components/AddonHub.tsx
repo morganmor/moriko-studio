@@ -184,13 +184,12 @@ export const AddonHub = memo(function AddonHub() {
         const payload = await resp.json() as { addons: AddonClientEntry[] };
         setAddons(payload.addons);
       }
-    } catch { /* offline: keep last */ }
+    } catch {  }
     setLoading(false);
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
-  // LIVE REGISTRY: toggle/reload/delete from any client repaints the Hub.
   useEffect(() => {
     const onReload = () => void refresh();
     window.addEventListener('moriko:addons-reloaded', onReload);
@@ -206,7 +205,7 @@ export const AddonHub = memo(function AddonHub() {
         const payload = await resp.json() as { logs: Array<{ at: number; level: string; text: string }> };
         setLogs(payload.logs.map((entry) => ({ addonId: id, ...entry })));
       }
-    } catch { /* empty list is fine */ }
+    } catch {  }
   }, []);
 
   const tabs: Array<{ id: HubTab; label: string }> = [

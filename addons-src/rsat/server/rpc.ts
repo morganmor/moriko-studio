@@ -26,7 +26,7 @@ function listWsp(api) {
   try {
     const active = api.workspace?.root?.();
     if (active) { seen.add(active); out.push({ id: active, path: active, label: path.basename(active) }); }
-  } catch { /* ignore */ }
+  } catch {  }
   try {
     for (const s of api.sessions?.list?.() ?? []) {
       if (s.workspacePath && !seen.has(s.workspacePath)) {
@@ -34,7 +34,7 @@ function listWsp(api) {
         out.push({ id: s.workspacePath, path: s.workspacePath, label: path.basename(s.workspacePath) });
       }
     }
-  } catch { /* ignore */ }
+  } catch {  }
   return out;
 }
 
@@ -161,7 +161,6 @@ export async function exportDoc(api, sessionId) {
   const doc = loadDoc(api, sessionId);
   if (!doc) throw new Error('Nothing to export yet.');
   const file = await writeExport(api, sessionId, doc);
-  // The content rides along so the board can download it (R7: antar proyek).
   return ok({ file, content: JSON.stringify(doc, null, 2), name: `${doc.prd.id}.rsprd.json` });
 }
 
@@ -181,7 +180,6 @@ export async function importDoc(api, sessionId, body) {
     return ok({ dryRun: true, total: (incoming.achievements ?? []).length, conflicts, claimsReset, title: incoming.prd?.title ?? '' });
   }
   if (!existing) {
-    // No PRD here yet — the import becomes the document (still claims-reset).
     invalidate(api, sessionId);
     const { freshDoc } = await import('./store.js');
     const doc = freshDoc(userActor());
@@ -195,7 +193,6 @@ export async function importDoc(api, sessionId, body) {
   return ok({ imported: true, mode, conflicts: mode === 'merge' ? conflicts.length : 0, total: (incoming.achievements ?? []).length });
 }
 
-// ── guard test ────────────────────────────────────────────────
 export async function guardTest(api, sessionId, body) {
   const doc = loadDoc(api, sessionId);
   if (!doc) throw new Error('No PRD.');
@@ -286,7 +283,6 @@ export async function createAchievement(api, sessionId, body) {
   return ok({ doc });
 }
 
-// ── agent registry (identity, dispatch, memory) ─────────────────────────
 
 /** The roster the Create Agent panel + Basecamp party card render. */
 export async function agents(api, sessionId) {

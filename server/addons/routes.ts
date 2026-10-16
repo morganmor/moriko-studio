@@ -104,8 +104,6 @@ export const addonRouter = () => {
     const cmd = listAddonCommands().find((c) => c.name === name);
     if (!cmd) return res.status(404).json({ error: `Unknown command: /${name}` });
     try {
-      // v2: prefer the command's direct run handler; otherwise walk the
-      // command.run hook chain with the OWNING addon's API (A-03).
       if (cmd.run) {
         const out = await cmd.run(args, { actor: { kind: 'user' } });
         return res.json({ ok: true, text: out.text, openView: out.openView ?? null });
@@ -307,7 +305,6 @@ export const addonRouter = () => {
 
     const unsubscribe = addSseClient(writeFrame, { topics, scope });
 
-    // Reconnect replay: the browser sends Last-Event-ID automatically.
     const lastIdRaw = req.headers['last-event-id'];
     const lastId = typeof lastIdRaw === 'string' ? Number.parseInt(lastIdRaw, 10) : NaN;
     for (const frame of replaySince(Number.isFinite(lastId) ? lastId : 0)) writeFrame(frame);
@@ -325,9 +322,6 @@ export const addonRouter = () => {
     const addon = getAddon(req.params.id);
     if (!addon) return res.status(404).json({ error: 'Addon not found' });
     const next = !addon.enabled;
-    // A9-bis: disabling a builtin reseeds it from addons-src/ first, so the
-    // user never has to delete the install by hand to get the latest shipped
-    // source. The fresh manifest carries the disabled flag forward.
     const reseeded = !next && reseedBuiltin(addon.manifest.id) !== null;
     try {
       const manifestPath = path.join(ADDONS_ROOT(), addon.manifest.id, 'addon.json');
@@ -337,14 +331,12 @@ export const addonRouter = () => {
     } catch {  }
     const ok = await reloadAddon(addon.manifest.id, next);
     if (!ok) return res.status(500).json({ error: 'Reload failed' });
-    // LIVE TOGGLE: every browser repaints its addon sections/views instantly —
     // no refresh required (the stale UI after a disable was a real bug).
     void publishBusEvent('addons.registry', { reason: 'toggle', addonId: addon.manifest.id, enabled: next }, 'moriko-host');
     res.json({ ok: true, enabled: next, reseeded });
   });
 
   router.post('/reload', async (_req, res) => {
-    // A9-bis: reload-all also pulls the newest builtins from addons-src/.
     reseedAllBuiltins();
     await loadAllAddons();
     void publishBusEvent('addons.registry', { reason: 'reload-all' }, 'moriko-host');
@@ -352,7 +344,6 @@ export const addonRouter = () => {
   });
 
   router.post('/:id/reload', async (req, res) => {
-    // A9-bis: reload one addon = reseed the builtin first (if any), then load.
     const reseeded = reseedBuiltin(req.params.id) !== null;
     const ok = await reloadAddon(req.params.id);
     if (!ok) return res.status(404).json({ error: 'Addon not found' });
@@ -360,9 +351,6 @@ export const addonRouter = () => {
     res.json({ ok: true, reseeded });
   });
 
-  // Addon Manager: Remove is USER-ONLY (the agent's addon_manage remove is
-  // refused server-side). The Hub button deletes the runtime install AND the
-  // addons-src source of a builtin — with the Hub's confirm modal up front.
   router.delete('/:id', async (req, res) => {
     const id = req.params.id;
     const srcDir = path.resolve(process.cwd(), 'addons-src', id);
@@ -377,8 +365,7 @@ export const addonRouter = () => {
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : 'Delete failed' });
     }
-    await loadAllAddons(); // removal needs a resync, not a reload
-    // LIVE DELETE: every browser repaints Hub/sidebar immediately — no refresh.
+    await loadAllAddons();
     void publishBusEvent('addons.registry', { reason: 'delete', addonId: id }, 'moriko-host');
     res.json({ ok: true });
   });

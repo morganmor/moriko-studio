@@ -27,7 +27,6 @@ export default function Board({ viewName }: { viewName?: string }) {
   const board = useRsat();
   const dockRef = useRef<HTMLElement | null>(null);
 
-  // Klik di LUAR area dock (dan di luar tombol toggle-nya) menutup dock.
   useEffect(() => {
     if (!dockOpen) return;
     const onDocDown = (e: PointerEvent) => {
@@ -41,17 +40,14 @@ export default function Board({ viewName }: { viewName?: string }) {
     return () => document.removeEventListener('pointerdown', onDocDown);
   }, [dockOpen]);
 
-  // Muat state awal + ikuti event board dari SEMUA sesi (SSE).
   useEffect(() => { void initRsat(); }, []);
   const frame = useAddonBus('rsat.changed');
   useEffect(() => { if (frame) void refreshRsat(); }, [frame]);
 
-  // Navigasi dari sidebar (Base camp / Quest board / …) mengubah viewName.
   useEffect(() => {
     if (viewName && VIEW_IDS.includes(viewName)) setView(viewName);
   }, [viewName]);
 
-  // Papan masih dimuat — hindari kedip LangGate saat state belum kembali.
   if (!board.ready) {
     return (
       <div className="rsat">
@@ -62,7 +58,6 @@ export default function Board({ viewName }: { viewName?: string }) {
     );
   }
 
-  // LangGate (RSAT.txt butir 0): papan tertutup sampai user memilih bahasa.
   if (!board.language) {
     return (
       <div className="rsat">

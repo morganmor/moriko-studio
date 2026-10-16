@@ -46,9 +46,6 @@ export async function multiEditTool(args: Record<string, unknown>, ctx: AgentToo
   const content = loaded.data.content;
   const readEntry = loaded.data.readEntry;
 
-  // Lacak interval baca yang ikut bergeser seiring mutasi berurutan di dalam
-  // batch — CELAH read-policy dulu tertutup: setiap lokasi edit kini wajib
-  // berada di dalam jendela yang benar-benar dibaca model.
   let activeIntervals = readEntry?.intervals
     ? [...readEntry.intervals.map((i) => ({ ...i }))]
     : readEntry
@@ -80,12 +77,10 @@ export async function multiEditTool(args: Record<string, unknown>, ctx: AgentToo
     }
 
     if (occurrences.length === 0) {
-      // Cek idempoten: edits[i] mungkin sudah diterapkan pada percobaan lama.
       if (replacement && work.includes(replacement) && plausiblyApplied(targetOld, replacement)) {
         skippedAlreadyApplied += 1;
         continue;
       }
-      // Fallback: pencocokan elastis terhadap indentasi.
       const normWork = normalizedWork ? work : work.replace(/\r\n/g, '\n');
       const elastic = matchWithElasticIndent(
         normWork,
@@ -108,7 +103,6 @@ export async function multiEditTool(args: Record<string, unknown>, ctx: AgentToo
       }
     }
 
-    // Disambiguasi per item dengan lineHint bila muncul lebih dari 1 kali.
     let selectedLine: number | null = occurrences.length === 1 ? occurrences[0] : null;
     if (occurrences.length > 1 && !edit.replaceAll) {
       if (edit.lineHint !== undefined) {
@@ -131,8 +125,6 @@ export async function multiEditTool(args: Record<string, unknown>, ctx: AgentToo
       }
     }
 
-    // Validasi jendela baca ber-interval utk SETIAP lokasi edit (replaceAll
-    // berarti semua kemunculannya divalidasi).
     if (!fullFileRead && readEntry) {
       const linesToCheck = edit.replaceAll ? occurrences : [selectedLine!];
       const oldSpan = Math.max(targetOld.split('\n').length, 1);
@@ -168,8 +160,6 @@ export async function multiEditTool(args: Record<string, unknown>, ctx: AgentToo
 
     if (edit.replaceAll) {
       work = work.split(targetOld).join(replacement);
-      // Interval yang bergeser tidak di-track per kemunculan replaceAll;
-      // validasi full-file tetap aman karena jendela penuh tak dipertahankan.
     } else {
       const pos = positionOfOccurrenceNearLine(work, targetOld, selectedLine!);
       work = work.slice(0, pos) + replacement + work.slice(pos + targetOld.length);
@@ -186,8 +176,6 @@ export async function multiEditTool(args: Record<string, unknown>, ctx: AgentToo
     }
   }
 
-  // Temuan C: batch yang SELURUHNYA sudah diterapkan = no-op murni — balik
-  // sukses tanpa menyentuh disk (tanpa snapshot palsu, tanpa mtime baru).
   if (skippedAlreadyApplied === parsed.edits.length) {
     return {
       ok: true,

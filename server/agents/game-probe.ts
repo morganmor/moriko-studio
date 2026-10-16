@@ -131,7 +131,7 @@ export async function runGameProbe(
     screenshots?: number;
   } = {},
 ): Promise<GameProbeResult> {
-  const url = assertAllowedTarget(rawUrl, false); // localhost/private ONLY
+  const url = assertAllowedTarget(rawUrl, false);
   const pw = await loadPlaywright();
   if (!pw) {
     throw new Error('playwright-core is not installed. Run: pnpm add -D playwright-core.');
@@ -203,9 +203,8 @@ export async function runGameProbe(
     await page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => undefined);
     try {
       await page.waitForLoadState('networkidle', { timeout: 3_000 });
-    } catch { /* games keep polling */ }
+    } catch {  }
 
-    // Run actions while sampling.
     const actionTasks: Array<Promise<void>> = [];
     for (const action of actions.slice(0, 20)) {
       actionTasks.push((async () => {

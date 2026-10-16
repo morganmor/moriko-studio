@@ -26,42 +26,20 @@ interface CreationMeta {
   model?: string;
   provider?: string;
   createdAt?: string;
-  /** The pixel size the user requested, if any. */
   requested?: { width: number; height: number } | null;
-  /** The real pixel size of the saved file, read from the image itself. */
   output?: { width: number; height: number } | null;
-  /** The aspect-ratio preset that was sent, if any. */
   aspectRatio?: string | null;
 }
 
 /** Design zoom range: 100%–600%. */
 const MIN_SCALE = 1;
 const MAX_SCALE = 6;
-/** Double-click jumps to this magnification (and back to fit). */
 const DBL_CLICK_SCALE = 2.5;
-/** Keyboard / dock zoom step (design: ×1.3 per press). */
 const ZOOM_STEP = 1.3;
 const fmtDate = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
 /**
  * Image viewer — a React port of design/image-viewer.html (.vr dialog).
- *
- * Anatomy (design): ambient blur + scrim, a stage (viewport → frame → image),
- * a top bar with the glass meta pill (title + counter) and the glass actions
- * (favorite, download, details, fullscreen, close), round prev/next buttons, a
- * bottom dock with the thumbnail strip + zoom controls, an aria-live toast,
- * and a right side panel (prompt + details + shortcuts + Download / Reuse
- * prompt CTAs).
- *
- * Mechanism (design): wheel zooms toward the cursor (100–600%), drag pans
- * while magnified, pinch zooms, double-click toggles 250%, swipe left/right
- * navigates when not zoomed, tapping outside the image closes. Keys: arrows
- * browse, +/−/0 zoom, I details, F fullscreen, C copy prompt, Esc close; Tab
- * is trapped inside the dialog. Chrome auto-hides after 2.5s idle while
- * fullscreen (CSS focus-mode fallback where the Fullscreen API is missing).
- *
- * Theme: the chrome keeps the design's scoped dark tokens (.vr defines them);
- * the accent follows the active moriko accent (--c-accent).
  */
 export function ImageLightbox({
   url,
@@ -79,39 +57,26 @@ export function ImageLightbox({
   url: string;
   onClose: () => void;
   onUsePrompt?: (prompt: string) => void;
-  /** Adds this image to Image Studio's reference tray. */
   onUseReference?: () => void;
-  /** Opens the client-side editor (crop / rotate / resize) for this image. */
   onEditImage?: () => void;
-  /** Design prev/next mechanism: the full list this image belongs to. */
   urls?: string[];
-  /** Moves the preview to another member of `urls`. */
   onNavigate?: (url: string) => void;
-  /** Design save icon: whether this image is saved to the Gallery… */
   saved?: boolean;
-  /** …and its toggle (save when unsaved, remove when saved). */
   onToggleSave?: () => void;
-  /** Design title (bar + panel header); falls back to the prompt's first line. */
   title?: string;
-  /** Prompt text for the panel when no proxy metadata exists (CDN images). */
   prompt?: string;
 }) {
   const [meta, setMeta] = useState<CreationMeta | null>(null);
   const [copied, setCopied] = useState(false);
-  /** 1 = fit the frame; above that the image is magnified and pannable. */
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
-  /** A pointer is down on the viewport (grabbing / no transition). */
   const [live, setLive] = useState(false);
-  /** Side panel visibility (design: open when the window is wider than 860). */
   const [panelOpen, setPanelOpen] = useState(() => window.innerWidth > 860);
-  /** Fullscreen (element API), or the CSS focus-mode fallback. */
   const [focusMode, setFocusMode] = useState(false);
   const [idle, setIdle] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
   const [hasMore, setHasMore] = useState(false);
-  /** Navigation direction of the last step: frame slides in from it. */
   const [navDir, setNavDir] = useState(0);
 
   const rootRef = useRef<HTMLDivElement>(null);
@@ -141,10 +106,6 @@ export function ImageLightbox({
   panelOpenRef.current = panelOpen;
   focusRef.current = focusMode;
 
-  /* ── zoom / pan engine (design settle / zoomAt / rel) ─────────────── */
-
-  /** Snaps back to fit at ≤100%, else clamps the pan to the magnified
-      overflow of the image inside the viewport (design settle()). */
   const settle = useCallback(() => {
     let nextScale = scaleRef.current;
     let nextOffset = { ...offsetRef.current };
@@ -169,14 +130,12 @@ export function ImageLightbox({
     setOffset(nextOffset);
   }, []);
 
-  /** Cursor point relative to the frame centre (design rel()). */
   const rel = useCallback((clientX: number, clientY: number): [number, number] => {
     const box = (frameRef.current ?? vpRef.current)?.getBoundingClientRect();
     if (!box) return [0, 0];
     return [clientX - box.left - box.width / 2, clientY - box.top - box.height / 2];
   }, []);
 
-  /** Zooms keeping the point under the cursor pinned in place (design zoomAt). */
   const zoomAt = useCallback(
     (next: number, cx = 0, cy = 0) => {
       const clamped = Math.min(MAX_SCALE, Math.max(MIN_SCALE, next));
@@ -194,9 +153,6 @@ export function ImageLightbox({
   const zoomBy = useCallback((factor: number) => zoomAt(scaleRef.current * factor), [zoomAt]);
   const resetZoom = useCallback(() => zoomAt(1), [zoomAt]);
 
-  /* ── chrome: idle, panel, fullscreen/focus ────────────────────────── */
-
-  /** Rearms the 2.5s chrome auto-hide while focused/fullscreen (design wake). */
   const wake = useCallback(() => {
     setIdle(false);
     if (idleTRef.current) window.clearTimeout(idleTRef.current);
@@ -214,7 +170,6 @@ export function ImageLightbox({
     wake();
   }, [wake]);
 
-  /** Entering focus (fullscreen): remember the panel state, hide the panel. */
   const enterFocus = useCallback(() => {
     panelWasRef.current = panelOpenRef.current;
     setPanelOpen(false);
@@ -222,7 +177,6 @@ export function ImageLightbox({
     wake();
   }, [wake]);
 
-  /** Leaving focus: restore the panel as it was (design setFocus/setPanel). */
   const exitFocus = useCallback(() => {
     setFocusMode(false);
     setPanelOpen(panelWasRef.current);
@@ -243,14 +197,11 @@ export function ImageLightbox({
         await el.requestFullscreen();
         return;
       } catch {
-        // Fall through to the CSS focus mode.
       }
     }
     if (focusRef.current) exitFocus();
     else enterFocus();
   }, [enterFocus, exitFocus]);
-
-  /* ── navigation (design show / go) ────────────────────────────────── */
 
   const listIndex = urls && urls.length > 1 ? urls.indexOf(url) : -1;
 
@@ -264,8 +215,6 @@ export function ImageLightbox({
     },
     [urls, onNavigate, url],
   );
-
-  /* ── actions (design copy / download / toggleFav / reuse) ─────────── */
 
   const promptText = prompt || meta?.prompt || '';
 
@@ -309,7 +258,6 @@ export function ImageLightbox({
     showToast('Prompt sent to the editor');
   };
 
-  /** Bar title + panel heading: design title, else the prompt's first line. */
   const heading = useMemo(() => {
     if (title) return title;
     const first = promptText.split(/[\n.]/)[0]?.trim() ?? '';
@@ -317,7 +265,6 @@ export function ImageLightbox({
     return first.length > 48 ? `${first.slice(0, 47).trimEnd()}…` : first;
   }, [title, promptText]);
 
-  /** Panel DETAILS rows: only the fields that exist (design kv list). */
   const details = useMemo(() => {
     const rows: Array<[string, string]> = [];
     if (meta?.model) rows.push(['Model', meta.model]);
@@ -328,15 +275,12 @@ export function ImageLightbox({
     return rows;
   }, [meta]);
 
-  /* ── effects ──────────────────────────────────────────────────────── */
 
-  // New image: back to fit (design show() resets sc/tx/ty).
   useEffect(() => {
     resetZoom();
     setMoreOpen(false);
   }, [url, resetZoom]);
 
-  // Proxy metadata for local images (model / provider / size / created).
   useEffect(() => {
     const match = /\/api\/images\/local\/([a-zA-Z0-9_-]+\.(?:png|jpe?g|webp))$/.exec(url);
     if (!match) {
@@ -351,7 +295,6 @@ export function ImageLightbox({
     return () => controller.abort();
   }, [url]);
 
-  // Design "Show more": only offered when the prompt overflows its box.
   useEffect(() => {
     const el = promptRef.current;
     if (!el) {
@@ -361,12 +304,10 @@ export function ImageLightbox({
     setHasMore(el.scrollHeight > el.clientHeight + 2);
   }, [promptText, panelOpen]);
 
-  // Closed panel is inert (design side.inert = !panelOpen).
   useEffect(() => {
     sideRef.current?.toggleAttribute('inert', !panelOpen);
   }, [panelOpen]);
 
-  // Fullscreen ↔ focus mode (design fullscreenchange → setFocus).
   useEffect(() => {
     const onFsChange = () => {
       if (document.fullscreenElement) enterFocus();
@@ -376,7 +317,6 @@ export function ImageLightbox({
     return () => document.removeEventListener('fullscreenchange', onFsChange);
   }, [enterFocus, exitFocus]);
 
-  // Focus the dialog, lock body scroll, restore both (design open/close).
   useEffect(() => {
     openerRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -393,7 +333,6 @@ export function ImageLightbox({
     };
   }, []);
 
-  // Keyboard (design): browse, zoom, details, fullscreen, copy, close + Tab trap.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -446,7 +385,6 @@ export function ImageLightbox({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose, step, zoomBy, resetZoom, togglePanel, toggleFs, copyPrompt]);
 
-  // Wheel zoom toward the cursor (design: exp curve, ctrl = fine).
   useEffect(() => {
     const vp = vpRef.current;
     if (!vp) return;
@@ -459,8 +397,6 @@ export function ImageLightbox({
     vp.addEventListener('wheel', onWheel, { passive: false });
     return () => vp.removeEventListener('wheel', onWheel);
   }, [zoomAt, rel, wake]);
-
-  /* ── pointer: pan / pinch / swipe / tap-to-close (design vp) ──────── */
 
   const onVpPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     const vp = vpRef.current;
@@ -526,7 +462,6 @@ export function ImageLightbox({
       if (start && !cancelled && scaleRef.current === 1) {
         const dx = event.clientX - start.x;
         const dy = event.clientY - start.y;
-        // Not zoomed: a hard horizontal swipe browses, a tap outside closes.
         if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
           step(dx < 0 ? 1 : -1);
         } else if (Math.hypot(dx, dy) < 4 && start.target && start.target !== imgRef.current) {

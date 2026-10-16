@@ -76,7 +76,6 @@ function maxReferencesFor(model: string): number {
  * image-model picker hides it and image requests to it are a user error.
  */
 export function classifyImageModel(model: string): ImageModelCaps | null {
-  // ComfyUI tagged models — all support t2i and i2i (edit) with 1 reference
   if (/^(ckpt|diff|unet):/i.test(model)) {
     return { modes: ['text-to-image', 'edit'], maxReferences: 1 };
   }
@@ -92,9 +91,6 @@ export function classifyImageModel(model: string): ImageModelCaps | null {
     return { modes: ['text-to-image'], maxReferences: 0 };
   }
 
-  // Check T2I_PATTERN BEFORE NON_IMAGE_PATTERN — a model like
-  // "qwen2vl/image" or "glm-image" is an image model even though it
-  // contains a keyword that also appears in NON_IMAGE_PATTERN.
   for (const edit of EDIT_PATTERNS) {
     if (edit.test.test(model)) return { modes: ['edit'], maxReferences: edit.maxReferences };
   }

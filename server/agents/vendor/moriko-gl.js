@@ -9,7 +9,6 @@
 
   function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
 
-  // ---- math ----
   function mat4Identity() { return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]); }
   function mat4Multiply(a, b) {
     const out = new Float32Array(16);
@@ -62,7 +61,6 @@
     return mat4Multiply(m, rot);
   }
 
-  // ---- shaders ----
   const VERT = `#version 300 es
   layout(location=0) in vec3 aPos;
   layout(location=1) in vec3 aNormal;
@@ -100,9 +98,7 @@
     return sh;
   }
 
-  // ---- geometry ----
   function boxGeometry() {
-    // 24 vertices (4 per face), 36 indices
     const p = 0.5;
     const faces = [
       { n: [0,0,1], v: [[-p,-p,p],[p,-p,p],[p,p,p],[-p,p,p]] },

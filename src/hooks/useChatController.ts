@@ -1209,8 +1209,6 @@ export function useChatController() {
       const continueOnly = opts?.continueOnly === true;
       const resume = Boolean(opts?.resumeStreamId);
 
-      // Provider/model come from the TARGET conversation when it declares its own
-      // — a council sub-session runs on its agent's model, not the operator's pick.
       const targetConversation = targetConversationId
         ? useStore.getState().conversations.find((entry) => entry.id === targetConversationId)
         : undefined;
@@ -1253,20 +1251,14 @@ export function useChatController() {
       const role = opts?.role ?? useStore.getState().composerRole ?? 'user';
 
       if (!resume && useStore.getState().genRunning[conversationId]) {
-        // STALE-RUN RECONCILE (dispatch choke point): a hidden council sub
-        // session has no attached stream loop of its own. If its genRunning
-        // flag outlived its server stream (proxy restart mid-run), this guard
-        // would swallow EVERY future dispatch silently — the exact "orchestrator
         // message never arrives" bug. Ask the registry: a live stream means the
-        // flag is honest (still generating → refuse); no stream means the flag
-        // is a zombie → clear it and let the dispatch proceed.
         try {
           const live = await fetchLiveStreams();
           if (live !== null && !live.some((s) => s.conversationId === conversationId)) {
             useStore.getState().setGenRunning(conversationId, false);
             storage.clearStreamId(conversationId);
           }
-        } catch { /* registry unreachable = treat the flag as honest */ }
+        } catch {  }
         if (useStore.getState().genRunning[conversationId]) {
           showNotice('send.alreadyGenerating');
           return;
@@ -1744,10 +1736,6 @@ export function useChatController() {
                   openBrowserPanelOnce(event.panelUrl);
                 }
                 if (event.ok === false) failedTool = true;
-                // agent__image optimism: the tool's result text always lists
-                // the local URLs ("- /api/images/local/..."). Push them into
-                // the Gallery store NOW — the count and grid update instantly,
-                // no SSE round-trip, no browser refresh.
                 if (event.toolName === 'image' && event.ok !== false && typeof event.summary === 'string') {
                   const urls = [...event.summary.matchAll(/\/api\/images\/local\/[a-zA-Z0-9_-]+\.(?:png|jpe?g|webp)/g)].map(
                     (match) => match[0],
@@ -1771,10 +1759,6 @@ export function useChatController() {
               break;
             }
             case 'tool_progress': {
-              // Live progress rides the DEDICATED `progress` field — writing
-              // `summary` here used to make the later tool_result SKIP this
-              // segment (its pairing loop skips segments with a summary), so
-              // results and toolImages never landed (frozen "Waiting…" cards).
               for (let i = segments.length - 1; i >= 0; i -= 1) {
                 const segment = segments[i];
                 if (
@@ -1817,9 +1801,6 @@ export function useChatController() {
               break;
             }
             case 'harness_event': {
-              // HARNESS-EVENT: addon event on its own channel — appended to the
-              // turn's harnessEvents (rendered as a dedicated panel, never a
-              // "You" bubble) and mirrored into the store for idle visibility.
               if (event.id && !harnessEvents.some((entry) => entry.id === event.id)) {
                 const entry = {
                   id: event.id,
@@ -1950,9 +1931,6 @@ export function useChatController() {
               }
               break;
             case 'done':
-              // A later bare `done` must never clobber a real cut reason
-              // (the route's finally-done used to send one — turns that hit
-              // max_tokens then ended silently).
               forcedFinish = event.finishReason ?? forcedFinish;
               break;
             default:

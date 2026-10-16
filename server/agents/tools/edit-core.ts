@@ -305,10 +305,6 @@ export async function finishEdit(
   } catch {
     postMtime = Date.now();
   }
-  // Post-edit receipt maintenance: shift the session's read intervals by the
-  // true edit bounds and keep them (instead of nuking the receipt to 1..MAX)
-  // so the model can continue editing the regions it actually saw. A
-  // full-window receipt stays full (nothing to shift, nothing to lose).
   let shiftedIntervals: import('../read-policy.js').LineInterval[] | undefined;
   if (!bounds.changed) {
     shiftedIntervals = undefined;
@@ -395,7 +391,6 @@ export async function replaceLineRange(
   }
 
   // No-op guard: replacing a range with the text it already holds is a bug,
-  // not a success — refuse instead of writing an identical file.
   const existingSlice = view.slice(opts.range.from - 1, opts.range.to).join('\n');
   const normalizedNew = opts.newString.replace(/\r/g, '');
   if (existingSlice === normalizedNew) {
@@ -439,17 +434,10 @@ export async function verifyWrittenSyntax(
     }
     return {};
   }
-  // F1.6 — TS/JS family (incl. .js/.mjs/.cjs): ts.transpileModule diagnostics,
-  // in-process (<2 ms) with the exact line/column + offending code snippet —
-  // no `node --check` spawn (slow, needs process permissions).
   if (['.ts', '.tsx', '.mts', '.cts', '.jsx', '.js', '.mjs', '.cjs'].includes(ext)) {
     try {
       const isJsx = ext === '.tsx' || ext === '.jsx';
       const isJs = ext === '.js' || ext === '.mjs' || ext === '.cjs' || isJsx;
-      // Never emit `jsx: JsxEmit.None` — TypeScript's option validation rejects
-      // the enum value 0 ("Argument for '--jsx' option must be: …"), which made
-      // the guard roll back EVERY plain .ts/.mts/.cts write as a false positive.
-      // Non-JSX files omit `jsx` entirely (JSX is not parsed for them anyway).
       const compilerOptions: ts.CompilerOptions = {
         target: ts.ScriptTarget.ES2022,
         allowJs: isJs,
@@ -478,10 +466,9 @@ export async function verifyWrittenSyntax(
       }
       return {};
     } catch {
-      return {}; // internal error → never false-fail
+      return {};
     }
   }
-  // F1.6 — light CSS balance heuristic (strings and comments excluded).
   if (ext === '.css') {
     try {
       let depth = 0;

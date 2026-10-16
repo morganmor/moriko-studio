@@ -479,8 +479,6 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
       }
     }
 
-    // Addon v2 (A3, Q2): queued addon notices ride the same seam as steers,
-    // as one labeled user block so the model AND the user see the notice.
     const injections = drainInjections(params.sessionId ?? undefined);
     for (const entry of injections) {
       onEvent({ type: 'steer', id: `addon-inject-${entry.id}`, text: `[${entry.addonId}] ${injectionText(entry)}` });

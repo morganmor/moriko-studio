@@ -82,9 +82,6 @@ export function GoalsPanel({ open, onClose }: GoalsPanelProps) {
     };
   }, [open, sessionId, setConversationGoals]);
 
-  /* CLOSE ON OUTSIDE CLICK — same pattern as CommandPalette/Popover. Ignores
-     clicks inside the panel and on plus-menu rows that toggle it (otherwise
-     pointerdown closes, then the toggle's click re-opens → flicker). */
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: PointerEvent) => {

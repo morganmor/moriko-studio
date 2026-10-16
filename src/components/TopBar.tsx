@@ -139,8 +139,6 @@ function CouncilSwitcher() {
         || a.createdAt - b.createdAt);
   }, [conversations, councilId]);
 
-  // Not a council yet: offer the one-click conversion right under the title —
-  // the user should not have to open the addon panel for this.
   if (!councilId) {
     return (
       <div className="council-switch-wrap">
@@ -343,8 +341,7 @@ export function TopBar({ title, onShare, onOpenNav, onPickWorkspace, workspaceLa
         onDismiss={dismissNotice}
         onClearHistory={clearNoticeHistory}
       />
-      {/* Single sidebar toggle (design .ib.sm + DIcon panel-l): opens the
-          drawer below md, toggles the desktop sidebar at md and up. */}
+      {}
       <button
         type="button"
         data-demo-toggle="rail"
@@ -375,8 +372,7 @@ export function TopBar({ title, onShare, onOpenNav, onPickWorkspace, workspaceLa
         </div>
       )}
 
-      {/* Buka RSA/T (addon:rsat/overview) — akses board langsung dari chat.
-          Icon = gem pixel yang sama dengan identitas addon di sidebar col-in. */}
+      {}
       {hasActiveChat ? (
         <button
           type="button"

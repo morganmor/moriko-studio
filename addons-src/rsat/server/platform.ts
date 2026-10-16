@@ -49,7 +49,7 @@ export function pushActivity(entry) {
   activityRing.push({ at: Date.now(), ...entry });
   if (activityRing.length > ACTIVITY_LIMIT) activityRing.shift();
   for (const notify of [...activityWaiters]) {
-    try { notify?.(); } catch { /* listener died */ }
+    try { notify?.(); } catch {  }
     activityWaiters.delete(notify);
   }
 }

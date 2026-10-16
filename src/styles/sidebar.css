@@ -32,7 +32,6 @@
   --a-sh: 0.5;
 }
 
-/* Utilities (reference .ic / .grow). */
 .ic {
   width: 16px;
   height: 16px;
@@ -47,9 +46,6 @@
   flex: 1;
 }
 
-/* Shell + dual rail (full 260 / mini 64). Width itself comes from the
-   React inline style (drag-resize), so the reference's width transition on
-   .rail is omitted — the .fold wrapper in App.tsx already animates it. */
 .rail {
   width: var(--rail-w);
   height: 100%;
@@ -84,7 +80,6 @@
   display: flex;
 }
 
-/* Brand row. */
 .brand {
   display: flex;
   align-items: center;
@@ -122,7 +117,6 @@
   image-rendering: pixelated;
 }
 
-/* Search + scroll region. */
 .rsearch {
   display: flex;
   align-items: center;
@@ -159,7 +153,6 @@
   padding: 0 6px 10px;
 }
 
-/* Section labels + chevrons + collapse columns. */
 .sec-label {
   display: flex;
   align-items: center;
@@ -189,8 +182,6 @@
   flex: none;
   transition: transform 0.25s var(--ease);
 }
-/* Tertutup = panah menunjuk kanan (-90°), terbuka = 0° (turun). Nilai lama
-   0deg di KEDUA keadaan membuat chevron statis — inilah penyebabnya. */
 [aria-expanded='false'] > .chev {
   transform: rotate(-90deg);
 }
@@ -211,7 +202,6 @@
   transition: visibility 0s 0.3s;
 }
 
-/* Nav rows. */
 .nav {
   display: flex;
   align-items: center;
@@ -237,7 +227,6 @@
   text-overflow: ellipsis;
 }
 .nav[aria-current='page'] {
-  /* Glass highlight: translucent accent tint instead of a solid gray pill. */
   background: rgb(var(--c-accent) / 0.1);
   color: rgb(var(--c-ink));
 }
@@ -249,7 +238,6 @@
   display: flex;
   color: inherit;
 }
-/* Dua baris (label + subtitle) — dipakai row addon yang membawa status. */
 .nav.has-sub {
   height: auto;
   min-height: var(--row);
@@ -267,7 +255,6 @@
   font-weight: 400;
   color: var(--faint);
 }
-/* Badge identitas addon di ujung kanan (Approve / legacy / off / error). */
 .addon-tail {
   flex: none;
   font-size: 9.5px;
@@ -324,7 +311,6 @@
   width: 100%;
 }
 
-/* Workspace rows. */
 .ws {
   position: relative;
 }
@@ -337,8 +323,6 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  /* flex:1 (not width:100%) — the delete button sits beside it in-flow, so
-     width:100% would push it out of the row. */
   flex: 1;
   min-width: 0;
   height: var(--row);
@@ -370,9 +354,6 @@
   padding: 4px 12px 8px;
   margin: 0;
 }
-/* Unregister control — in-flow slot like the reference .crow-m (opacity
-   toggles, the 26px slot never does), so it can't stack on the count or
-   chevron the way the old absolute right:6px placement did. */
 .ws-del {
   width: 26px;
   height: 26px;
@@ -394,7 +375,6 @@
   color: rgb(var(--c-ink));
 }
 
-/* Recent-chat rows. */
 .crow {
   display: flex;
   align-items: center;
@@ -405,7 +385,6 @@
   background: rgb(var(--c-ink) / 0.06);
 }
 .crow.on {
-  /* Glass highlight: matches the nav rows' translucent accent tint. */
   background: rgb(var(--c-accent) / 0.1);
 }
 .crow.on::before {
@@ -481,7 +460,6 @@
     transform: rotate(360deg);
   }
 }
-/* Rename editor (ours; the reference renames via contenteditable elsewhere). */
 .crow-edit {
   padding: 2px 4px;
 }
@@ -497,7 +475,6 @@
   outline: none;
 }
 
-/* Filter. */
 .filter {
   display: flex;
   align-items: center;
@@ -539,8 +516,6 @@
   color: rgb(var(--c-ink));
 }
 
-/* Footer + live chip. Single row always — coarse pointers shrink content
-   (see the pointer:coarse block at the bottom) instead of wrapping. */
 .rfoot {
   display: flex;
   align-items: center;
@@ -577,7 +552,6 @@
   }
 }
 
-/* Theme toggle crossfade (reference + .mocha mirror for the third theme). */
 .theme-tg {
   position: relative;
 }
@@ -602,7 +576,6 @@
   transform: none;
 }
 
-/* Icon buttons. */
 .ib {
   width: 32px;
   height: 32px;
@@ -641,8 +614,6 @@
   color: rgb(var(--c-accent));
 }
 
-/* Live-chip trigger: shrink the shared .icon-button to the reference's
-   icon-only phone slot inside the 30px .livechip pill. */
 .livechip .icon-button {
   width: 22px;
   height: 26px;
@@ -656,8 +627,6 @@
   color: rgb(var(--c-ink));
 }
 
-/* Popovers (reference .pop/.mi — ours mount already-visible, so the
-   hidden-start state/transition is replaced by a mount animation). */
 .pop {
   position: fixed;
   z-index: 70;
@@ -726,16 +695,10 @@
   color: rgb(var(--c-accent) / 0.8);
 }
 
-/* App-only helpers. */
 .sf-item {
   display: inline-flex;
 }
 
-/* Touch parity: 44px targets; hover-reveal rows always visible without hover.
-   Footer budget at 44px targets: 4×44 + gaps + chip ≈ 240 ≤ 244 (rail 260).
-   The keyboard-shortcuts button is pointless without a keyboard, the chip's
-   dot duplicates the phone button's own running dot, and the chip padding
-   trims — together they keep the row on ONE line instead of wrapping. */
 @media (pointer: coarse) {
   .rfoot .ib,
   .rail-mini .ib,

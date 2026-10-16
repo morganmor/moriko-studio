@@ -458,10 +458,7 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
         <ProbationSection conversationId={activeConversation?.id ?? ''} settings={settings} updateSettings={updateSettings} />
 
         {}
-        {/* AGENT WORKFLOW — the working doctrine the harness injects on every
-            agent turn. Selector mirrors the System prompt Presets menu; Edit
-            opens the book-style editor; the server falls back to its default
-            when nothing is picked. */}
+        {}
         <section className="card" style={{ padding: 14 }}>
           <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
             <span style={{ fontSize: 11.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--faint)' }}>
@@ -2071,8 +2068,7 @@ function Slider({
           {format ? format(value) : value}
         </span>
       </div>
-      {/* Dark inset track well (reference right-sidebar look): the native bar
-          rides inside a recessed strip, flush with the card. */}
+      {}
       <div
         className="slider-well"
         style={{ ['--fill' as string]: `${((value - min) / (max - min)) * 100}%` }}

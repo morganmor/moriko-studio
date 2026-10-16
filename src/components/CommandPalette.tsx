@@ -60,7 +60,6 @@ function fuzzy(q: string, s: string): FuzzyMatch | null {
   return cursor === q.length ? { sc: 10 - spans.length * 0.1, m: spans } : null;
 }
 
-/** Renders the fuzzy <b> highlights from the match spans. */
 function Highlight({ text, spans }: { text: string; spans: Array<[number, number]> | null }) {
   if (!spans || spans.length === 0) return <>{text}</>;
   const parts: React.ReactNode[] = [];
@@ -174,7 +173,6 @@ export function CommandPalette({
         label: 'Import chats',
         icon: <Upload className="ic" aria-hidden="true" />,
         run: run(() => {
-          // TopBar owns the file picker — ask it to open via the shared event.
           window.dispatchEvent(new CustomEvent('moriko:import-chat'));
         }),
       },
@@ -228,7 +226,6 @@ export function CommandPalette({
         run: run(() => onOpenSettings()),
       },
     );
-    // Design: direct theme sets plus one accent entry per swatch.
     for (const entry of THEME_ENTRIES) {
       list.push({
         id: `theme:${entry.mode}`,
@@ -255,7 +252,6 @@ export function CommandPalette({
       });
     }
     return list;
-    /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, [conversations, onClose, onOpenSettings]);
 
   /** Scored fuzzy results when querying; the design's trimmed default otherwise. */
@@ -275,7 +271,6 @@ export function CommandPalette({
           chatCount += 1;
           return chatCount <= 5;
         }
-        // Design default view: only Light/Dark — type to reveal the rest.
         if (item.group === 'Theme' && !(item.label.startsWith('Light') || item.label.startsWith('Dark'))) {
           return false;
         }

@@ -384,8 +384,8 @@ const MIN_ANTHROPIC_BUDGET = 1024;
 const MIN_GEMINI_BUDGET = 512;
 
 /** Tuned provider thinking tops: Anthropic 128K, Gemini 64K. */
-const ANTHROPIC_TOP_THINKING = 128_000 - 1024; // 126,976 — the adapter adds +1024 as max_tokens
-const GEMINI_TOP_THINKING = 65_536; // 64K
+const ANTHROPIC_TOP_THINKING = 128_000 - 1024;
+const GEMINI_TOP_THINKING = 65_536;
 
 /**
  * Resolves the model's max-output limit for budget scaling. Falls back to
@@ -417,9 +417,6 @@ export function anthropicThinkingBudget(
 ): number | undefined {
   if (level === 'off') return undefined;
   const ceiling = maxOutputFor(model, baseUrl);
-  // The adapter sends budget + 1024 as max_tokens — that total must stay ≤
-  // the model's own max-out (128,000 for opus-latest), so the budget itself
-  // keeps 1024 of headroom: 126,976 + 1024 = 128,000.
   const top = Math.max(
     Math.min(ANTHROPIC_TOP_THINKING, ceiling - 1024),
     MIN_ANTHROPIC_BUDGET,

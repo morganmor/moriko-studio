@@ -26,7 +26,6 @@ const css = (c: RGB, a = 1) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
 let colorProbe: CanvasRenderingContext2D | null | undefined;
 function parseColor(str: string): RGB {
   const s = str.trim();
-  // Bare rgb triplets ("236 236 236") are not valid fillStyle input.
   if (/^[\d.]+[\s,/]+[\d.]+/.test(s)) {
     const n = s.split(/[\s,/]+/).map(Number);
     if (n.length >= 3 && n.every((v) => Number.isFinite(v))) return [n[0], n[1], n[2], n[3] ?? 1];
@@ -85,7 +84,7 @@ function buildWords(labels: string[]): Word[] {
     for (const ch of word.toUpperCase()) {
       const gl = GLYPHS[ch];
       if (!gl) {
-        x += 4; // blank advance keeps the morph layout sane for unknown letters
+        x += 4;
         continue;
       }
       gl.forEach((row, r) => {
@@ -180,12 +179,8 @@ export function EffortSlider({
   const sliderRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLCanvasElement>(null);
   const glowRef = useRef<HTMLCanvasElement>(null);
-  /* INDICATOR (kept): the 5×7 dot-matrix effort word ("MAX") morphs with the
-     level. Only the plain-TEXT hint sentences and the "5 / 7" counter were
-     removed per request — this canvas is the indicator, not prose. */
   const nameRef = useRef<HTMLCanvasElement>(null);
   const nameBgRef = useRef<HTMLCanvasElement>(null);
-  /* Hint sentence under the dot-matrix word ("No extended reasoning..."). */
   const descRef = useRef<HTMLSpanElement>(null);
   const engineRef = useRef<ReturnType<typeof createEngine> | null>(null);
   const onChangeRef = useRef(onChange);
@@ -197,7 +192,6 @@ export function EffortSlider({
 
   const labelsKey = labels.join('\u0000');
 
-  // Engine lifecycle: one rAF loop while mounted+active, static otherwise.
   useEffect(() => {
     const root = rootRef.current;
     const slider = sliderRef.current;
@@ -205,7 +199,6 @@ export function EffortSlider({
     const glow = glowRef.current;
     const name = nameRef.current;
     const nameBg = nameBgRef.current;
-    /* desc/idx/ends stay null: hint sentence, counter and Off/Max labels were removed. */
     if (!root || !slider || !main || !glow || !name || !nameBg) return;
     const engine = createEngine({
       root,
@@ -262,10 +255,8 @@ export function EffortSlider({
       engine.stop();
       engineRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Labels changed (e.g. model switched): rebuild glyphs/heat scale in place.
   useEffect(() => {
     const engine = engineRef.current;
     if (!engine) return;
@@ -273,19 +264,14 @@ export function EffortSlider({
     engine.setLabels(labelsRef.current, labelsKey);
     if (active && !engine.reduce) engine.start();
     else engine.staticRender();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [labelsKey]);
 
-  // External value change (or commit echoed back) — animate like the demo.
   useEffect(() => {
     const engine = engineRef.current;
     if (!engine) return;
     engine.apply(value, true);
   }, [value]);
 
-  // Run/pause the loop with `active` — and re-measure once the popover's open
-  // transition has settled: `layout()` must read rects in an unscaled state
-  // (x0/x1 measured under the old scale-[0.97] sat ~8px short of the "Max" label).
   useEffect(() => {
     const engine = engineRef.current;
     if (!engine) return;
@@ -353,7 +339,6 @@ export function EffortSlider({
   );
 }
 
-/* ---------------------------------------------------------------- engine -- */
 
 function createEngine(host: {
   root: HTMLDivElement;
@@ -374,8 +359,6 @@ function createEngine(host: {
   const { root, slider, main, glow, name, nameBg, desc, idx, ends, reduce } = host;
   const mctx = main.getContext('2d');
   const gctx = glow.getContext('2d');
-  /* Header canvases/spans were removed from the DOM (2026-10): the engine
-     keeps null-safe paths so layout/morph calls no-op instead of crashing. */
   const nctx = name?.getContext('2d') ?? null;
   const nbg = nameBg?.getContext('2d') ?? null;
 
@@ -387,7 +370,6 @@ function createEngine(host: {
   let level = clamp(Math.round(host.value), 0, MAX);
   let applied = -1;
 
-  /* theme tokens */
   let T: {
     dot: RGB;
     tick: RGB;
@@ -400,9 +382,6 @@ function createEngine(host: {
   function readTheme() {
     const cs = getComputedStyle(document.documentElement);
     const g = (n: string) => parseColor(cs.getPropertyValue(n));
-    // Accent-derived heat ramp: field strands, lens rim and the 5×7 name all
-    // track the theme's accent (was: fixed ember --heat-* tokens that ignored
-    // the accent setting). Stop ticks stay legible with a 60% accent tint.
     const accent = g('--c-accent');
     const ramp = (k: number): RGB => [
       Math.min(255, accent[0] * k),
@@ -427,7 +406,6 @@ function createEngine(host: {
     return mix(T.H[i] ?? T.H[6], T.H[i + 1] ?? T.H[6], clamp(t - i, 0, 1));
   }
 
-  /* field layout */
   const F = { W: 0, H: 0, x0: 0, x1: 0, yc: 0, P: 8, m: 6, extra: 0, cols: 0, left: 0 };
   let trail = new Float32Array(0);
 
@@ -435,20 +413,11 @@ function createEngine(host: {
     const W = slider.clientWidth;
     const H = slider.clientHeight;
     if (!W || !H || MAX < 1) return;
-    // Deterministic label centers — NEVER getBoundingClientRect (it follows
-    // transforms, so the open transition measured x1 several px short of the
-    // "Max" label). The slider is full-bleed to the block's border box
-    // (margin: 8px -20px 0), so: x0 = padL + halfLabel, x1 = W - padR - half.
     const cs = getComputedStyle(root);
     const padL = parseFloat(cs.paddingLeft) || 0;
     const padR = parseFloat(cs.paddingRight) || 0;
     const firstEnd = ends?.children[0] as HTMLElement | undefined;
     const half = (firstEnd?.offsetWidth || 48) / 2;
-    // Lens clamp: at Max the bubble's radius reaches ~31px (base 19 + energy
-    // + hover + press + pop), so a stop nearer than that to the edge lets the
-    // glass clip against the field's overflow:hidden — visible in the rail,
-    // whose slider is full-bleed to the card padding. 34px keeps every lens
-    // state inside; the popover already measured ~34px, so it is unaffected.
     const x0 = Math.max(padL + half, 34);
     const x1 = Math.min(W - padR - half, W - 34);
     if (x1 - x0 < 60) return;
@@ -469,7 +438,6 @@ function createEngine(host: {
     trail = new Float32Array(F.cols * ROWS);
   }
 
-  /* simulation state */
   const sim = {
     pos: level,
     vel: 0,
@@ -646,7 +614,6 @@ function createEngine(host: {
     const hovStop =
       sim.hover > 0.01 ? Math.round(clamp((sim.hoverX - F.x0) / (F.x1 - F.x0) * MAX, 0, MAX)) : -1;
 
-    // lens glass (below the dots)
     ctx.save();
     ctx.translate(tx, yc);
     ctx.scale(sx, sy);
@@ -804,7 +771,6 @@ function createEngine(host: {
       g.fill();
     }
 
-    // lens rim + glass glint
     const rimA = (0.4 + 0.2 * e + 0.25 * sim.hover + 0.35 * sim.press) * bootA;
     ctx.save();
     ctx.translate(tx, yc);
@@ -858,12 +824,10 @@ function createEngine(host: {
     }
   }
 
-  /* ---------- name canvases (5×7 dot-matrix morph) ---------- */
   let NW = 0;
   let NH = NR * NP + NPAD * 2;
 
   function layoutName() {
-    /* Name canvases are gone from the DOM; keep the no-op cheap and typed. */
     if (!name || !nameBg || !nctx || !nbg) return;
     const nCols = words.reduce((max, w) => Math.max(max, w.cols), 0);
     NW = nCols * NP + NPAD * 2;
@@ -984,7 +948,6 @@ function createEngine(host: {
     }
   }
 
-  /* ---------- loop ---------- */
   function loop(now: number) {
     if (!running) return;
     const dt = Math.min(1 / 30, Math.max(0, (now - last) / 1000));
@@ -1022,16 +985,11 @@ function createEngine(host: {
     );
   }
 
-  /* ---------- DOM apply ---------- */
   function apply(next: number, animate: boolean) {
     const i = clamp(Math.round(next), 0, MAX);
     const prev = applied >= 0 ? applied : level;
     level = i;
     applied = i;
-    /* External sync (quick picker ⇄ sidebar): the dot word morphs above, but
-       the lens spring would keep chasing the OLD target and the bubble looked
-       stuck. Park it on the new stop — unless a drag is live, which owns
-       sim.target (rubber-band offset must not be overwritten mid-drag). */
     if (!drag) sim.target = i;
     const dir = animate ? Math.sign(i - prev) : 0;
     const live = animate && running;
@@ -1066,7 +1024,6 @@ function createEngine(host: {
     host.onCommit(n);
   }
 
-  /* ---------- interaction ---------- */
   const uAt = (clientX: number) => {
     const r = slider.getBoundingClientRect();
     return ((clientX - r.left - F.x0) / (F.x1 - F.x0)) * MAX;
@@ -1101,7 +1058,6 @@ function createEngine(host: {
     try {
       target.setPointerCapture(pointerId);
     } catch {
-      /* capture unsupported — falls back to element-scoped events */
     }
     if (drag.live) {
       slider.classList.add('dragging');
@@ -1173,12 +1129,11 @@ function createEngine(host: {
     commit(v);
   }
 
-  /* ---------- boot ---------- */
   readTheme();
   layoutName();
   layout();
   apply(level, false);
-  applied = -1; // let the value effect play the open fly-in animation
+  applied = -1;
   sim.igniteAt = reduce ? 0 : level === MAX ? 0.7 : 0;
 
   return {

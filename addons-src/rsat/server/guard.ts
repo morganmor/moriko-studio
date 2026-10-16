@@ -56,11 +56,9 @@ function scopeNotes(api, sessionId, tool, args) {
     for (const rel of [t.path, t.from, t.to].filter(Boolean)) {
       if (String(rel).replace(/\\/g, '/').startsWith('.moriko/rsat/')) continue;
       const holders = coveringAchievements(doc, rel);
-      if (holders.length === 0) continue; // unclaimed scope → no fence
-      // Own scope = the claim is bound to THIS agent's identity (registry),
-      // or to this session directly (user actions / pre-registry claims).
+      if (holders.length === 0) continue;
       let myAgentId = null;
-      try { myAgentId = agentBySession(api, sessionId)?.id ?? null; } catch { /* registry not loaded */ }
+      try { myAgentId = agentBySession(api, sessionId)?.id ?? null; } catch {  }
       if (holders.some((h) => h.claim?.by?.agentId === myAgentId || h.claim?.by?.sessionId === sessionId)) continue;
       const who = holders.map((h) => `${h.id} (held by ${h.claim?.label ?? 'another agent'})`).join(', ');
       notes.push(`RSA/T scope: "${rel}" is inside the scope of ${who}, not yours. Propose rsat_scope widen with a reason, or coordinate with the holder before touching it.`);
@@ -124,7 +122,6 @@ export function createGuard(api) {
       };
     }
 
-    // advisory: let the call through, stash the note for the result hook.
     pendingNotes.set(`${sessionId}\u0000${tool}`, [...notes, ...archNotes].join(' '));
     return next(event);
   };

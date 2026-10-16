@@ -21,12 +21,12 @@ function detectLinter(cwd: string): { kind: LinterKind; configHint: string } {
   try {
     const pkg = JSON.parse(readFileSync(path.join(cwd, 'package.json'), 'utf8')) as { devDependencies?: Record<string, string> };
     if (pkg.devDependencies?.['oxlint']) return { kind: 'oxlint', configHint: 'package.json' };
-  } catch { /* no package.json */ }
+  } catch {  }
   if (existsSync(path.join(cwd, 'ruff.toml')) || existsSync(path.join(cwd, '.ruff.toml'))) return { kind: 'ruff', configHint: 'ruff.toml' };
   try {
     const pyproject = readFileSync(path.join(cwd, 'pyproject.toml'), 'utf8');
     if (pyproject.includes('[tool.ruff]')) return { kind: 'ruff', configHint: 'pyproject.toml' };
-  } catch { /* no pyproject */ }
+  } catch {  }
   return { kind: 'none', configHint: '' };
 }
 
@@ -46,7 +46,6 @@ function parseJsonIssues(text: string, root: string): LintIssue[] {
   if (start < 0 || end <= start) return [];
   try {
     const json = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
-    // Biome shape
     if (Array.isArray(json.diagnostics)) {
       const out: LintIssue[] = [];
       for (const d of json.diagnostics as Array<Record<string, unknown>>) {
@@ -63,7 +62,6 @@ function parseJsonIssues(text: string, root: string): LintIssue[] {
       }
       return out;
     }
-    // ESLint shape
     if (Array.isArray(json)) {
       const out: LintIssue[] = [];
       for (const fileEntry of json as Array<{ filePath: string; messages?: Array<{ line: number; column: number; severity: number; ruleId: string | null; message: string }> }>) {
@@ -80,7 +78,7 @@ function parseJsonIssues(text: string, root: string): LintIssue[] {
       }
       return out;
     }
-  } catch { /* not JSON */ }
+  } catch {  }
   return [];
 }
 
@@ -101,7 +99,7 @@ function parseRuffIssues(text: string): LintIssue[] {
         rule: j.code ?? '',
         message: j.message ?? '',
       });
-    } catch { /* skip */ }
+    } catch {  }
   }
   return out;
 }
@@ -144,10 +142,9 @@ async function lintTool(args: Record<string, unknown>, ctx: AgentToolContext): P
   }
 
   if (fix) {
-    // Vault snapshot before the linter rewrites files.
     for (const rel of targets) {
       if (rel === '.') continue;
-      try { snapshotFile(ctx.sessionId, path.join(resolved.absolute, rel), 'lint-fix'); } catch { /* best effort */ }
+      try { snapshotFile(ctx.sessionId, path.join(resolved.absolute, rel), 'lint-fix'); } catch {  }
     }
   }
 
@@ -172,7 +169,6 @@ async function lintTool(args: Record<string, unknown>, ctx: AgentToolContext): P
     if (outcome.exitCode === 0) {
       return { ok: true, isError: false, text: `> ${kind} ${targets.join(' ')}\nClean — 0 lint issues (${configHint}).` };
     }
-    // Linter ran but produced unparsable output — show raw tail.
     return {
       ok: false,
       isError: true,

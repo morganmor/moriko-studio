@@ -39,7 +39,6 @@ export function MobileWatching() {
       setTarget((prev) => prev || next.hostTarget);
       setPort((prev) => prev || String(next.tunnel.port ?? next.ports[0]?.port ?? 5588));
     } catch {
-      /* server hiccup — keep last snapshot */
     }
   }, []);
 
@@ -47,7 +46,6 @@ export function MobileWatching() {
     void refresh();
   }, [refresh]);
 
-  // Poll while the popover is open or a tunnel is running (state badges live).
   const running = Boolean(status?.tunnel.running);
   useEffect(() => {
     if (!open && !running) return;
@@ -89,7 +87,6 @@ export function MobileWatching() {
     setError(null);
     try {
       if (!status?.installed) {
-        // Host binary required to run — install it first (skipped when present).
         await installWatch();
       }
       const { url } = await startWatch(portValue);

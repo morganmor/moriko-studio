@@ -66,10 +66,8 @@ export function resolveGraph(nodes: GraphNode[], coreVersion = '2.0.0'): GraphRe
       }
     }
     if (blocked[conflictKey(nodes, node.id)]) {
-      // someone else declared a conflict with us — block them, not us
     }
   }
-  // Reverse conflicts: if A conflicts-with B and both exist, both are blocked.
   for (const node of nodes) {
     for (const other of nodes) {
       if (other.id !== node.id && other.conflicts.includes(node.id)) {
@@ -100,7 +98,6 @@ export function resolveGraph(nodes: GraphNode[], coreVersion = '2.0.0'): GraphRe
     }
   }
 
-  // Kahn topological sort over the installable set.
   const installable = nodes.filter((n) => !blocked[n.id]);
   const inDeg = new Map<string, number>();
   const edges = new Map<string, string[]>();
@@ -126,7 +123,6 @@ export function resolveGraph(nodes: GraphNode[], coreVersion = '2.0.0'): GraphRe
       if (d === 0) queue.push(next);
     }
   }
-  // Cycle remainder → blocked.
   for (const n of installable) {
     if (!order.includes(n.id)) blocked[n.id] = 'Dependency cycle detected';
   }

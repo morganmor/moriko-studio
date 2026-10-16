@@ -398,7 +398,6 @@ function repairPartialArgs(raw: string): string {
     JSON.parse(work);
     return work;
   } catch {
-    // fall through to repair
   }
   if (!work.startsWith('{')) return '{}';
   let inString = false;
@@ -864,9 +863,6 @@ export function contextPlan(conversation: Conversation, opts?: WireOptions): Con
 
     if (turn.kind === 'probation') continue;
 
-    // HARNESS-EVENT turn: a labeled SYSTEM-ish user block (its own channel —
-    // never presented as the user's words), so the model sees addon events
-    // from past rounds without them polluting the visible user stream.
     if (turn.kind === 'harness-event') {
       const addon = turn.eventAddon ?? 'addon';
       messages.push({
@@ -1184,7 +1180,6 @@ export function compactCandidate(conversation: Conversation): {
   /** Serialized live goal state — rides with the compaction directive. */
   goalBlock: string;
 } | null {
-  // Every eligible turn is summarized — no verbatim tail is kept.
   let covered = conversation.turns.filter(
     (turn) =>
       (turn.role === 'user' || turn.role === 'assistant') &&

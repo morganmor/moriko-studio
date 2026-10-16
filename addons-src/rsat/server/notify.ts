@@ -14,5 +14,5 @@ export function toastAchievement(api, event) {
       openView: 'addon:rsat/board',
       ttlMs: 6500,
     });
-  } catch { /* best-effort */ }
+  } catch {  }
 }

@@ -30,19 +30,16 @@ export async function broadcast(api, sessionId, event) {
   pushActivity({ kind: 'board', ...event });
   try {
     await api.bus.publish('rsat.changed', { event: { ...event }, at: Date.now() });
-  } catch { /* bus is best-effort */ }
-  // HARNESS-EVENT (per-session only): the actor's own conversation gets a
-  // dedicated event turn — NOT a user message, NOT broadcast to others.
+  } catch {  }
   const level = eventLevelOf(event.type);
   if (level) {
     const text = `RSA/T: ${event.target} was ${event.type} by ${event.by?.label ?? event.by?.name ?? 'an agent'}.`;
     try {
       api.events.emit(sessionId, { text, level, key: `${INJECT_KEY}:${event.target}:${event.type}` });
       pushActivity({ kind: 'inject', text, delivered: 1, queued: 0, target: event.target });
-    } catch { /* event emit is best-effort */ }
+    } catch {  }
   }
 
-  // Sidebar status item: progress + claim count.
   try {
     const doc = loadDoc(api, sessionId);
     if (doc) {
@@ -58,21 +55,20 @@ export async function broadcast(api, sessionId, event) {
         pulse: active > 0,
       });
     }
-  } catch { /* status is best-effort */ }
+  } catch {  }
 
-  // Achievement toast (Q: only for completions, only when enabled).
   try {
     if (event.type === 'completed' && api.settings.get('showToast') !== false) {
       const { toastAchievement } = await import('./notify.js');
       toastAchievement(api, event);
     }
-  } catch { /* best-effort */ }
+  } catch {  }
 }
 
 /** Identity block: named-agent declaration + structured memory (survives swaps). */
 function identityLines(api, sessionId) {
   let rec = null;
-  try { rec = agentBySession(api, sessionId); } catch { /* registry not loaded */ }
+  try { rec = agentBySession(api, sessionId); } catch {  }
   if (!rec) return [];
   const lines = [
     `IDENTITY: You are "${rec.name}" [${rec.id}] on this board (session ${String(sessionId).slice(0, 8)}). ` +
@@ -81,7 +77,6 @@ function identityLines(api, sessionId) {
   ];
   const mem = memoryOfSession(api, sessionId);
   if (mem.length > 0) {
-    // Window 16 entry: keputusan terkini + fakta lama yang masih relevan.
     lines.push(`YOUR MEMORY (structured, survives model swaps — newest last, ${mem.length} total):`);
     for (const m of mem.slice(-16)) lines.push(`  [${m.kind}] ${m.text}`);
   }
@@ -105,7 +100,6 @@ export function createPromptFragment(api) {
       );
       const lines = [`RSA/T PRD "${doc.prd.title}" is running (use the rsat tools for board actions):`];
 
-      // Identity-first: named agents declare who they are (helper — keeps build() small).
       lines.push(...identityLines(api, ctx.sessionId));
 
       for (const a of mine) {
@@ -116,7 +110,6 @@ export function createPromptFragment(api) {
       }
       const available = (doc.achievements || []).filter((a) => a.state === 'available').slice(0, 5);
       if (available.length > 0) lines.push(`- Available to claim: ${available.map((a) => a.id).join(', ')} (rsat_status first).`);
-      // Cross-agent awareness: architecture + recent decisions
       if (doc.prd.architecture) lines.push(`Architecture: ${doc.prd.architecture}`);
       if (doc.prd.modules?.length > 0) {
         lines.push(`Architecture Layer Matrix: ${doc.prd.modules.slice(0, 8).map((m) => `${m.id}:${m.name}${m.layer ? `(${m.layer})` : ''}${m.allowedImports?.length ? `->[${m.allowedImports.join(',')}]` : ''}`).join(' · ')}`);
@@ -139,7 +132,7 @@ export function presence(api, sessionId) {
   try { sessions = listSessions(api); } catch { sessions = []; }
   return sessions.map((s) => {
     let rec = null;
-    try { rec = agentBySession(api, s.sessionId); } catch { /* registry not loaded */ }
+    try { rec = agentBySession(api, s.sessionId); } catch {  }
     return {
       sessionId: s.sessionId,
       model: s.model ?? null,

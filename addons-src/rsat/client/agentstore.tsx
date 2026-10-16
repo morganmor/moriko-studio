@@ -44,7 +44,6 @@ export async function refreshAgents(): Promise<void> {
     list = Array.isArray(r?.agents) ? r.agents : [];
     emit();
   } catch {
-    /* offline: keep last */
   }
 }
 
@@ -60,7 +59,6 @@ export function useAgents(): AgentRec[] {
     }
     return () => { subs.delete(cb); };
   }, []);
-  // Registry berubah (agent dibuat/di-edit/di-bind) → muat ulang roster.
   useEffect(() => {
     if (frame) void refreshAgents();
   }, [frame]);

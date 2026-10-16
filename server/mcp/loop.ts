@@ -809,11 +809,10 @@ export async function executeCalls(
     | null
   > = Array.from({ length: calls.length }, () => null);
 
-  // Addon v2 (A3): round.start — observe point before this round executes.
   try {
     const { emitPointAsync } = await import('../addons/points.js');
     emitPointAsync('round.start', { sessionId, plannedCalls: calls.length, tools: calls.map((c) => c.wireName) });
-  } catch { /* best-effort */ }
+  } catch {  }
 
   const emitResult = (entry: NonNullable<typeof settled[number]>): void => {
     if (!entry.replayed) {
@@ -1100,7 +1099,6 @@ export async function executeCalls(
     });
   }
 
-  // Addon v2 (A3): round.end — observe point after all calls settled.
   try {
     const { emitPointAsync } = await import('../addons/points.js');
     emitPointAsync('round.end', {
@@ -1108,7 +1106,7 @@ export async function executeCalls(
       calls: settled.length,
       ok: settled.filter((s) => s?.ok).length,
     });
-  } catch { /* best-effort */ }
+  } catch {  }
 
   return { followUp, events };
 }

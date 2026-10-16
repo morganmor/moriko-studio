@@ -129,7 +129,6 @@ async function keepRunAlive(body: string): Promise<{ started: boolean; error?: s
         signal: controller.signal,
       });
       if (!res.ok) return { started: false, error: `upstream ${res.status}` };
-      // Drain the SSE to keep the run alive until it finishes.
       const reader = res.body?.getReader();
       if (reader) {
         for (;;) {
@@ -145,7 +144,7 @@ async function keepRunAlive(body: string): Promise<{ started: boolean; error?: s
 
   const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 1500));
   try {
-    return await Promise.race([keeper, timeout]); // settled within 1.5s — real result
+    return await Promise.race([keeper, timeout]);
   } catch {
     void keeper.then((r) => { if (!r.started) console.error(`[serverRun] wake run failed: ${r.error}`); });
     return { started: true };

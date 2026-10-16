@@ -99,9 +99,6 @@ export async function editDefaultTool(args: Record<string, unknown>, ctx: AgentT
     effectiveNew = newString.replace(/\n/g, '\r\n');
     eolAdapted = true;
   }
-  // Temuan B: eolNote WAJIB dibangun SETELAH cabang elastic-indent di bawah,
-  // di mana indentAligned bisa jadi true — kalau dibekukan lebih awal,
-  // catatan (matched via elastic indentation…) tidak pernah tercetak.
 
   if (occurrences.length === 0) {
     if (newString && content.includes(newString) && plausiblyApplied(oldString, newString)) {
@@ -112,8 +109,6 @@ export async function editDefaultTool(args: Record<string, unknown>, ctx: AgentT
           'No changes were written. If this is unexpected, re-read the region before editing.',
       };
     }
-    // FALLBACK: pencocokan elastis terhadap indentasi — anchor yang HANYA
-    // salah leading-whitespace tetap bisa dieksekusi dengan indentasi berkas.
     const normCheck = normalized ? effectiveContent : content.replace(/\r\n/g, '\n');
     const normOld = oldString.replace(/\r\n/g, '\n');
     const normNew = newString.replace(/\r\n/g, '\n');
@@ -132,8 +127,6 @@ export async function editDefaultTool(args: Record<string, unknown>, ctx: AgentT
   }
 
   // BUG (lineHint ditolak lebih awal diperbaiki): disambiguasi target DIJALANKAN
-  // SEBELUM validasi jendela baca — sebelumnya occurrences[0] diperiksa ke
-  // readEntry walau lineHint menunjuk occurrence lain yang sah.
   let targetLinesToVerify: number[] = [];
   let selectedOccurrenceLine: number | null = null;
 
@@ -172,7 +165,6 @@ export async function editDefaultTool(args: Record<string, unknown>, ctx: AgentT
     (eolAdapted ? ' newString line endings were adapted to the file\'s CRLF.' : '') +
     (indentAligned ? ' (matched via elastic indentation; newString auto-indented to match file.)' : '');
 
-  // Validasi SEMUA baris target terhadap readEntry (multi-interval + span).
   if (readEntry && readEntry.toLine < Number.MAX_SAFE_INTEGER) {
     const spanLen = Math.max(effectiveOldString.split('\n').length, 1);
     for (const anchorLine of targetLinesToVerify) {

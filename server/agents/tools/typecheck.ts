@@ -90,7 +90,6 @@ export async function typecheckTool(args: Record<string, unknown>, ctx: AgentToo
 
   const errors = parseTscOutput(`${outcome.stdout}\n${outcome.stderr}`);
   if (errors.length === 0) {
-    // F1.4 — show only the last 40 raw lines when parsing failed.
     const rawLines = (outcome.output ?? '').replace(ANSI_RE, '').trimEnd().split('\n');
     const tail = rawLines.slice(-40).join('\n');
     return {
@@ -100,7 +99,6 @@ export async function typecheckTool(args: Record<string, unknown>, ctx: AgentToo
     };
   }
 
-  // F1.4 — optional filter to specific paths.
   const filterPaths = Array.isArray(args['paths']) ? args['paths'].filter((p): p is string => typeof p === 'string') : [];
   const shownErrors = filterPaths.length > 0
     ? errors.filter((err) => filterPaths.some((p) => err.file === p || err.file.startsWith(p.replace(/\\/g, '/').replace(/\/$/, '') + '/')))

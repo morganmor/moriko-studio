@@ -31,16 +31,12 @@ export default function Panel() {
   const councilId = council.councilId ?? '';
   const isMain = council.main?.id === council.activeId;
   const subCount = council.subs.length;
-  // Agents already in use are not dispatch candidates: sub members are taken,
-  // and the orchestrator's RSAT binding holds the MAIN session — re-dispatching
-  // it would release that binding and break the council_dispatch/stop gate.
   const boundIds = new Set([
     ...council.subs.map((s: Member) => s.agentId).filter(Boolean),
     ...(orchestratorAgentId ? [orchestratorAgentId] : []),
   ]);
   const freeAgents = agents.filter((ag) => !boundIds.has(ag.id));
 
-  // Load brief + RSAT roster + orchestrator; push the membership projection.
   const refresh = async () => {
     if (!councilId) { setBrief(''); setOrchestratorAgentId(''); return; }
     try {
@@ -61,7 +57,7 @@ export default function Panel() {
           ],
         },
       });
-    } catch { /* offline addon = keep last */ }
+    } catch {  }
   };
   useEffect(() => { void refresh(); }, [councilId, frame]);
 
@@ -79,9 +75,6 @@ export default function Panel() {
   const onDispatchAgent = () => {
     const ag = agents.find((a) => a.id === pickAgent);
     if (!ag) return;
-    // COUNCIL dispatch = context injection, not a user message: the host
-    // creates/binds the sub session and queues the directive server-side; it
-    // rides the council prompt fragment at the session's first fetch.
     window.dispatchEvent(new CustomEvent('moriko:council-dispatch', {
       detail: {
         providerId: ag.providerId, model: ag.model, agentId: ag.id, agentName: ag.name,
@@ -120,8 +113,6 @@ export default function Panel() {
   };
 
   // NOTE: the bus→window bridge lives in App.tsx (always mounted). A bridge
-  // here would only listen while this panel view is open, silently dropping
-  // dispatch/stop frames issued from the chat view.
 
   return (
     <div className="council">

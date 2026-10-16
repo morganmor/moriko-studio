@@ -30,7 +30,6 @@ const OVERLAY_SEL =
 const PANEL_WRAPPERS =
   '[data-plus-popover],[data-tools-popover],[data-model-popover],[data-context-popover]';
 
-/* ------------------------------------------------------------ predicates -- */
 
 function isOpener(el: Element): boolean {
   if (el.tagName !== 'BUTTON') return false;
@@ -88,13 +87,12 @@ function collectViewButtons(root: ParentNode): HTMLButtonElement[] {
       b !== anchor &&
       (anchor.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
     ) {
-      return false; // sits under Workspace / Recent Chat — off limits
+      return false;
     }
     return true;
   });
 }
 
-/* --------------------------------------------------------------- overlays -- */
 
 function overlayNodes(root: ParentNode): Element[] {
   return Array.from(root.querySelectorAll(OVERLAY_SEL));
@@ -114,7 +112,6 @@ function overlaySig(n: Element): string {
   return `${typeof n.className === 'string' ? n.className : ''}|${n.getAttribute('style') ?? ''}`;
 }
 
-/* ----------------------------------------------------------------- timing -- */
 
 function settle(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -144,7 +141,6 @@ async function waitWorkspaceStable(host: Element, ms = 2600): Promise<void> {
   }
 }
 
-/* -------------------------------------------------------------- harvesting -- */
 
 /** Close anything open + expand collapsed nav sections (baseline = rich, neutral). */
 async function prepareLiveState(): Promise<void> {
@@ -167,7 +163,7 @@ async function prepareLiveState(): Promise<void> {
     el.click();
     await settle(80);
   }
-  await settle(400); // CollapseSection content mounts on open
+  await settle(400);
 }
 
 /** Click one opener, return outerHTML of overlays it made visible (open state). */
@@ -204,13 +200,11 @@ async function closePanel(el: HTMLElement): Promise<void> {
     try {
       el.click();
     } catch {
-      /* already closed */
     }
     await settle(90);
   }
 }
 
-/* -------------------------------------------------------------- shim script -- */
 
 /**
  * Vanilla interactivity for the exported file. NO backticks / ${ / </script
@@ -313,7 +307,6 @@ const DEMO_SHIM = `(function () {
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeAll(); });
 })();`;
 
-/* ------------------------------------------------------------ css / images -- */
 
 async function dataUri(url: string, cache: Map<string, string>): Promise<string> {
   const hit = cache.get(url);
@@ -383,7 +376,6 @@ export async function inlineImagesIn(
         stats.external.push(src);
       }
     } catch {
-      /* keep original */
     }
   }
 }
@@ -408,7 +400,6 @@ async function finalizeTemplate(
   return doc.body.innerHTML;
 }
 
-/* -------------------------------------------------------------- formatting -- */
 
 export function prettyCss(css: string): string {
   if (css.split('\n').length > 30) return css;
@@ -502,7 +493,6 @@ function prettyHtml(html: string): string {
   return out;
 }
 
-/* ------------------------------------------------------------------ build -- */
 
 export async function buildUiExportHtml(): Promise<{ html: string; stats: UiExportStats }> {
   const stats: UiExportStats = {
@@ -510,20 +500,14 @@ export async function buildUiExportHtml(): Promise<{ html: string; stats: UiExpo
   };
   const cache = new Map<string, string>();
 
-  // 1) Neutral live state: close overlays, expand nav sections.
   await prepareLiveState();
 
-  // 2) Harvest PAGES first: view switches REMOUNT the composer, so opener
-  //    tags must be applied after the last remount. Restore the original view
-  //    via the store — clicking buttons can't know which view was active.
   const initialView = useStore.getState().view;
   const viewBtns = collectViewButtons(document).slice(0, 14);
   const host = document.getElementById('workspace');
   const viewMap = new Map<number, string[]>();
   if (host) {
     const sliceContent = () => Array.from(host.children).slice(1);
-    // Compare outerHTML: React REUSES the same DOM element across views —
-    // element identity never changes, only the markup inside it does.
     const snap = () =>
       sliceContent()
         .map((c) => c.outerHTML)
@@ -540,15 +524,12 @@ export async function buildUiExportHtml(): Promise<{ html: string; stats: UiExpo
           viewBtns[j].setAttribute('data-demo-view', `v${j}`);
         }
       } catch {
-        /* skip this page */
       }
     }
     useStore.getState().setView(initialView);
     await settle(700);
   }
 
-  // 3) Harvest panels — tag the opener and mark its mount host DIRECTLY on
-  //    the live elements (cloneNode copies attributes; no index math).
   document.getElementById('moriko-session-bar')?.setAttribute('data-demo-topbar', '');
   const openers = collectOpeners(document).slice(0, 50);
   const panelMap = new Map<number, string[]>();
@@ -565,14 +546,10 @@ export async function buildUiExportHtml(): Promise<{ html: string; stats: UiExpo
       }
       await closePanel(openers[i]);
     } catch {
-      /* one bad opener must not sink the export */
     }
   }
 
-  // 3.5) Normalize + heal — nothing may be open at clone time, or React
-  //    unmounts the conditional opener (Show configuration) and its tag dies.
   //    NOTE: dismissSettings is a NO-OP ≥1024px (desktop dock ignores Escape),
-  //    so the store is toggled directly; Escape still handles nav + modals.
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const st = useStore.getState();
     const dockOpen = !!st.settingsOpen;
@@ -581,7 +558,6 @@ export async function buildUiExportHtml(): Promise<{ html: string; stats: UiExpo
     if (dockOpen) st.toggleSettings();
     escapeClose();
     await settle(150);
-    // Drawer backdrops are CHILDREN (aria-hidden)…
     for (const t of Array.from(
       document.querySelectorAll(
         'div.fixed.inset-0 [class*="bg-black"], div.fixed.inset-0[class*="bg-black"]',
@@ -591,7 +567,6 @@ export async function buildUiExportHtml(): Promise<{ html: string; stats: UiExpo
     }
     await settle(150);
   }
-  // Baseline rail must be expanded so the file's toggle has something to hide.
   if (useStore.getState().sidebarCollapsed) {
     useStore.getState().toggleSidebar();
     await settle(150);
@@ -615,15 +590,11 @@ export async function buildUiExportHtml(): Promise<{ html: string; stats: UiExpo
   stats.panels = panelMap.size;
   stats.views = viewMap.size;
 
-  // 4) Baseline clone — live app is neutral again (overlays closed, view back).
   const clone = document.documentElement.cloneNode(true) as HTMLElement;
-  outermost(overlayNodes(clone)).forEach((n) => n.remove()); // never ship open overlays
+  outermost(overlayNodes(clone)).forEach((n) => n.remove());
   for (const s of Array.from(clone.querySelectorAll('script'))) s.remove();
 
-  // Opener / view / topbar tags were applied to the LIVE elements above —
-  // cloneNode copied them. Index-based retagging is deliberately avoided.
 
-  // 5) CSS: consolidate every style block, inline url() refs.
   const styleTexts: string[] = [];
   for (const el of Array.from(clone.querySelectorAll('style'))) {
     styleTexts.push(el.textContent ?? '');
@@ -653,7 +624,6 @@ export async function buildUiExportHtml(): Promise<{ html: string; stats: UiExpo
           continue;
         }
       } catch {
-        /* fall through */
       }
     }
     link.remove();
@@ -665,10 +635,8 @@ export async function buildUiExportHtml(): Promise<{ html: string; stats: UiExpo
     stats.styles += 1;
   }
 
-  // 6) Baseline images → data URIs.
   await inlineImagesIn(clone, cache, stats);
 
-  // 7) Templates: harvested panels/pages, opener-tagged + images inlined.
   const wrap = document.createElement('div');
   wrap.id = 'moriko-demo-templates';
   wrap.hidden = true;
@@ -689,13 +657,11 @@ export async function buildUiExportHtml(): Promise<{ html: string; stats: UiExpo
     wrap.appendChild(tpl);
   }
 
-  // 8) Inject templates + the interactivity shim (AFTER script stripping).
   clone.querySelector('body')?.appendChild(wrap);
   const shim = document.createElement('script');
   shim.textContent = DEMO_SHIM;
   clone.querySelector('body')?.appendChild(shim);
 
-  // 9) Guide comment + consolidated stylesheet.
   const head =
     clone.querySelector('head') ??
     clone.insertBefore(document.createElement('head'), clone.firstChild);
@@ -741,7 +707,6 @@ export async function exportUi(): Promise<void> {
         savedPath = data.file ?? null;
       }
     } catch {
-      // Server save is best effort — the browser download below still runs.
     }
 
     const blob = new Blob([html], { type: 'text/html;charset=utf-8' });

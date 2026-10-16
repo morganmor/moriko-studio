@@ -77,13 +77,11 @@ async function reviewDiffTool(args: Record<string, unknown>, ctx: AgentToolConte
       }
     }
 
-    // Metrics thresholds for new functions (3D/game + repo quality).
     if (/\.(ts|tsx|js|jsx)$/.test(abs)) {
       for (const m of functionMetrics(content, path.basename(abs))) {
         if (m.lengthLines > 80) issues.push({ category: 'metrics', location: `${rel}:${m.line}`, detail: `${m.name}: ${m.lengthLines} lines (> 80)` });
         if (m.cyclomatic > 15) issues.push({ category: 'metrics', location: `${rel}:${m.line}`, detail: `${m.name}: cyclomatic ${m.cyclomatic} (> 15)` });
       }
-      // Server import style: server/** must import relative with .js
       if (rel.startsWith('server/')) {
         for (let i = 0; i < lines.length; i += 1) {
           const m = lines[i].match(/from\s+'(\.\.?\/[^']*?)'/);

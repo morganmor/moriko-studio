@@ -44,7 +44,6 @@ export interface ImageProviderSelection {
  */
 export function defaultAdapterIdFor(baseUrl: string): string {
   if (/modelscope/i.test(baseUrl)) return 'modelscope-async';
-  // ComfyUI: localhost/127.0.0.1 on port 8188, or has "comfyui" in URL
   if (/comfyui/i.test(baseUrl)) return 'comfyui-local';
   if (/^https?:\/\/(127\.0\.0\.1|localhost):8188/i.test(baseUrl)) return 'comfyui-local';
   return 'openai-sync';

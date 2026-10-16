@@ -46,8 +46,8 @@ export function upsertProjection(api, sessionId, projection) {
   if (!norm) return;
   projections.set(norm.councilId, norm);
   for (const m of norm.members) sessionIndex.set(m.sessionId, norm.councilId);
-  try { void saveProjection(api, sessionId, norm.councilId, norm); } catch { /* best-effort */ }
-  try { void api.bus.publish('council.changed', { event: { type: 'synced', target: norm.councilId }, at: Date.now() }); } catch { /* best-effort */ }
+  try { void saveProjection(api, sessionId, norm.councilId, norm); } catch {  }
+  try { void api.bus.publish('council.changed', { event: { type: 'synced', target: norm.councilId }, at: Date.now() }); } catch {  }
 }
 
 /** Rebuild the maps from the workspace doc after a server restart. */
@@ -59,7 +59,7 @@ function rehydrate(api, sessionId) {
       projections.set(norm.councilId, norm);
       for (const m of norm.members) sessionIndex.set(m.sessionId, norm.councilId);
     }
-  } catch { /* no workspace yet */ }
+  } catch {  }
 }
 
 /** The caller's council projection (null when the panel never synced it). */
@@ -71,10 +71,6 @@ export function membershipOf(api, sessionId) {
     councilId = sessionIndex.get(sid);
   }
   if (!councilId) {
-    // FALLBACK: build the projection from the server-side conversation store —
-    // conversations already carry councilId/councilRole/councilAgentId, so a
-    // cold projection (panel never opened / server restarted) no longer makes
-    // every orchestrator tool fail with "not part of a council".
     councilId = synthesizeFromConversations(api, sid);
   }
   if (!councilId) return null;
@@ -123,7 +119,7 @@ export function isSessionActive(api, sessionId) {
  */
 export async function wakeSessions(api, items): Promise<boolean> {
   if (!items || items.length === 0) return true;
-  try { void api.bus.publish('council:wake', { items, at: Date.now() }); } catch { /* observers only */ }
+  try { void api.bus.publish('council:wake', { items, at: Date.now() }); } catch {  }
   let allOk = true;
   for (const item of items) {
     if (!item?.sessionId || !item?.text) continue;
@@ -155,7 +151,7 @@ export async function broadcastToCouncil(api, sessionId, mem, text) {
       ttlMs: 5 * 60 * 1000,
     });
     return { delivered: report?.delivered ?? 0, queued: report?.queued ?? 0 };
-  } catch { /* best-effort */ }
+  } catch {  }
   return { delivered: 0, queued: 0 };
 }
 
@@ -192,7 +188,6 @@ export function createPromptFragment(api) {
       if (brief) lines.push('Shared council brief:', brief);
       const dir = getDirective(api, ctx.sessionId);
       if (dir) lines.push('Dispatch directive (ack with council_ack once absorbed):', dir.text);
-      // Cross-session awareness
       lines.push('COLLABORATION: Before writing code, use rsat_context to see what other agents changed. Build on their work — never duplicate or contradict. After significant changes, use rsat_remember to record decisions so other agents can see them.');
       return lines;
     },
@@ -203,7 +198,7 @@ export function createPromptFragment(api) {
 export async function broadcast(api, sessionId, event) {
   try {
     await api.bus.publish('council.changed', { event: { ...event }, at: Date.now() });
-  } catch { /* bus is best-effort */ }
+  } catch {  }
   try {
     const doc = membershipOf(api, sessionId);
     if (doc) api.status.set({
@@ -211,5 +206,5 @@ export async function broadcast(api, sessionId, event) {
       text: `${doc.members.length} member${doc.members.length === 1 ? '' : 's'}`,
       tone: 'info',
     });
-  } catch { /* status is best-effort */ }
+  } catch {  }
 }

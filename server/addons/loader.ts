@@ -80,7 +80,6 @@ function addonIdForPath(changed: string): string | null {
   const abs = path.resolve(root, changed);
   if (!abs.startsWith(root + path.sep)) return null;
   const id = abs.slice(root.length + 1).split(path.sep)[0] ?? null;
-  // Same rule as the scan: dot-dirs and seed backups are never addons.
   if (id && (id.startsWith('.') || id.includes('.bak'))) return null;
   return id;
 }
@@ -116,8 +115,6 @@ export async function deactivateAddonModule(id: string): Promise<void> {
 async function loadOneAddon(dir: string): Promise<LoadedAddon | null> {
   const rawManifest = parseManifest(dir);
   if (!rawManifest) return null;
-  // v2 (A2): validate the manifest; invalid addons surface in the Hub with
-  // per-field errors and never load.
   const validation = validateManifest(rawManifest);
   const manifest: AddonManifest = rawManifest;
   const loaded: LoadedAddon = {
@@ -137,8 +134,6 @@ async function loadOneAddon(dir: string): Promise<LoadedAddon | null> {
     return loaded;
   }
 
-  // v2 permission consent (A2): an addon needing ungranted consent stays
-  // "needs-consent" — code never runs until the user approves it.
   if (validation.apiVersion === '2') {
     const extra = manifest as unknown as Record<string, unknown>;
     const perms = Array.isArray(extra.permissions) ? extra.permissions as string[] : [];
@@ -148,7 +143,6 @@ async function loadOneAddon(dir: string): Promise<LoadedAddon | null> {
     }
   }
 
-  // Entry resolution: v2 declares `main`; legacy falls back to register.ts|js.
   const mainRel = (manifest as unknown as Record<string, unknown>).main;
   const registerPath = path.join(dir, 'register.ts');
   const registerJsPath = path.join(dir, 'register.js');
@@ -158,8 +152,6 @@ async function loadOneAddon(dir: string): Promise<LoadedAddon | null> {
     : existsSync(registerPath) ? registerPath : existsSync(registerJsPath) ? registerJsPath : null;
   if (entryPath) {
     try {
-      // Cache-bust by mtime: without the query, Node caches the module URL
-      // forever and edits would never run (spike A0-1).
       const url = pathToFileURL(entryPath).href + `?v=${statSync(entryPath).mtimeMs}`;
       const mod = await import(url) as Record<string, unknown>;
       const pick = (v: unknown): AddonRegisterFn | undefined =>
@@ -169,8 +161,6 @@ async function loadOneAddon(dir: string): Promise<LoadedAddon | null> {
         const o = obj as Record<string, unknown>;
         return pick(o.register) ?? pick(o.default);
       };
-      // v2 module: activate(ctx) — ctx carries the addon identity, the $
-      // api surface (spread), the hook registrar `on`, and subscriptions.
       const v2Activate = typeof (mod as { activate?: unknown }).activate === 'function'
         ? (mod as { activate: (ctx: unknown) => unknown }).activate
         : undefined;
@@ -186,13 +176,11 @@ async function loadOneAddon(dir: string): Promise<LoadedAddon | null> {
           fromObj(mod.default) ??
           fromObj(mod.default && (mod.default as Record<string, unknown>).default);
         if (registerFn) {
-          // v1 shim: same register(on, $) contract on top of the v2 facades.
           const api = createAddonApi(manifest.id, { addonDir: dir });
           const on = createEventRegistrar(manifest.id);
           await registerFn(on, api);
         }
       }
-      // v2 (A4): static contributions + settings schema from the manifest.
       if (validation.apiVersion === '2') {
         const m2 = manifest as unknown as { contributes?: import('./manifest.js').AddonContributes };
         registerContributions(manifest.id, m2.contributes);
@@ -214,11 +202,8 @@ export async function loadAllAddons(): Promise<void> {
   }
   clearAllAddons();
   const entries = readdirSync(addonsDir);
-  // Pass 1: parse every manifest (no code runs yet).
   const staged: LoadedAddon[] = [];
   for (const entry of entries) {
-    // Skip dot-dirs and seed backups (rsat.bak-…) — a backup manifest would
-    // otherwise load as a second copy of the same addon id.
     if (entry.startsWith('.') || entry.includes('.bak')) continue;
     const dir = path.join(addonsDir, entry);
     if (!statSync(dir).isDirectory()) continue;
@@ -232,7 +217,6 @@ export async function loadAllAddons(): Promise<void> {
       status: raw.enabled !== false ? 'active' : 'disabled',
     });
   }
-  // Pass 2 (A2): dependency graph → activation order + blocked reasons.
   const graph = resolveGraph(
     staged.map((a) => ({
       id: a.manifest.id,
@@ -241,7 +225,6 @@ export async function loadAllAddons(): Promise<void> {
       conflicts: (a.manifest as unknown as Record<string, unknown>).conflicts as string[] ?? [],
     })),
   );
-  // Pass 3: load + register in topological order.
   for (const addon of staged) {
     const blockedReason = graph.blocked[addon.manifest.id];
     if (blockedReason) {
@@ -282,7 +265,6 @@ export function startAddonWatcher(onChange: (reloaded: string[]) => void): void 
       reloadDebounce = setTimeout(() => {
         const ids = [...pendingReload];
         pendingReload.clear();
-        // Reload ONLY the addons whose files changed (A-06).
         void Promise.all(ids.map((addonId) => reloadAddon(addonId)))
           .then(() => onChange(ids))
           .catch(() => onChange(ids));

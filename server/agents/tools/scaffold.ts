@@ -12,7 +12,6 @@ import { snapshotFile } from '../vault.js';
 import { defineTool } from './registry.js';
 
 function templatesRoot(): string {
-  // templates live next to this compiled file: server/agents/templates
   return path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'templates');
 }
 
@@ -104,7 +103,7 @@ async function scaffoldTool(args: Record<string, unknown>, ctx: AgentToolContext
     mkdirSync(path.dirname(f.target), { recursive: true });
     writeFileSync(f.target, f.content);
     written.push(path.relative(root, f.target).replace(/\\/g, '/'));
-    try { snapshotFile(ctx.sessionId, f.target, 'scaffold'); } catch { /* new file: nothing to vault */ }
+    try { snapshotFile(ctx.sessionId, f.target, 'scaffold'); } catch {  }
   }
   return {
     ok: true,

@@ -12,7 +12,7 @@ import * as ts from 'typescript';
 import { defineTool } from './registry.js';
 
 /** Files edited this session (populated by the pipeline post-edit hook, F3.2). */
-const touched = new Map<string, number>(); // absolutePath -> mtimeMs
+const touched = new Map<string, number>();
 
 export function markTouched(absolute: string): void {
   try {
@@ -64,9 +64,6 @@ async function diagnosticsTool(args: Record<string, unknown>, ctx: AgentToolCont
       sections.push(`── ${rel} — language-service failed: ${error instanceof Error ? error.message : 'unknown error'} (check the project tsconfig, or fall back to agent__typecheck)`);
       continue;
     }
-    // TS6053 "Could not find source file": the file fell outside the LanguageService
-    // program. lsp-service now pins the correct tsconfig project, but filter the
-    // noise defensively so it never masquerades as a real diagnostic.
     diags = diags.filter((d) => d.code !== 6053);
     if (diags.length === 0) continue;
     total += diags.length;

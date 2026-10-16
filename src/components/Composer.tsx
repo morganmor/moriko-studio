@@ -87,12 +87,6 @@ function readAsText(file: File): Promise<string> {
   });
 }
 
-/**
- * P1 CLS: probe an image's intrinsic size from its data URL so the thread can
- * reserve the right box before the bitmap decodes. Resolves undefined for
- * anything that isn't a decodable image (or fails to load) — callers treat
- * that as "no dimensions known".
- */
 function readImageDimensions(dataUrl: string): Promise<{ width: number; height: number } | undefined> {
   return new Promise((resolve) => {
     const image = new Image();
@@ -105,12 +99,6 @@ function readImageDimensions(dataUrl: string): Promise<{ width: number; height: 
 const TEXT_EXTENSIONS =
   /\.(txt|md|markdown|csv|tsv|json|xml|yaml|yml|svg|log|ini|toml|env|sql|html?|css|js|mjs|cjs|jsx|ts|tsx|py|rb|go|rs|java|kt|c|h|cpp|hpp|cs|php|sh|bat|ps1|lua|r|swift|dart|vue|svelte|graphql|prisma|dockerfile|gitignore)$/i;
 
-/**
- * Text-like files are inlined as plain text so EVERY provider can read them.
- * SVG counts as text: browsers report its mime as image/svg+xml, but it is
- * XML SOURCE — providers refuse it as an image ("could not decode image"),
- * and the model needs the markup itself to recreate or edit the drawing.
- */
 function isTextLike(file: File): boolean {
   return file.type === 'image/svg+xml' || file.type.startsWith('text/') || TEXT_EXTENSIONS.test(file.name);
 }
@@ -119,20 +107,13 @@ interface ComposerProps {
   onSend: (text: string, attachments?: TurnAttachment[], attachmentPaths?: string[]) => void;
   onStop: () => void;
   streaming: boolean;
-  /** Why sending is blocked, shown inline instead of as a dead button. */
   blockedReason?: string;
   draft: string;
   onDraftChange: (value: string) => void;
-  /** 'docked' sits at the bottom of the thread (default); 'centered' floats
-   *  in the empty state under the brand block, without the top rule. */
   variant?: 'docked' | 'centered';
-  /** NATIVE workspace pick — opens the device's own folder dialog and
-   *  registers the selection as the active agent workspace. */
   onPickWorkspace?: () => void;
-  /** Opens/closes the Goals & plans panel. */
   onToggleGoals?: () => void;
   goalsOpen?: boolean;
-  /** Opens/closes the standalone Todos panel. */
   onToggleTodos?: () => void;
   /**
    * STEER: inject the draft into a RUNNING generation's context. Called with
@@ -140,38 +121,21 @@ interface ComposerProps {
    * run already ended (409) the caller keeps the draft so the user can send
    * it as a normal message instead.
    */
-  /** DSH-style steer: the draft PLUS attachments (images/files) ride as one
-      ordinary user message into the live generation's context. */
   onSteer?: (
     text: string,
     attachments?: TurnAttachment[],
   ) => Promise<{ id: string | null } | import('../lib/api').SteerFailure>;
-  /** SEND REMINDER: pushes the server-owned Writing-Rules reminder into the
-      running generation — one click, no typing. Same steer channel. The
-      failure variant carries the real reason (old server, network drop) so
-      the notice never lies with "the run just finished". */
   onSendReminder?: () => Promise<{ id: string | null } | import('../lib/api').SteerFailure>;
-  /** Turn arrows floating above the card's top-right: jump to the earliest /
-   *  newest turn. Rendered only when the handler is wired (thread view), so
-   *  the empty-state composer stays clean. */
   onNavigateFirstTurn?: () => void;
   onNavigateLatest?: () => void;
   /**
-   * ATTACHMENT DIRECTORY: the workspace paths of the picked attachments,
-   * forwarded to the request so the harness injects them into the system
-   * prompt. Empty when no workspace is registered (data URLs still carry the
-   * files) — the model is only told about paths it can actually use.
+   * ATTACHMENT DIRECTORY: the workspace paths of the picked attachments.
    */
   attachmentPaths?: string[];
 }
 
 /**
  * Composer.
- *
- * Autogrows up to a fixed ceiling so a long prompt never swallows the thread,
- * and keeps Enter-to-send with Shift+Enter for newlines. Every control here is
- * wired: stub affordances that only raised a "not implemented" toast were
- * removed instead of shipped.
  */
 export function Composer({
   onSend,
@@ -200,8 +164,6 @@ export function Composer({
   const setTheme = useStore((state) => state.setTheme);
   const newConversation = useStore((state) => state.newConversation);
 
-  /** Runs a picked slash command. Addon commands POST to the server (the
-   *  addon "command.run" hook chain); built-ins act on the store directly. */
   const runSlashCommand = async (command: SlashCommand, args: string): Promise<void> => {
     if (command.builtin) {
       switch (command.c) {
@@ -221,10 +183,6 @@ export function Composer({
           const active = state.conversations.find((conversation) => conversation.id === state.activeId);
           const agentMode = active?.settings.agentMode ?? state.pendingSettings.agentMode;
           if (request && agentMode) {
-            // Agent-driven path (PLAN-AGENT-DRIVEN-IMAGE-GENERATION): the
-            // request rides as an ordinary chat turn — the imageGenInjection
-            // teaches the model to compose the prompt and call agent__image.
-            // Attachments ride along so the agent can edit them.
             const paths = attachments
               .map((attachment) => attachment.path)
               .filter((value): value is string => typeof value === 'string' && value.length > 0);
@@ -233,7 +191,6 @@ export function Composer({
             showNotice('slash.imageQueued');
             return;
           }
-          // Empty request (or chat mode) → the manual door: Image Studio.
           state.requestImageStudioPrompt(request);
           state.setView('imagestudio');
           showNotice('slash.imageOpened');
@@ -248,7 +205,6 @@ export function Composer({
           window.dispatchEvent(new CustomEvent('moriko:open-model-picker'));
           return;
         case '/compact':
-          // App.handleSend owns the actual compaction — forward verbatim.
           onSend(args ? `/compact ${args}` : '/compact');
           return;
         default:
@@ -285,9 +241,7 @@ export function Composer({
     [],
   );
   const slash = useSlashMenu(draft, onDraftChange, (command, args) => void runSlashCommand(command, args), slashBuiltins);
-  /** Full-size preview URL for an image attachment the user clicked. */
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  /** Document (text/markdown/code) attachment being previewed in the modal. */
   const [previewDoc, setPreviewDoc] = useState<TurnAttachment | null>(null);
 
   /* PORTAL OVERLAY PARITY WITH Modal: this preview is a raw createPortal
@@ -312,13 +266,10 @@ export function Composer({
   const plusButtonRef = useRef<HTMLButtonElement>(null);
   const settings = useEffectiveSettings();
   const terminalMode = settings.terminalMode ?? 'auto';
-  /** Mode banner: sekali tampil — type maju, hold 10 detik, backspace,
-   *  lalu strip dilepas dari layout (area dibersihkan). */
   const bannerFull = settings.agentMode ? 'AGENT MODE ACTIVE' : 'CHAT MODE ONLY';
   const { text: bannerText, done: bannerDone } = useTypewriterStatus(bannerFull, 10_000);
   const updateSettings = useStore((state) => state.updateSettings);
   const showNotice = useStore((state) => state.showNotice);
-  /** Design .tcount — how many tool toggles are currently ON. */
   const enabledToolCount = useMemo(() => {
     let count = 0;
     if (settings.webAccess) count += 1;
@@ -335,7 +286,6 @@ export function Composer({
   const goalRunning = useStore((state) =>
     (state.activeConversation()?.goals ?? []).some((goal) => goal.status === 'running'),
   );
-  // P5 BUGFIX (regresi multi-baris): cache guard saya meninggalkan
   const lastAutoGrowHeight = useRef(0);
   useEffect(() => {
     const element = textareaRef.current;
@@ -418,12 +368,9 @@ export function Composer({
   };
 
   /**
-   * STEER (DSH-style): hand the draft PLUS the attached images/files to the
+   * STEER : hand the draft PLUS the attached images/files to the
    * running generation — the same content a normal send would carry, entering
-   * the model's context between tool rounds as an ordinary user message. The
-   * draft and attachments are only cleared when the server actually queued
-   * the steer — on a 409 (the run ended between typing and pressing) both
-   * stay so the user can send it as an ordinary message.
+   * the model's context between tool rounds as an ordinary user message.
    */
   const submitSteer = async () => {
     if (!onSteer || steerBusy || (draft.trim().length === 0 && attachments.length === 0)) return;
@@ -464,7 +411,6 @@ export function Composer({
     void addFiles(files);
   };
 
-  /** Reads picked files into data URLs, enforcing the size/count caps. */
   const addFiles = async (files: File[] | FileList | null): Promise<void> => {
     if (!files || files.length === 0) return;
     const room = MAX_ATTACHMENTS - attachments.length;
@@ -489,7 +435,6 @@ export function Composer({
       }
       try {
         if (isTextLike(file)) {
-          // preview modal) AND an on-disk path (so the model reads the FULL
           const [textContent, path] = await Promise.all([
             readAsText(file),
             uploadAttachment(file, activeChatId ?? undefined),
@@ -623,7 +568,6 @@ export function Composer({
               sel={slash.sel}
               onPick={slash.click}
               onHover={(index) => {
-                /* hover-select mirrors the palette: the row under the pointer becomes the sel */
                 if (index !== slash.sel) slash.hover(index);
               }}
             />
@@ -661,7 +605,6 @@ export function Composer({
                     </div>
                   );
                 }
-                // Text-like documents get a preview card: click opens a modal
                 if (attachment.textContent !== undefined) {
                   const Icon = attachmentIcon(attachment.mime);
                   return (
@@ -968,7 +911,7 @@ export function Composer({
             </div>
 
 
-            {/* Model chip: right-aligned on desktop, own row on phones. */}
+            {}
             <div className="composer-row-2 contents">
               <span className="composer-spacer" style={{ flex: 1 }} />
 
@@ -1031,9 +974,7 @@ function ModelEffortPicker() {
   const showNotice = useStore((state) => state.showNotice);
   const updateSettings = useStore((state) => state.updateSettings);
   const settings = useEffectiveSettings();
-  /** Quick picker: the pill opens a small panel; each row opens its OWN popover. */
   const [panel, setPanel] = useState<'quick' | 'model' | 'effort' | null>(null);
-  /** Design pop-model: a search box filters the grouped list live. */
   const [modelQuery, setModelQuery] = useState('');
   const isPhone = useIsPhone();
 
@@ -1043,7 +984,6 @@ function ModelEffortPicker() {
 
   const modelButtonRef = useRef<HTMLButtonElement>(null);
 
-  /** /model slash command — open the quick panel from anywhere in the app. */
   useEffect(() => {
     const onOpenModelPicker = () => {
       setModelQuery('');
@@ -1242,7 +1182,6 @@ function ToolRow({
   );
 }
 
-/** Rows of the "+" menu — same order and hints as the design's plus menu. */
 interface PlusMenuBodyProps {
   onUpload: () => void;
   onPlanMode: () => void;
@@ -1332,11 +1271,7 @@ function PlusMenuRow({
 
 
 /**
- * Context usage ring inside the input panel's toolbar. The ring shows the
- * active/limit ratio at a glance; CLICKING it opens a DeepSeek-web-style
- * popover: % of context used, ~active / limit with a progress bar, and a
- * System prompt / Tool definitions / Messages breakdown plus the session
- * grand total.
+ * Context usage ring inside the input panel's toolbar.
  */
 function ContextChip({ streaming }: { streaming: boolean }) {
   const activeConversation = useStore((state) => state.activeConversation());
@@ -1376,10 +1311,8 @@ function ContextChip({ streaming }: { streaming: boolean }) {
       : null;
   const pct = ratio !== null ? Math.round(ratio * 100) : null;
   const hot = ratio !== null && ratio >= 0.95;
-  /** Design .cx bar: each bucket as a % of the LIMIT (active when unknown). */
   const denom = breakdown.effectiveLimit && breakdown.effectiveLimit > 0 ? breakdown.effectiveLimit : Math.max(1, breakdown.activeTokens);
   const bucketPct = (tokens: number): number => Math.min(100, Math.max(0, (tokens / denom) * 100));
-  /** Design row values: "12k" / "10.6k" style. */
   const fmtK = (value: number): string => {
     if (value < 1000) return String(Math.round(value));
     const k = value / 1000;
@@ -1534,9 +1467,7 @@ function ContextChip({ streaming }: { streaming: boolean }) {
           aria-hidden="true"
         >
           <circle className="trk" cx="8" cy="8" r="6" />
-          {/* .ring .arc drives the fill via the --p CSS var (dasharray: var(--p) 100
-              on a pathLength=100 circle) — an inline strokeDasharray attribute
-              would be overridden by the stylesheet and collapse to a dot. */}
+          {}
           <circle
             className="arc"
             cx="8"

@@ -972,8 +972,6 @@ export async function fetchLocalImages(): Promise<string[]> {
 
 /** The user's persisted, ordered Gallery collection. */
 export async function fetchGallery(): Promise<string[]> {
-  // cache:'no-store' — agent__image appends server-side; a stale HTTP cache
-  // hid the new images until a hard browser refresh.
   const response = await fetch('/api/gallery', { cache: 'no-store' });
   if (!response.ok) await parseError(response);
   const payload = (await response.json()) as { images?: string[] };

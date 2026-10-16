@@ -69,9 +69,6 @@ async function readSymbolTool(args: Record<string, unknown>, ctx: AgentToolConte
     if (found && found.length > 0) spans = found;
   }
   if (spans.length === 0) {
-    // Fold fallback: block whose signature mentions the symbol's LEAF name.
-    // Word-boundary regex — a bare substring would match "format" inside
-    // "formatNumbered" and bless unrelated spans.
     const folded = foldContent(content, path.basename(resolved.absolute));
     const leaf = (symbol.split('.').pop() ?? symbol).trim();
     const wordRegex = new RegExp(`\\b${escapeRegExp(leaf)}\\b`);
@@ -104,13 +101,8 @@ async function readSymbolTool(args: Record<string, unknown>, ctx: AgentToolConte
   const recordedSpans: Array<{ from: number; to: number }> = [];
   let lastRev = 1;
 
-  // EXACT per-span receipts: each rendered span is recorded on its own range —
-  // never the min..max union across spans (two spans at lines 20–30 and
-  // 900–920 must NOT bless the 770 unread lines between them), and
-  // signatureOnly presents 3 lines but must NOT record the whole span.
   for (const span of spans.slice(0, 3)) {
     let from = span.startLine;
-    // Sertakan komentar JSDoc atau decorator tepat di atas deklarasi simbol
     if (includeComments && !includeSignatureOnly) {
       while (from > 1) {
         const prev = (contentLines[from - 2] ?? '').trim();
@@ -137,7 +129,6 @@ async function readSymbolTool(args: Record<string, unknown>, ctx: AgentToolConte
         lastRev = entry?.rev ?? lastRev;
         recordedSpans.push({ from, to });
       } catch {
-        // receipt is best-effort; the read still succeeded
       }
     }
   }

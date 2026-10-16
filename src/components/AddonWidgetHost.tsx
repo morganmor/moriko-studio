@@ -71,16 +71,12 @@ const WidgetFallback = () => <div style={{ height: 32, borderRadius: 4, backgrou
 const lazyCache = new Map<string, ComponentType>();
 
 function getLazyWidget(entry: WidgetEntry): ComponentType {
-  // Module version in the key + URL: a registry change loads fresh code
-  // (the browser module map is keyed by full URL incl. query).
   const v = addonClientVersion();
   const key = `${entry.addonId}/${entry.component}@${v}`;
   const cached = lazyCache.get(key);
   if (cached) return cached;
   const Lazy = lazy(() => {
     const rel = entry.component.replace(/^\.\//, '').replace(/\.tsx$/, '');
-    // v2 (A5): the server transpiles + jails the module and rewrites its bare
-    // imports to the host shim (ONE React instance) — works in dev AND prod.
     return import(/* @vite-ignore */ `/api/addons/${entry.addonId}/client/${rel}.js?v=${v}`)
       .then((m) => ({ default: (m.default ?? m[entry.addonId]) as ComponentType }))
       .catch(() => ({ default: WidgetFallback }));
@@ -102,7 +98,6 @@ export const AddonWidgetHost = memo(function AddonWidgetHost({
     void refreshAddonWidgets().then(() => setVersion(registryVersion));
   }, []);
 
-  // LIVE REGISTRY: toggle/reload/delete repaint widgets without a refresh.
   useEffect(() => {
     const onReload = () => void refreshAddonWidgets().then(() => setVersion(registryVersion));
     window.addEventListener('moriko:addons-reloaded', onReload);

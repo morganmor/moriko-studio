@@ -413,7 +413,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
       {}
       <div className={cx('card', 'md:grid2col')} style={{ padding: 0, gap: 0 }}>
         {}
-        {/* Kiri: sidebar katalog (referensi .side) — cari, grup, daftar, tambah. */}
+        {}
         <aside
           className="prov-side"
           style={{
@@ -768,7 +768,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
                 )}
               </div>
 
-              {/* Aksi form (referensi: Cancel + Save di kanan) */}
+              {}
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
                 <button type="button" className="btn ghost" onClick={() => setEditing(false)}>
                   Cancel
@@ -780,7 +780,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
             </div>
           ) : selected ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              {/* Top: judul + badge + URL di kiri, aksi (Test/Edit/Use) di kanan */}
+              {}
               <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -812,7 +812,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
                       </span>
                     ) : null}
                   </div>
-                  {/* Base URL + copy (monospace, satu baris) */}
+                  {}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 6 }}>
                     <p style={{ margin: 0, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 320, fontFamily: 'var(--f-mono)', fontSize: 12, color: 'var(--muted)' }}>
                       {selected.baseUrl}
@@ -836,7 +836,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
                   </div>
                 </div>
 
-                {/* Aksi kanan (referensi: Test / Edit / Use this provider) */}
+                {}
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <button
                     type="button"
@@ -873,7 +873,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
                 <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.625, color: 'var(--muted)' }}>{selected.note}</p>
               ) : null}
 
-              {/* Status koneksi: Testing… / Connected · N ms / Connection failed */}
+              {}
               {testing ? (
                 <p
                   role="status"
@@ -910,7 +910,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
                 </p>
               ) : null}
 
-              {/* API key: input (eye toggle) + save + caption + remove */}
+              {}
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
                   <p className="field-label" style={{ margin: 0 }}>API key</p>
@@ -980,7 +980,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
                 </div>
               </div>
 
-              {/* Default model: chip aktif = accent solid + check (sesuai referensi) */}
+              {}
               <div>
                 <p className="field-label" style={{ marginBottom: 8 }}>Default model</p>
                 {selected.models.length > 0 ? (
@@ -1024,7 +1024,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
                 )}
               </div>
 
-              {/* Details: sel terpisah (referensi .grid3/.cell) */}
+              {}
               <div>
                 <p className="field-label" style={{ marginBottom: 8 }}>Details</p>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
@@ -1047,7 +1047,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
               </div>
 
 
-              {/* Model ids — manajemen katalog built-in (tetap ada) */}
+              {}
               {selected.builtIn ? (
                 <div className="card" style={{ padding: 12 }}>
                   <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
@@ -1104,7 +1104,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
                 </div>
               ) : null}
 
-              {/* Danger zone (referensi .zone): teks kiri + aksi merah kanan, konfirmasi inline */}
+              {}
               {!selected.builtIn || providerHasKey(selected) ? (
                 <div style={{ marginTop: 12, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
                   {confirmDelete ? (

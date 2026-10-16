@@ -36,8 +36,8 @@ interface QueueEntry extends InjectMessage {
 }
 
 const queues = new Map<string, QueueEntry[]>();
-const deliveredKeys = new Map<string, number>(); // key → deliveredAt (dedupe window)
-const rateWindow = new Map<string, number[]>(); // addonId → timestamps
+const deliveredKeys = new Map<string, number>();
+const rateWindow = new Map<string, number[]>();
 let nextId = 1;
 
 const RATE_PER_MIN = 20;
@@ -80,7 +80,6 @@ export function injectMessage(
   const now = Date.now();
   let queued = 0;
   for (const sessionId of targets) {
-    // Idempotency: one delivery per key per window.
     if (msg.key) {
       const globalKey = `${sessionId}\u0000${msg.key}`;
       const at = deliveredKeys.get(globalKey);
@@ -162,15 +161,12 @@ export function emitHarnessEvent(
   const id = `hev_${now.toString(36)}_${(nextId++).toString(36)}`;
   const level = msg.level ?? 'info';
   const text = `[${msg.addonId}] [${level}] ${msg.text.trim()}`;
-  // Persist into the conversation store so the event survives reloads and is
-  // visible while the session is idle (server-side truth, single session).
   try {
     applyTurnPatches([{ conversationId, turnId: id, turn: { id, role: 'user', kind: 'harness-event', content: text, createdAt: now, eventAddon: msg.addonId, eventLevel: level } }]);
   } catch {
-    // Store unavailable (conversation never synced) — live frame still fires.
   }
   try {
     void publishBusEvent('harness:event', { conversationId, event: { id, addonId: msg.addonId, level, text, at: now } }, `addon:${msg.addonId}`);
-  } catch { /* bus is best-effort */ }
+  } catch {  }
   return { ok: true };
 }

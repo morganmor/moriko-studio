@@ -143,27 +143,22 @@ export function shiftIntervalsForEdit(
   const shifted: LineInterval[] = [];
   for (const iv of base) {
     if (iv.to >= Number.MAX_SAFE_INTEGER) {
-      continue; // full-window receipt: recomputed below from the edit itself
+      continue;
     }
     if (iv.to < editStartLine) {
-      // Fully above the edit location: unchanged.
       shifted.push({ ...iv });
     } else if (iv.from > editEndOld) {
-      // Fully below the edit location: shift by delta.
       shifted.push({
         from: Math.max(1, iv.from + delta),
         to: Math.max(1, iv.to + delta),
       });
     } else {
-      // Overlaps the edit location: snap its lower edge to the edit and
-      // extend the tail by delta so it covers the file's new layout.
       shifted.push({
         from: Math.min(iv.from, editStartLine),
         to: Math.max(editEndNew, iv.to + delta),
       });
     }
   }
-  // The model WROTE these lines — the edited span counts as read.
   shifted.push({ from: editStartLine, to: Math.max(editStartLine, editEndNew) });
   return mergeLineIntervals(shifted);
 }
@@ -367,9 +362,6 @@ export function recordRead(
   const previous = map.get(absolute);
   const hash = createHash('sha256').update(content).digest('hex');
 
-  // Merge the new range into the receipt ONLY when the file is at the same
-  // revision the model already read — unioning windows across different file
-  // versions would bless lines the model never saw of the current content.
   let entry: ReadEntry;
   if (!previous || previous.hash !== hash) {
     entry = {
@@ -383,7 +375,6 @@ export function recordRead(
       lastOp: 'read',
     };
   } else if (previous.toLine >= Number.MAX_SAFE_INTEGER) {
-    // Full-window receipt unions trivially: it stays a full window.
     entry = {
       hash,
       mtime,
@@ -463,8 +454,6 @@ export function recordAfterWrite(
   });
   persistLedger();
 
-  // Addon v2 (A3): fs.change — observe point for every workspace file write
-  // (add vs modify inferred from the ledger when the caller doesn't say).
   try {
     const bytesAfter = Buffer.byteLength(content, 'utf8');
     queueFsChange({
@@ -476,7 +465,7 @@ export function recordAfterWrite(
       bytesAfter,
       hashAfter: createHash('sha256').update(content).digest('hex').slice(0, 16),
     });
-  } catch { /* best-effort, never break the write */ }
+  } catch {  }
 
   if (session) {
     const map = load(session);
@@ -523,8 +512,6 @@ function invalidateSearchIndexInline(absolute: string): void {
 function owningWorkspaceInline(absolute: string): string | null {
   try {
     const { listWorkspaces, isInsideRoot, addonsSrcRoot } = require('./workspace.js') as typeof import('./workspace.js');
-    // Addon Manager: writes into the builtin addon sources re-index the
-    // addons-src root too (it rides every session's search index).
     const src = addonsSrcRoot();
     if (src && isInsideRoot(absolute, src)) return src;
     for (const workspace of listWorkspaces()) {
@@ -548,11 +535,6 @@ function invalidateDepsGraphInline(_absolute: string): void {
   }
 }
 
-// -------------------------------------------------------------------------
-// ADDON v2 (A3): fs.change emission — buffered, fire-and-forget, and cycle-
-// free (points.js is imported lazily). Only files INSIDE a workspace are
-// reported; harness-internal writes stay invisible.
-// -------------------------------------------------------------------------
 
 export interface FsChangeEvent {
   sessionId?: string;
@@ -574,7 +556,7 @@ let fsChangeTimer: ReturnType<typeof setTimeout> | null = null;
 
 function queueFsChange(event: FsChangeEvent): void {
   const ws = owningWorkspaceInline(event.path);
-  if (!ws) return; // outside every workspace → not the addon's business
+  if (!ws) return;
   const rel = path.relative(ws, event.path).split(path.sep).join('/');
   fsChangeBuffer.push({ ...event, path: rel });
   if (fsChangeTimer) return;
@@ -586,7 +568,7 @@ function queueFsChange(event: FsChangeEvent): void {
       try {
         const { emitPointAsync } = await import('../addons/points.js');
         for (const entry of batch) emitPointAsync('fs.change', entry);
-      } catch { /* best-effort */ }
+      } catch {  }
     })();
   }, 50);
   fsChangeTimer.unref?.();

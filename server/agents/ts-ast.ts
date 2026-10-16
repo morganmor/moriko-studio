@@ -198,7 +198,6 @@ export function functionMetrics(content: string, fileName: string): FunctionMetr
           cyclomatic += 1;
         }
         if (n.kind === ts.SyntaxKind.QuestionToken) {
-          // ternary condition token rides on a ConditionalExpression
         }
         if (ts.isConditionalExpression(n)) cyclomatic += 1;
         if (level > nesting) nesting = level;

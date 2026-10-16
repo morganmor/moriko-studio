@@ -66,7 +66,6 @@ export function useSlashMenu(
   const addonCommands = useRef<SlashCommand[]>([]);
   const [addonTick, setAddonTick] = useState(0);
 
-  // Fetch addon-registered commands once and whenever a reload is signalled.
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
@@ -85,7 +84,6 @@ export function useSlashMenu(
         }));
         setAddonTick((tick) => tick + 1);
       } catch {
-        /* addons endpoint unavailable — built-ins still work */
       }
     };
     void load();
@@ -100,7 +98,6 @@ export function useSlashMenu(
   const all = useRef<SlashCommand[]>([]);
   all.current = [...builtin, ...addonCommands.current];
 
-  // slashCheck(): open while the draft is exactly "/prefix" (single word).
   useEffect(() => {
     const match = /^\/(\w*)$/.exec(draft);
     if (!match) {
@@ -200,7 +197,6 @@ export function SlashMenu({
 }) {
   const ref = useRef<HTMLDivElement>(null);
 
-  // Keep the highlighted row in view while arrowing through the list.
   useEffect(() => {
     const el = ref.current?.querySelector(`[data-si="${sel}"]`);
     el?.scrollIntoView({ block: 'nearest' });

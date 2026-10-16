@@ -37,7 +37,6 @@ async function listRaw(): Promise<{ port: number; pid?: number }[]> {
       maxBuffer: 4 * 1024 * 1024,
     });
     for (const line of stdout.split(/\r?\n/)) {
-      //  TCP    127.0.0.1:5588    0.0.0.0:0    LISTENING    12345
       const m = line.match(/^\s*TCP\s+(\S+):(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$/i);
       if (!m) continue;
       out.push({ port: Number(m[2]), pid: Number(m[3]) });

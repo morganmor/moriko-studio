@@ -268,7 +268,6 @@ function invalidateInIndex(root: string, idx: Index, relPath: string): void {
       }
     }
   } catch {
-    // file deleted — dropping its docs above is enough
   }
   const totalLen = rebuilt.docs.reduce((sum, doc) => sum + doc.tokens.length, 0);
   rebuilt.avgDocLen = rebuilt.docs.length > 0 ? totalLen / rebuilt.docs.length : 0;
@@ -316,7 +315,6 @@ export function searchWorkspace(
     const doc = index.docs[i];
     let s = bm25Score(i, queryTerms, index);
     if (s > 0) {
-      // F1.3 boost: path tokens ×2, declared-symbol tokens ×3.
       for (const term of queryTerms) {
         if (doc.boostTokens.has(term)) s += s * 0.5;
       }
@@ -328,7 +326,6 @@ export function searchWorkspace(
   const top = scored.slice(0, limit);
   const results: SearchResult[] = top.map(({ docIdx, score }) => {
     const doc = index.docs[docIdx];
-    // F1.3 snippet: window with the highest query-term density in the block.
     let snippet = '';
     let line = doc.lineStart;
     const blockLines = doc.text.split('\n');

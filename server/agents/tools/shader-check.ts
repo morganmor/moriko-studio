@@ -129,7 +129,6 @@ export async function checkGlsl(
       `(${GLSL_CHECK_FN})(${JSON.stringify(fullSource)}, ${stage === 'vertex'})`,
     )) as ShaderCheckResult & { renderer?: string | null };
 
-    // Map prelude-compensated line numbers back to file lines.
     for (const err of outcome.errors) {
       if (err.line > 0) err.line = Math.max(err.line - preludeLineCount, 1);
     }

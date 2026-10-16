@@ -47,8 +47,6 @@ export async function editBetweenTool(args: Record<string, unknown>, ctx: AgentT
     return { ok: false, isError: true, text: `edit_between start anchor not found.\n${failure.report}` };
   }
 
-  // Disambiguasi start anchor: prioritaskan lineHint, lalu kemunculan di
-  // dalam jendela yang sudah dibaca — bukan langsung menolak.
   if (startOcc.length > 1) {
     if (lineHint !== undefined) {
       const sorted = [...startOcc].sort((a, b) => Math.abs(a - lineHint) - Math.abs(b - lineHint));
@@ -75,7 +73,6 @@ export async function editBetweenTool(args: Record<string, unknown>, ctx: AgentT
   const startEndLine = startLine + startSpanLines - 1;
 
   const endOcc = occurrenceLines(normContent, end);
-  // Anchor `end` harus dimulai SETELAH baris terakhir anchor `start`.
   const endAfter = endOcc.filter((ln) => ln > startEndLine);
   if (endAfter.length === 0) {
     return {
@@ -88,9 +85,6 @@ export async function editBetweenTool(args: Record<string, unknown>, ctx: AgentT
     };
   }
 
-  // Beberapa kemunculan `end` setelah start: firstMatchEnd: true memilih yang
-  // pertama; jika hanya satu yang membuat seluruh region berada di jendela
-  // baca, pilih itu — bukan langsung menolak.
   let selectedEndMatches = endAfter;
   if (selectedEndMatches.length > 1 && bool(args, 'firstMatchEnd')) {
     selectedEndMatches = [selectedEndMatches[0]];
@@ -110,11 +104,6 @@ export async function editBetweenTool(args: Record<string, unknown>, ctx: AgentT
   const endLine = selectedEndMatches[0];
   const endEndLine = endLine + endSpanLines - 1;
 
-  // Batas baris yang benar untuk anchor BANYAK BARIS:
-  //  • includeAnchors: false → mulai SETELAH baris terakhir anchor start
-  //    (dulu `startLine + 1` menghapus ekor anchor start sendiri);
-  //  • includeAnchors: true → berhenti di baris terakhir anchor end
-  //    (dulu `endLine` menyisakan potongan baris anchor end).
   const from = includeAnchors ? startLine : startEndLine + 1;
   const to = includeAnchors ? endEndLine : endLine - 1;
   if (from > to) {
@@ -145,7 +134,7 @@ export async function editBetweenTool(args: Record<string, unknown>, ctx: AgentT
     verifySyntax,
     newString,
     toolName: 'edit_between',
-    preloaded: loaded.data, // hindari pembacaan disk kedua di replaceLineRange
+    preloaded: loaded.data,
     note:
       ` Replaced lines ${from}–${to} between anchors ` +
       `(start lines ${startLine}–${startEndLine}, end lines ${endLine}–${endEndLine}${includeAnchors ? ', anchors included' : ', anchors kept'}).`,

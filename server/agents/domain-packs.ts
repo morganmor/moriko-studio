@@ -45,7 +45,7 @@ function detectGame(root: string): boolean {
     };
     const deps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
     if (GAME_DEPS.some((d) => deps[d])) return true;
-  } catch { /* no package.json */ }
+  } catch {  }
   if (existsSync(path.join(root, 'project.godot'))) return true;
   const hasUproject = existsSync(root) && (readdirSync(root).some((f) => f.endsWith('.uproject')));
   if (hasUproject) return true;
@@ -53,7 +53,7 @@ function detectGame(root: string): boolean {
   try {
     const cargo = readFileSync(path.join(root, 'Cargo.toml'), 'utf8');
     if (cargo.includes('bevy')) return true;
-  } catch { /* no Cargo.toml */ }
+  } catch {  }
   return false;
 }
 
@@ -81,7 +81,7 @@ function countSourceFiles(root: string): number {
 /** Packs to inject into the system prompt; cached per root + package.json mtime. */
 export function domainPackInjections(root: string): string[] {
   let pkgMtime = 0;
-  try { pkgMtime = statSync(path.join(root, 'package.json')).mtimeMs; } catch { /* none */ }
+  try { pkgMtime = statSync(path.join(root, 'package.json')).mtimeMs; } catch {  }
   if (cache && cache.root === root && cache.pkgMtime === pkgMtime) return cache.packs;
 
   const packs: string[] = [];

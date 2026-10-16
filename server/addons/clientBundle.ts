@@ -48,7 +48,6 @@ function resolveClientFile(addonId: string, rel: string): string | null {
 function transpileFile(addonId: string, absFile: string, source: string, isTsx: boolean): string {
   const rewritten = rewriteImports(stripCssImports(source), (spec) => {
     if (SHIM_IMPORTS[spec]) return SHIM_IMPORTS[spec];
-    // Relative import inside the addon client tree → same route, .js suffix.
     if (spec.startsWith('./') || spec.startsWith('../')) {
       const base = spec.replace(/^\.\//, '').replace(/\.(tsx|ts)$/, '');
       const hasCodeExt = /\.(tsx|ts)$/.test(spec);
@@ -67,8 +66,6 @@ function transpileFile(addonId: string, absFile: string, source: string, isTsx: 
       esModuleInterop: true,
     },
   });
-  // ReactJSX emits `import { jsx } from "react/jsx-runtime"` AFTER our rewrite
-  // pass — rewrite the OUTPUT too so the shim is always hit.
   const output = rewriteImports(out.outputText, (spec) => SHIM_IMPORTS[spec] ?? spec);
   void addonId;
   void isTsx;
@@ -99,8 +96,6 @@ function rewriteImports(source: string, map: (spec: string) => string): string {
   return source.replace(
     /(\bimport\s+(?:[\s\S]*?\sfrom\s+)?|\bexport\s+(?:\*|\{[\s\S]*?\})\s*from\s+|\bimport\s*\()\s*(['"])([^'"]+)\2/g,
     (_whole, head: string, quote: string, spec: string) => {
-      // Static AND dynamic import() specifiers are mapped so lazy chunks and
-      // shim modules resolve in large multi-file addons.
       return `${head}${quote}${map(spec)}${quote}`;
     },
   );

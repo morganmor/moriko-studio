@@ -50,7 +50,6 @@ export function Popover({
   const [mounted, setMounted] = useState(open);
   const [shown, setShown] = useState(false);
 
-  // Mount on open, play the enter transition next frame; unmount after the exit transition.
   useEffect(() => {
     if (open) {
       setMounted(true);
@@ -134,7 +133,6 @@ export function Popover({
         anchorRef.current?.focus();
         return;
       }
-      // Design arrow navigation: works even when focus is still outside the popover.
       if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
       const origin = event.target;
       if (origin instanceof Element && origin.closest('.seg')) return;

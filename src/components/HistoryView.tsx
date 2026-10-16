@@ -248,8 +248,7 @@ export function HistoryView() {
         </p>
       </Modal>
 
-      {/* RESTORE PICKER — percakapan terhapus tinggal di folder trash server
-          30 hari sebelum di-sweep otomatis; Empty trash menghapus semua. */}
+      {}
       <Modal
         open={trashOpen}
         onClose={() => setTrashOpen(false)}

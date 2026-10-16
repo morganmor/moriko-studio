@@ -61,7 +61,6 @@ const EMPTY: BoardState = {
   presence: [], guardMode: 'advisory', claimTtlSec: 900, ilQuality: 'high', displayName: 'Rizky', workspacePath: null,
 };
 
-/* ── state + subscription ────────────────────────────────────────────────── */
 let state: BoardState = EMPTY;
 let loadSeq = 0;
 const subs = new Set<() => void>();
@@ -138,11 +137,10 @@ export async function refresh(): Promise<void> {
       rpc('events', { limit: 120 }) as Promise<Record<string, unknown>>,
       rpc('files', { limit: 500 }) as Promise<Record<string, unknown>>,
     ]);
-    if (seq !== loadSeq) return; // load lebih baru sudah menang
+    if (seq !== loadSeq) return;
     const s = fromServerState(st ?? {});
     const events = Array.isArray(ev?.events) ? ev.events.slice(-60) : [];
     const feed = feedLines(events);
-    // Quest TANPA ledger → files kosong; quest dengan ledger → baris rpc files.
     const filesByQuest = ledgersByQuest(Array.isArray(fl?.files) ? fl.files : []);
     set((prev) => ({
       ...prev,
@@ -173,7 +171,6 @@ export function useRsat(): BoardState {
     if (!state.ready) void refresh();
     return () => { subs.delete(cb); };
   }, []);
-  // SSE: setiap board event server (bus 'rsat.changed') → refresh penuh.
   const frame = useAddonBus('rsat.changed');
   useEffect(() => {
     if (frame) void refresh();
@@ -181,7 +178,6 @@ export function useRsat(): BoardState {
   return snap;
 }
 
-/* ── derived (dipakai bersama semua panel) ───────────────────────────────── */
 export const byId = (list: Ach[], id: string) => list.find((a) => a.id === id);
 export const depsDone = (list: Ach[], a: Ach) => a.dep.every((d) => byId(list, d)?.state === 'done');
 export const eff = (list: Ach[], a: Ach) =>
@@ -210,7 +206,6 @@ async function call(name: string, body: Record<string, unknown>, okMsg?: string)
   }
 }
 
-/* ── aksi terpusat → RPC server ─────────────────────────────────────────── */
 
 /** LangGate: pilihan bahasa persisten (consent eksplisit). */
 export function setLang(language: string) {

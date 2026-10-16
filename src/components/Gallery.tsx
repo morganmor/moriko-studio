@@ -59,7 +59,6 @@ export function Gallery() {
     return map;
   }, [sessions]);
 
-  // Removing the open image (lightbox save) shrinks the list — close it.
   useEffect(() => {
     if (lightbox && !images.includes(lightbox)) setLightbox(null);
   }, [images, lightbox]);

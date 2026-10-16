@@ -21,12 +21,12 @@ function detectFormatter(cwd: string): FormatterKind {
     const pkg = JSON.parse(readFileSync(path.join(cwd, 'package.json'), 'utf8')) as { devDependencies?: Record<string, string>; scripts?: Record<string, string> };
     if (pkg.devDependencies?.['prettier'] || Object.values(pkg.scripts ?? {}).some((s) => s.includes('prettier'))) return 'prettier';
     if (pkg.devDependencies?.['@biomejs/biome']) return 'biome';
-  } catch { /* no package.json */ }
+  } catch {  }
   if (existsSync(path.join(cwd, 'ruff.toml')) || existsSync(path.join(cwd, '.ruff.toml'))) return 'ruff';
   try {
     const pyproject = readFileSync(path.join(cwd, 'pyproject.toml'), 'utf8');
     if (pyproject.includes('[tool.ruff]')) return 'ruff';
-  } catch { /* no pyproject */ }
+  } catch {  }
   return 'none';
 }
 
@@ -50,13 +50,12 @@ async function formatTool(args: Record<string, unknown>, ctx: AgentToolContext):
   const rawPaths = Array.isArray(args.paths) ? (args.paths as unknown[]).filter((p): p is string => typeof p === 'string') : [];
   const targets = rawPaths.length > 0 ? rawPaths : ['.'];
 
-  // Vault snapshot every existing target before the formatter touches it.
   for (const rel of targets) {
     if (rel === '.') continue;
     try {
       const abs = path.join(resolved.absolute, rel);
       if (statSync(abs).isFile()) snapshotFile(ctx.sessionId, abs, 'format');
-    } catch { /* best effort */ }
+    } catch {  }
   }
 
   const before = new Map<string, number>();
@@ -65,7 +64,7 @@ async function formatTool(args: Record<string, unknown>, ctx: AgentToolContext):
     try {
       const abs = path.join(resolved.absolute, rel);
       if (statSync(abs).isFile()) before.set(rel, statSync(abs).size);
-    } catch { /* skip */ }
+    } catch {  }
   }
 
   let program: string;
@@ -105,7 +104,7 @@ async function formatTool(args: Record<string, unknown>, ctx: AgentToolContext):
     try {
       const now = statSync(path.join(resolved.absolute, rel)).size;
       if (now !== size) changed.push(rel);
-    } catch { /* skip */ }
+    } catch {  }
   }
   return {
     ok: true,

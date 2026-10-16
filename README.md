@@ -158,13 +158,9 @@ Notes:
 
 | Command | Description |
 | --- | --- |
-| `npm run dev` | Proxy + Vite dev server together. |
-| `npm run dev:web` | Vite only |
-| `npm run dev:server` | Proxy only, reloading on change. |
-| `npm run build` | Typecheck, then build to `dist/`. |
-| `npm start` | Serve the built app from the proxy (production). |
-| `npm run typecheck` | Types only, no emit. |
+| `pnpm dev` | Proxy + Vite dev server together. |
 | `pnpm sync` | Refresh the model-support snapshots. |
+| `pnpm typecheck` | Types only, no emit. |
 
 ---
 

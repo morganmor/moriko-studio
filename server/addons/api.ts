@@ -75,14 +75,10 @@ export function createAddonApi(addonId: string, opts: AddonApiOptions | string =
   };
 
   const writeWorkspaceFile = async (abs: string, content: string): Promise<void> => {
-    // Same discipline as the core write tools: snapshot before overwrite, then
-    // record so read-policy/audit stay truthful. Best-effort — an addon write
-    // must not crash the host when the vault is unavailable.
     try {
       const { snapshotFile } = await import('../agents/vault.js');
       if (existsSync(abs)) snapshotFile(undefined, abs, `addon:${addonId}:write`);
     } catch {
-      // vault is optional here (may not be loaded in some entry paths)
     }
     mkdirSync(path.dirname(abs), { recursive: true });
     writeFileSync(abs, content, 'utf8');
@@ -90,7 +86,6 @@ export function createAddonApi(addonId: string, opts: AddonApiOptions | string =
       const { recordAfterWrite } = await import('../agents/read-policy.js');
       recordAfterWrite(undefined, abs, content, statSync(abs).mtimeMs);
     } catch {
-      // best-effort
     }
   };
 
@@ -180,7 +175,6 @@ export function createAddonApi(addonId: string, opts: AddonApiOptions | string =
       },
     },
     fs: {
-      // v2 (A-10): jailed to the ADDON's own directory — not the harness cwd.
       read(filePath: string): string {
         if (!addonDir) return '';
         const abs = jailResolve(addonDir, filePath);
@@ -192,7 +186,7 @@ export function createAddonApi(addonId: string, opts: AddonApiOptions | string =
         const abs = jailResolve(addonDir, filePath);
         if (!abs) return;
         mkdirSync(path.dirname(abs), { recursive: true });
-        try { writeFileSync(abs, content, 'utf-8'); } catch { /* best-effort */ }
+        try { writeFileSync(abs, content, 'utf-8'); } catch {  }
       },
       list(dir: string): string[] {
         if (!addonDir) return [];
@@ -237,8 +231,6 @@ export function createAddonApi(addonId: string, opts: AddonApiOptions | string =
         },
       });
       const base = handleFor(undefined);
-      // handleForPath — a handle pinned to an explicit registered root
-      // (RSA/T's own workspace picker; still jail-checked to that root).
       const handleForPath = (root: string | null) => ({
         root(): string | null {
           return root;
@@ -287,7 +279,7 @@ export function createAddonApi(addonId: string, opts: AddonApiOptions | string =
           let found: { path: string } | undefined;
           try {
             found = listWorkspaces().find((w) => w.id === idOrPath || w.path === idOrPath);
-          } catch { /* fall through to a null root */ }
+          } catch {  }
           return handleForPath(found?.path ?? null);
         },
         forPath(root: string | null) {
@@ -316,9 +308,6 @@ export function createAddonApi(addonId: string, opts: AddonApiOptions | string =
         addContextProvider({ addonId, title, lines });
       },
       revoke(_title: string): void {
-        // Scoped revoke: only this addon's own provider disappears (A-09).
-        // addContextProvider's Disposable handles disposal on unregister; a
-        // manual revoke is a no-op here by design (v1 callers used the title
         // as a global key, which is exactly the bug we remove).
       },
     },
@@ -341,7 +330,6 @@ export function createAddonApi(addonId: string, opts: AddonApiOptions | string =
       conversationId: '',
       workspacePath: workspaceOf()?.path ?? '',
     },
-    // v2 (A3): active sessions + injection + fs observation.
     sessions: {
       list() {
         try {
@@ -410,8 +398,6 @@ export function createAddonApi(addonId: string, opts: AddonApiOptions | string =
     },
     fsWatch: {
       onChange(fn) {
-        // Observe fs.change through the hook chain: register a scoped hook
-        // that forwards to the addon's callback and is disposed with it.
         const reg = registerAddonHook(addonId, 'fs.change' as never, null, async (_api: unknown, event: unknown) => {
           fn(event as Record<string, unknown>);
           return {};
@@ -425,8 +411,6 @@ export function createAddonApi(addonId: string, opts: AddonApiOptions | string =
         return touchedPaths(tool, args);
       },
     },
-    // v2 (A4): prompt fragments, settings, rpc, status, scoped storage,
-    // mod-to-mod api, custom events.
     prompt: {
       fragment(def: { id: string; order?: number; budgetChars?: number; when?: (ctx: { sessionId?: string; workspacePath?: string }) => boolean; build: (ctx: { sessionId?: string; workspacePath?: string }) => string[] | Promise<string[]> }): () => void {
         return registerPromptFragment({
@@ -494,7 +478,7 @@ export function createAddonApi(addonId: string, opts: AddonApiOptions | string =
 
 /** Harness-side helper list (used by routes/tooling, not by addons). */
 export function addonToolCount(_addonId: string): number {
-  return listAddonToolDefs().length; // cheap; per-addon filtering happens at call sites
+  return listAddonToolDefs().length;
 }
 
 export { tailAddonLogs };

@@ -240,8 +240,6 @@ export async function applyPatchTool(args: Record<string, unknown>, ctx: AgentTo
   const targets: Array<{ relPath: string; absolute: string; file: PatchFile }> = [];
   for (const file of files) {
     const relPath = file.newPath || file.oldPath;
-    // Addon Manager: addons-src/… hunks resolve against the addon source root
-    // — they apply even without an active workspace.
     const addonsSrc = resolveAddonsSrcTarget(relPath);
     const absolute = addonsSrc ? addonsSrc.absolute : ws ? path.resolve(ws.path, relPath) : null;
     if (absolute === null) return { ok: false, isError: true, text: 'No active workspace (and no addons-src target in the patch).' };

@@ -54,7 +54,7 @@ function generateLogo(seed: string, palette: number): string {
   const fg = P[palette % P.length];
   const bg = '#3b3b3b';
   const c = document.createElement('canvas');
-  const px = LOGO_MAX / 5; // 4 sel + margin 0.5
+  const px = LOGO_MAX / 5;
   c.width = LOGO_MAX;
   c.height = LOGO_MAX;
   const g = c.getContext('2d');
@@ -69,7 +69,6 @@ function generateLogo(seed: string, palette: number): string {
   };
   for (let y = 0; y < 4; y++) {
     for (let x = 0; x < 3; x++) {
-      // Kolom 4 dicerminkan dari 2 (simetri identicon) → wajah terlihat sengaja.
       if (bit() % 5 < 3) {
         g.fillRect(px + x * px, px + y * px, px, px);
         g.fillRect(px + (5 - x) * px, px + y * px, px, px);
@@ -84,7 +83,6 @@ function LogoPicker({ name, logo, onPick }: { name: string; logo: string | null;
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [gen, setGen] = useState(0);
   return (
-    // Bingkai besar portrait: logo adalah "wajah" karakter; Generate/Clear di bawah.
     <div className="col alogo-col">
       <button className="alogo" type="button" aria-label="Upload logo" onClick={() => fileRef.current?.click()}>
         {logo ? <img src={logo} alt="" /> : <Ic name="image" />}
@@ -119,8 +117,6 @@ function AgentForm({ providers, edit, onDone }: {
   edit?: AgentRec | null;
   onDone: () => void;
 }) {
-  // Draft TIDAK direset setelah create: state hidup di instance yang selalu
-  // ter-mount; populate hanya saat user memilih agent untuk diedit.
   const [name, setName] = useState('');
   const [logo, setLogo] = useState<string | null>(null);
   const [providerId, setProviderId] = useState('');
@@ -132,14 +128,13 @@ function AgentForm({ providers, edit, onDone }: {
   const invalid = !name.trim() || !providerId || !model;
 
   useEffect(() => {
-    if (!edit) return; // mode create: draft user dipertahankan apa adanya
+    if (!edit) return;
     setName(edit.name);
     setLogo(edit.logo);
     setProviderId(edit.providerId);
     setModel(edit.model);
     setEffort(edit.thinkingLevel);
   }, [edit]);
-  // Provider/model default begitu daftar provider host tersedia.
   useEffect(() => {
     if (!edit && !providerId && providers.length) {
       setProviderId(providers[0].id);
@@ -164,16 +159,11 @@ function AgentForm({ providers, edit, onDone }: {
       : await createAgent({ name: name.trim(), logo, providerId, model, thinkingLevel: effort, note: note.trim() });
     setBusy(false);
     if (!done) return;
-    // WAJIB reset: setelah agent berhasil dibuat, form kembali kosong
-    // (provider/model kembali ke default host). Data agent tersimpan di
-    // registry + roster — tidak ada yang hilang.
     blank();
     onDone();
   };
 
   const cancel = () => {
-    // Cancel juga mengembalikan form ke keadaan kosong (tidak menyisakan
-    // nilai agent dari mode edit di form create).
     blank();
     onDone();
   };
@@ -285,12 +275,10 @@ export default function CreateAgent() {
   const [providers, setProviders] = useState<Prov[]>([]);
   const [editing, setEditing] = useState<AgentRec | null>(null);
   useEffect(() => {
-    // getProviders (host surface) — dibaca saat mount; daftar provider host.
     setProviders(getProviders());
   }, []);
 
   return (
-    // Dua kolom ala design: form create di kiri (lebar tetap), roster di kanan.
     <div className="row" style={{ gap: 22, alignItems: 'flex-start', flexWrap: 'wrap' }}>
       <div style={{ flex: '1 1 340px', maxWidth: 460 }}>
         <AgentForm providers={providers} edit={editing} onDone={() => setEditing(null)} />

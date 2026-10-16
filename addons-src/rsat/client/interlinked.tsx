@@ -231,7 +231,6 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
   } | null>(null);
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
-  // Inspector melayang: default sembunyi (kanvas penuh), auto-muncul saat seleksi.
   const [showInspect, setShowInspect] = useState(false);
   const [showLegend, setShowLegend] = useState(false);
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
@@ -281,9 +280,6 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
 
   const initial = liveGraph ?? fallback;
 
-  // Kamera Pan & Zoom (seperti ComfyUI / SkillTree).
-  // Kamera hidup di ref + tulis transform DOM langsung — setState di sini akan
-  // me-render ulang ±1.000 elemen (node/socket/wire) per piksel gerakan (lag).
   const vpRef = useRef<HTMLDivElement | null>(null);
   const worldRef = useRef<HTMLDivElement | null>(null);
   const camRef = useRef({ x: 18, y: 14, z: 0.78 });
@@ -298,8 +294,6 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
     }
   }, []);
   const [panning, setPanning] = useState(false);
-  // Label zoom di HUD ditulis langsung ke DOM via ref — state di sini berarti
-  // re-render penuh per event wheel (lag balik).
   const zoomLabelRef = useRef<HTMLButtonElement | null>(null);
   const dragRef = useRef<{
     kind: 'pan' | 'node';
@@ -323,9 +317,6 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
   const wires = initial.wires;
   const clusters = initial.clusters;
 
-  // Wheel zoom ke arah kursor. Ref pakai pola callback-state: effect harus
-  // re-run saat viewport benar-benar ter-mount (sebelumnya deps [] → listener
-  // tidak pernah terpasang karena elemen muncul setelah data graf masuk).
   const [vpEl, setVpEl] = useState<HTMLDivElement | null>(null);
   const setVpRef = useCallback((el: HTMLDivElement | null) => {
     vpRef.current = el;
@@ -357,7 +348,6 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
 
   const onVpDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
-    // Kontrol overlay (zoom, legends, mini-strip) jangan men-capture pointer —
     // kalau tidak, klik tombolnya tertelan jadi pan (bug tombol LEGENDS).
     if ((e.target as HTMLElement).closest('.il-node, .il-wire-grp, .il-hud-ctl, .il-legend-ctl, .il-mini')) return;
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -383,7 +373,6 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
     setShowInspect(true);
   };
 
-  // rAF throttle untuk drag node — satu setState per frame, bukan per event pointer.
   const dragRafRef = useRef<number | null>(null);
   const lastPtRef = useRef<{ x: number; y: number } | null>(null);
 
@@ -415,14 +404,11 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
     const d = dragRef.current;
     dragRef.current = null;
     setPanning(false);
-    // Klik kanvas kosong (tanpa drag) = bersihkan spotlight — jalan keluar user
-    // dari mode redup tanpa harus mencari node/wire yang tersorot.
     if (d?.kind === 'pan' && e && Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < 4) {
       setSelNodeId(null);
       setSelWireId(null);
       return;
     }
-    // Flush posisi terakhir yang masih menggantung di rAF.
     if (dragRafRef.current != null) {
       cancelAnimationFrame(dragRafRef.current);
       dragRafRef.current = null;
@@ -438,7 +424,6 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
     }
   };
 
-  // Spotlight logic: node atau wire mana yang sedang menyala
   const activeFocusNode = hoverNodeId ?? selNodeId;
 
   const visibleWires = useMemo(() => {
@@ -458,8 +443,6 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
         set.add(w.fromNode);
         set.add(w.toNode);
       }
-      // Hover tetap menyalakan node lain meski wire terpilih — tanpa ini
-      // semua node lain terkunci redup tanpa feedback & terasa tak bisa diklik.
       if (!activeFocusNode) return set;
     }
     if (!activeFocusNode) return null;
@@ -471,7 +454,6 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
     return set;
   }, [activeFocusNode, selWireId, visibleWires, wires]);
 
-  // Map O(1) untuk lookup node dari wire — menggantikan nodes.find() per wire.
   const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
 
   const selNode = nodes.find((n) => n.id === selNodeId) ?? null;
@@ -491,7 +473,6 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
     } catch {
-      /* ignore */
     }
   };
 
@@ -499,7 +480,7 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
 
   return (
     <div className="il-shell">
-      {/* Top Action & Filter Bar */}
+      {}
       <div className="pn il-bar">
         <div className="row" style={{ gap: 6 }}>
           <Ic name="nodes" />
@@ -579,7 +560,6 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
       </div>
 
       {!scanning && nodes.length === 0 ? (
-        /* Empty / error state — honest, no hardcoded fixture */
         <div className="card col" style={{ gap: 12, padding: 24, alignItems: 'center', textAlign: 'center' }}>
           <b>{t('ilNoData')}</b>
           <div className="muted" style={{ fontSize: 12, maxWidth: 440 }}>
@@ -596,7 +576,6 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
           </button>
         </div>
       ) : mode === 'rslk' ? (
-        /* Mode @RSLK v1: Format Khusus yang Dilihat Agent */
         <div className="card col" style={{ gap: 12 }}>
           <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap' }}>
             <div className="col" style={{ gap: 2 }}>
@@ -619,11 +598,8 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
           <pre className="il-dsl">{rslkText}</pre>
         </div>
       ) : (
-        /* Mode ComfyUI Glowing Node Graph + Inspector melayang.
-           `full` = inspector tersembunyi → kanvas 100% lebar. */
         <div className={showInspect ? 'il-workspace' : 'il-workspace full'}>
           {!showInspect && (selNode || selWire) ? (
-            /* Strip info ringkas mengambang: tetap informatif tanpa panel penuh. */
             <div
               className="pn il-mini"
               onClick={() => setShowInspect(true)}
@@ -665,7 +641,7 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
               className="il-world"
               style={{ transform: `translate(${camRef.current.x}px, ${camRef.current.y}px) scale(${camRef.current.z})` }}
             >
-              {/* Module Layer Clusters */}
+              {}
               {clusters.map((c, ci) => (
                 <div
                   key={`${c.id}-${ci}`}
@@ -687,7 +663,7 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
                 </div>
               ))}
 
-              {/* Glowing SVG Bezier Wires */}
+              {}
               <svg className="il-wires" style={{ position: 'absolute', left: 0, top: 0 }}>
                 {visibleWires.map((w) => {
                   const src = nodeById.get(w.fromNode);
@@ -716,7 +692,6 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
                     .filter(Boolean)
                     .join(' ');
 
-                  // Tier kualitas: pulse beranimasi hanya di medium/high (high juga saat hot).
                   const q = s.ilQuality;
                   const flow =
                     q === 'high' ? (w.kind === 'active' || w.kind === 'cross' || isHot)
@@ -765,7 +740,7 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
                 })}
               </svg>
 
-              {/* ComfyUI-Style File & Contract Nodes */}
+              {}
               {nodes.map((node) => {
                 const matchQuery =
                   !qLower ||
@@ -825,7 +800,7 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
                     </div>
 
                     <div className="il-nbody">
-                      {/* Input Sockets (Left) */}
+                      {}
                       <div className="il-col-in">
                         {node.inputs.length ? (
                           node.inputs.map((inp, ii) => {
@@ -861,7 +836,7 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
                         )}
                       </div>
 
-                      {/* Output Sockets (Right) */}
+                      {}
                       <div className="il-col-out">
                         {node.outputs.map((out, oi) => {
                           const st = out.contractStatus;
@@ -907,7 +882,7 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
               })}
             </div>
 
-            {/* Zoom & Camera Controls — tengah-bawah (pola ComfyUI); LEGENDS di kanan-bawah. */}
+            {}
             <div
               className="il-hud-ctl"
               style={{ position: 'absolute', left: '50%', bottom: 12, transform: 'translateX(-50%)', display: 'flex', gap: 6, zIndex: 5 }}
@@ -957,7 +932,7 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
               </button>
             </div>
 
-            {/* LEGENDS: tombol kecil pojok kanan-bawah + popup legenda. */}
+            {}
             <div className="il-legend-ctl">
               {showLegend ? (
                 <div className="pn in il-legend-pop">
@@ -1005,8 +980,7 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
             </div>
           </div>
 
-          {/* Inspector MELAYANG (absolute kanan-atas) — kanvas tetap penuh.
-              Tersembunyi via .il-workspace.full saat toggle mati. */}
+          {}
           <aside className="pn il-side">
             <button
               type="button"

@@ -87,9 +87,6 @@ class BrowserManager {
   setScreenInfo(info: { width: number; height: number; dpr: number }): void {
     const dprChanged = clampDpr(info.dpr) !== this.launchedDpr;
     this.screenInfo = info;
-    // deviceScaleFactor is launch-time only: a DPR change (panel opened on a
-    // different-density display) needs a fresh context — drop this one so the
-    // next ensureContext relaunches at the new density.
     if (dprChanged && this.session) {
       const stale = this.session;
       this.session = null;
@@ -185,8 +182,6 @@ class BrowserManager {
 
       const profileDir = browserProfileDir();
       fs.mkdirSync(profileDir, { recursive: true });
-      // Render at the panel monitor's pixel density — a 1x bitmap upscaled on
-      // a 125%/150% Windows display reads as blur. Agent input stays in CSS px.
       const launchDpr = clampDpr(this.screenInfo?.dpr ?? 1);
 
       let context: BrowserContext;

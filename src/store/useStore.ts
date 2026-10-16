@@ -1148,9 +1148,6 @@ function shellForSummary(summary: ConversationSummary): Conversation {
     providerId: summary.providerId ?? '',
     model: summary.model ?? '',
     workspaceId: summary.workspaceId,
-    // COUNCIL: sub sessions must keep their container markers on the SHELL —
-    // without these the sidebar/history filters (isSubSession) cannot see them
-    // and they leak into Recent Chat until the body is hydrated.
     councilId: summary.councilId,
     councilRole: summary.councilRole,
     councilAgentId: summary.councilAgentId,
@@ -1295,7 +1292,6 @@ export async function refreshConversationList(): Promise<void> {
       useStore.getState().replaceConversations([...state.conversations, ...fresh]);
     }
   } catch {
-    // device unreachable — the next boot reconcile picks the restore up
   }
 }
 
@@ -2149,7 +2145,6 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   deleteConversation: (id) => {
-    // Panel-settings' confirmDel: park the request until the dialog confirms.
     if (get().confirmDel) {
       set({ pendingConfirmDelete: id });
       return;
@@ -2158,9 +2153,6 @@ export const useStore = create<AppState>((set, get) => ({
   },
   executeDeleteConversation: (id) => {
     pendingDeletions.add(id);
-    // COUNCIL: deleting the MAIN session takes its sub sessions with it —
-    // leaving them orphaned would make them unreachable (hidden from every
-    // list). Deleting a SUB session deletes ONLY that sub session.
     const deleted = get().conversations.find((conversation) => conversation.id === id);
     const councilId = deleted?.councilId;
     const councilSubs = (councilId && deleted?.councilRole === 'main')
@@ -2450,9 +2442,6 @@ export const useStore = create<AppState>((set, get) => ({
     set({ conversations: next });
     persist(next);
     // 2026-10 BUGFIX: "Move to workspace" dari pill TopBar dulu hanya mem-
-    // patch workspaceId — activeAgentWorkspaceId tetap lama, jadi pill masih
-    // "No workspace" padahal menu sudah mencentang Owl. Aktifkan juga di
-    // server (per-session) + store agar pill/tree/agent seluruhnya ikut.
     if (patch.workspaceId) {
       void get().setActiveAgentWorkspace(patch.workspaceId, conversationId).catch(() => {});
     }
@@ -2561,8 +2550,6 @@ export const useStore = create<AppState>((set, get) => ({
   setTheme: (theme, ev) => {
     if (get().theme === theme) return;
     const state = get();
-    // Design mechanism: the circular reveal wraps BOTH the store write and the
-    // DOM apply, so the View Transition captures real old/new frames.
     transitionAppearance(
       {
         theme,

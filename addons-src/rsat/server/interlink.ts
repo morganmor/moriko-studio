@@ -84,8 +84,6 @@ function walkWorkspaceFiles(rootDir, maxFiles = MAX_SCAN_FILES, includeAddons = 
       const rel = relPrefix ? `${relPrefix}/${ent.name}` : ent.name;
       if (ent.isDirectory()) {
         if (SKIP_DIRS.has(ent.name)) continue;
-        // Scan the PROJECT, not the addon host — addons-src is only walked when
-        // the PRD explicitly scopes it in.
         if (ent.name === ADDONS_DIR && !includeAddons) continue;
         walk(path.join(absDir, ent.name), rel);
       } else if (ent.isFile()) {
@@ -106,7 +104,6 @@ function resolveImportTarget(fromFile, spec, fileSet) {
   const fromDir = path.posix.dirname(fromFile);
   const baseJoined = path.posix.normalize(path.posix.join(fromDir, spec));
   const candidates = [baseJoined];
-  // Jika berakhiran .js/.jsx/.mjs (gaya ESM TypeScript), coba versi .ts/.tsx
   const stripped = baseJoined.replace(/\.(m?js|jsx|ts|tsx)$/, '');
   for (const ext of ['.ts', '.tsx', '.js', '.jsx', '/index.ts', '/index.tsx', '/index.js']) {
     candidates.push(stripped + ext);
@@ -128,7 +125,6 @@ export function parseFileAstLight(source) {
     exportsList.push({ label: clean, kind });
   };
 
-  // Export default
   if (/export\s+default\s+function\s+([A-Za-z0-9_$]+)/.test(source)) {
     const m = source.match(/export\s+default\s+function\s+([A-Za-z0-9_$]+)/);
     addExp(`default ${m[1]}()`, 'runtime');
@@ -136,7 +132,6 @@ export function parseFileAstLight(source) {
     addExp('default export', 'runtime');
   }
 
-  // Exported functions / hooks
   const fnRe = /export\s+(?:async\s+)?function\s+([A-Za-z0-9_$]+)/g;
   let m;
   while ((m = fnRe.exec(source)) !== null) {
@@ -144,20 +139,17 @@ export function parseFileAstLight(source) {
     addExp(`${name}()`, /^use[A-Z]/.test(name) ? 'hook' : 'runtime');
   }
 
-  // Exported classes / consts
   const constRe = /export\s+(?:const|let|class)\s+([A-Za-z0-9_$]+)/g;
   while ((m = constRe.exec(source)) !== null) {
     const name = m[1];
     addExp(name, /^use[A-Z]/.test(name) ? 'hook' : /Store|Rpc|Api/i.test(name) ? 'store' : 'runtime');
   }
 
-  // Exported types / interfaces
   const typeRe = /export\s+(?:type|interface)\s+([A-Za-z0-9_$]+)/g;
   while ((m = typeRe.exec(source)) !== null) {
     addExp(m[1], 'type');
   }
 
-  // Parse imports
   const importsList = [];
   const impRe = /import\s+(type\s+)?(?:([\s\S]*?)\s+from\s+)?['"]([^'"]+)['"]/g;
   while ((m = impRe.exec(source)) !== null) {
@@ -168,7 +160,6 @@ export function parseFileAstLight(source) {
     let allType = isTypeStmt;
 
     if (clause) {
-      // Named imports { a, type b, c as d }
       const braceMatch = clause.match(/\{([\s\S]*?)\}/);
       if (braceMatch) {
         const parts = braceMatch[1].split(',').map((s) => s.trim()).filter(Boolean);
@@ -181,7 +172,6 @@ export function parseFileAstLight(source) {
         }
         if (parts.length > 0 && typeCount === parts.length) allType = true;
       }
-      // Default import before { or standalone
       const defPart = clause.replace(/\{[\s\S]*?\}/, '').replace(/,/g, '').trim();
       if (defPart && !defPart.startsWith('*')) {
         symbols.unshift(defPart);
@@ -229,8 +219,6 @@ function deriveModules(doc, allFiles) {
     });
   }
 
-  // Fallback generik: turunkan modul dari struktur proyek NYATA (src/server/…),
-  // bukan dari kode addon host. addons-src hanya jadi modul bila disertakan.
   const modules = [
     {
       id: 'M-01',
@@ -363,8 +351,6 @@ export function buildWorkspaceInterlink(api, sessionId, opts = {}) {
   const ledgers = readAllLedgers(api, sessionId, 250);
   const savedPos = loadNodePositions(ws);
 
-  // addons-src is scanned ONLY when the PRD explicitly scopes it in — the
-  // default is the PROJECT under construction (src/, server/, …), not the addon host.
   const scopeMentionsAddons = (scope) => {
     if (!scope) return false;
     const globs = [...(scope.include || []), ...(scope.exclude || [])];
@@ -380,7 +366,6 @@ export function buildWorkspaceInterlink(api, sessionId, opts = {}) {
   const fileSet = new Set(allFiles);
   const modules = deriveModules(doc, allFiles);
 
-  // Petakan file yang baru disentuh di ledger + pemilik quest
   const recentTouched = new Map();
   for (const l of ledgers) {
     const clean = String(l.path || '').replace(/\\/g, '/');
@@ -411,7 +396,7 @@ export function buildWorkspaceInterlink(api, sessionId, opts = {}) {
       const target = resolveImportTarget(f, imp.spec, fileSet);
       if (target && target !== f) {
         rawEdges.push({
-          from: target, // Provider (OUT) -> Consumer (IN)
+          from: target,
           to: f,
           symbols: imp.symbols,
           isType: imp.isType,
@@ -422,9 +407,6 @@ export function buildWorkspaceInterlink(api, sessionId, opts = {}) {
     }
   }
 
-  // Dedupe edge: satu file boleh mengimpor file yang sama lewat beberapa
-  // statement (runtime + type) — gabungkan simbolnya agar 1 pasangan file
-  // = 1 edge = 1 input socket (id socket & key React tetap unik).
   const edgeByKey = new Map();
   const dedupedEdges = [];
   for (const e of rawEdges) {
@@ -439,7 +421,6 @@ export function buildWorkspaceInterlink(api, sessionId, opts = {}) {
     }
   }
 
-  // Pilih node paling relevan untuk visualisasi kanvas (agar tetap tajam & tidak penuh sesak)
   const scoredFiles = allFiles.map((f) => {
     const fi = fanInMap.get(f) || 0;
     const fo = fanOutMap.get(f) || 0;
@@ -461,7 +442,6 @@ export function buildWorkspaceInterlink(api, sessionId, opts = {}) {
   const filteredEdges = dedupedEdges.filter((e) => selectedFiles.has(e.from) && selectedFiles.has(e.to));
   const { sccCount, cycleEdgeKeys } = findCycleEdges([...selectedFiles], filteredEdges);
 
-  // Susun cluster modul secara horizontal (kolom per modul)
   const clusters = [];
   const filesByModule = new Map();
   for (const m of modules) filesByModule.set(m.id, []);
@@ -475,8 +455,6 @@ export function buildWorkspaceInterlink(api, sessionId, opts = {}) {
   let colX = 40;
   const nodes = [];
 
-  // Indeks semua export & import nyata per quest (di seluruh allFiles dalam scope quest)
-  // untuk validasi silang (cross-check) 1:1 antara kontrak manual (provides/consumes) dan AST nyata.
   const normalizeSymName = (raw) =>
     String(raw || '')
       .trim()
@@ -527,7 +505,6 @@ export function buildWorkspaceInterlink(api, sessionId, opts = {}) {
 
   for (const m of modules) {
     const mFiles = filesByModule.get(m.id) || [];
-    // Cari quest milik modul ini yang sudah mendeklarasikan kontrak tetapi belum punya file nyata di kanvas (Ghost Nodes)
     const ghostQuests = (doc?.achievements || []).filter((a) => {
       if (a.state === 'dropped') return false;
       const targetModId = a.moduleId && modules.some((mod) => mod.id === a.moduleId) ? a.moduleId : modules[0]?.id;
@@ -566,7 +543,6 @@ export function buildWorkspaceInterlink(api, sessionId, opts = {}) {
       const defaultY = 98 + rIdx * 192;
       const pos = savedPos[nodeId] || { x: defaultX, y: defaultY };
 
-      // Cari quest yang menaungi file ini
       const activeOwners = (doc?.achievements || []).filter(
         (a) => ['claimed', 'in_progress', 'review'].includes(a.state) && inScope(a.scope, f),
       );
@@ -589,13 +565,11 @@ export function buildWorkspaceInterlink(api, sessionId, opts = {}) {
       const declaredProvideSet = new Set(qCheck?.declaredProvides || []);
       const declaredConsumeSet = new Set(qCheck?.declaredConsumes || []);
 
-      // Validasi silang (Cross-check) antara AST exports file ini dan kontrak quest (`provides`)
       const fileExportNames = (ast.exports || []).map((ex) => normalizeSymName(ex.label));
       const undeclaredExports = hasDeclaredProvides
         ? fileExportNames.filter((sym) => !declaredProvideSet.has(sym))
         : [];
 
-      // Buat socket outputs dengan status kontrak: matched / missing / undeclared / unscoped
       const rawOutputs = [];
       for (const ex of ast.exports || []) {
         const clean = normalizeSymName(ex.label);
@@ -609,7 +583,6 @@ export function buildWorkspaceInterlink(api, sessionId, opts = {}) {
           contractStatus,
         });
       }
-      // Tambahkan Ghost Sockets untuk simbol kontrak `provides` yang belum ada di AST (Missing Export)
       if (qCheck && qCheck.missingProvides.length > 0) {
         const isPrimaryFileForQuest = qCheck.scopedFiles[0] === f || qCheck.scopedFiles.length <= 1;
         if (isPrimaryFileForQuest) {
@@ -625,7 +598,6 @@ export function buildWorkspaceInterlink(api, sessionId, opts = {}) {
       if (rawOutputs.length === 0) {
         rawOutputs.push({ label: 'module', kind: 'runtime', contractStatus: 'unscoped' });
       }
-      // Prioritaskan socket kontrak (missing & matched) di atas export tambahan (undeclared) agar noise berkurang
       rawOutputs.sort((a, b) => {
         const rank = { missing: 0, matched: 1, undeclared: 2, unscoped: 3 };
         return (rank[a.contractStatus] ?? 3) - (rank[b.contractStatus] ?? 3);
@@ -637,7 +609,6 @@ export function buildWorkspaceInterlink(api, sessionId, opts = {}) {
         contractStatus: ex.contractStatus,
       }));
 
-      // Buat socket inputs dari edge masuk nyata + cross-check dengan `consumes`
       const incomingEdges = filteredEdges.filter((e) => e.to === f);
       const inputs = incomingEdges.slice(0, 4).map((e, i) => {
         const edgeSyms = e.symbols.map(normalizeSymName);
@@ -653,7 +624,6 @@ export function buildWorkspaceInterlink(api, sessionId, opts = {}) {
         };
       });
 
-      // Jika masih ada slot input dan ada kontrak `consumes` yang belum terpenuhi, tampilkan ghost input socket
       if (qCheck && qCheck.missingConsumes.length > 0 && inputs.length < 4) {
         const isPrimaryFileForQuest = qCheck.scopedFiles[0] === f || qCheck.scopedFiles.length <= 1;
         if (isPrimaryFileForQuest) {
@@ -681,7 +651,6 @@ export function buildWorkspaceInterlink(api, sessionId, opts = {}) {
           }
         : undefined;
 
-      // Deteksi pelanggaran kontrak (Contract Drift / Missing Export)
       let contractViolation;
       if (qCheck && qCheck.missingProvides.length > 0) {
         const isPrimaryFileForQuest = qCheck.scopedFiles[0] === f || qCheck.scopedFiles.length <= 1;
@@ -714,7 +683,6 @@ export function buildWorkspaceInterlink(api, sessionId, opts = {}) {
       });
     });
 
-    // Tambahkan Ghost Nodes untuk quest yang sudah mendeklarasikan kontrak tetapi filenya belum dibuat
     ghostQuests.forEach((gq, gIdx) => {
       const idx = mFiles.length + gIdx;
       const cIdx = idx % subCols;
@@ -783,9 +751,6 @@ export function buildWorkspaceInterlink(api, sessionId, opts = {}) {
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
   const modById = new Map(modules.map((m) => [m.id, m]));
 
-  // Bangun benang-benang (wires) dengan klasifikasi arsitektur otomatis.
-  // Petakan tiap edge ke indeks socket masuknya (urutan sama dengan saat node
-  // dibangun) agar wire tersambung ke pin yang benar.
   const inputIndexByEdge = new Map();
   const incomingCountByFile = new Map();
   for (const e of filteredEdges) {
@@ -803,7 +768,6 @@ export function buildWorkspaceInterlink(api, sessionId, opts = {}) {
     const srcMod = modById.get(srcNode.moduleId);
     const dstMod = modById.get(dstNode.moduleId);
 
-    // Cek apakah dstMod diizinkan mengimpor srcMod
     const isLayerViolation =
       dstMod &&
       Array.isArray(dstMod.allowedImports) &&

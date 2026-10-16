@@ -311,7 +311,6 @@ export async function captureRuntime(
         channel: 'msedge',
       });
     } catch {
-      // B9 fallback: no Edge → bundled/installed chromium.
       browser = await pw.chromium.launch({ headless: true });
     }
   } catch (error) {

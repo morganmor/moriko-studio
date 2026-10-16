@@ -59,8 +59,6 @@ export function AgentPermissionDialog() {
     check();
     const observer = new MutationObserver(check);
     observer.observe(document.body, { childList: true, subtree: true });
-    // Grace window singkat: beri pill waktu men-mount kotak inline di commit
-    // pertama, mencegah modal kedip sekilas sebelum deteksi sempat berjalan.
     const timer = window.setTimeout(() => {
       if (!cancelled) setGraceDone(true);
     }, 150);

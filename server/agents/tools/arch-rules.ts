@@ -15,7 +15,6 @@ async function archRulesTool(args: Record<string, unknown>, ctx: AgentToolContex
   const dryRun = args.dryRun === undefined ? true : bool(args, 'dryRun');
 
   if (mode === 'init') {
-    // Propose layers from the arch map (top-level folders).
     const report = buildArchMap(root, root, 1);
     const topDirs = new Set<string>(report.modules.map((m) => m.id.split('/')[0]).filter(Boolean));
     topDirs.delete('.moriko');
@@ -77,6 +76,6 @@ export const archRulesSpec = defineTool({
     },
   },
   handler: archRulesTool,
-  readOnly: false, // init writes
+  readOnly: false,
   category: 'arch',
 });

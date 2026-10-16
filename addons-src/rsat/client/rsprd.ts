@@ -24,7 +24,6 @@ const name = (v: unknown): string => {
   return str(o.name) || str(o.kind) || '?';
 };
 
-/* ── serialize ───────────────────────────────────────────────────────────── */
 
 function toDocAch(a: Ach) {
   return {
@@ -75,7 +74,6 @@ export function toDoc(s: { language: string; prd: Prd; achs: Ach[] }) {
   };
 }
 
-/* ── parse + normalisasi (baca format server & format board lama) ────────── */
 
 /** op ledger server (add|modify|delete|rename|copy) → kode pendek board. */
 const OPC: Record<string, string> = { add: 'add', modify: 'mod', delete: 'del', rename: 'ren', copy: 'ref' };
@@ -203,7 +201,6 @@ export function fromDoc(raw: unknown): { prd: Prd; achs: Ach[] } {
   return { prd, achs };
 }
 
-/* ── adapter dokumen server (rpc 'state') → state board client ─────────── */
 
 /** Nama aktor dari objek actor server: 'U' untuk user, label > name > kind. */
 export function actorName(v: unknown): string {
@@ -234,7 +231,6 @@ export function fromServerState(payload: Record<string, unknown>): {
 } {
   const doc = payload.doc && typeof payload.doc === 'object' && !Array.isArray(payload.doc) ? payload.doc : null;
   const p = doc ? fromDoc(doc) : null;
-  // Heartbeat: server claim { by, at, heartbeat, ttlSec, label } → client { by, at, beat }.
   const achs: Ach[] = (p?.achs ?? []).map((a) => {
     const raw = doc && Array.isArray((doc as { achievements?: unknown[] }).achievements)
       ? rec((doc as { achievements: unknown[] }).achievements.find((x) => rec(x).id === a.id))

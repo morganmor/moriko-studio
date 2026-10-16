@@ -44,8 +44,6 @@ export function onAddonBusFrame(listener: (frame: AddonBusPayload) => void): () 
 
 /** Called by the boot SSE subscriber (main.tsx) for every frame. */
 export function dispatchAddonBusFrame(frame: AddonBusPayload): void {
-  // Registry change → invalidate cached addon client modules so lazy imports
-  // pick up fresh code without a page refresh.
   if (frame.topic === 'addons.registry') bumpAddonClientVersion();
   for (const listener of [...busListeners]) {
     try {
@@ -76,7 +74,7 @@ function useAddonState<T>(addonId: string, initial: T, derive: (frame: AddonBusP
     void fetch(`/api/addons/${addonId}/state`)
       .then((resp) => (resp.ok ? resp.json() : null))
       .then((payload) => { if (payload) setState(payload as T); })
-      .catch(() => { /* offline addon = keep initial */ });
+      .catch(() => {  });
   }, [addonId, tick]);
   React.useEffect(() => {
     return onAddonBusFrame((frame) => {
@@ -97,7 +95,7 @@ function useAddonSettings(addonId: string): { settings: Record<string, unknown> 
     void fetch(`/api/addons/${addonId}/settings`)
       .then((resp) => (resp.ok ? resp.json() : null))
       .then((payload) => { if (payload?.settings) setSettings(payload.settings); })
-      .catch(() => { /* keep last */ });
+      .catch(() => {  });
   }, [addonId]);
   React.useEffect(() => reload(), [reload]);
   React.useEffect(() => {
@@ -110,7 +108,7 @@ function useAddonSettings(addonId: string): { settings: Record<string, unknown> 
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key, value }),
-    }).catch(() => { /* surfaced by the Hub on next load */ });
+    }).catch(() => {  });
     setSettings((current) => ({ ...(current ?? {}), [key]: value }));
   }, [addonId]);
   return { settings, set };

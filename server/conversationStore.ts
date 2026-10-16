@@ -775,7 +775,6 @@ export interface TrashEntry {
 function splitTrashFolder(folder: string): { original: string; id: string | null } | null {
   const match = /^((chat-\d{3,})-\d{8})-/.exec(folder);
   if (!match) return null;
-  // Read the id from the record — the folder name alone is ambiguous.
   try {
     const parsed: unknown = JSON.parse(
       readFileSync(path.join(trashDir(), folder, 'chat-data.json'), 'utf8'),
@@ -818,7 +817,7 @@ export function listTrash(): TrashEntry[] {
 /** Moves one trash folder back into the archive and re-registers it in the
  *  manifest. Returns the restored id (null when the folder is unreadable). */
 export function restoreFromTrash(folder: string): string | null {
-  if (!/^([\w.-]+)$/.test(folder)) return null; // no traversal
+  if (!/^([\w.-]+)$/.test(folder)) return null;
   const from = path.join(trashDir(), folder);
   if (!existsSync(from)) return null;
   const split = splitTrashFolder(folder);
@@ -831,8 +830,6 @@ export function restoreFromTrash(folder: string): string | null {
     ensureLoaded();
     const active = manifest!;
     const map = cache!;
-    // Original folder name may collide with a live chat — never overwrite:
-    // adopt the next free sequence instead.
     let target = split.original;
     if (existsSync(path.join(conversationDir, target)) || Object.values(active.folders).includes(target)) {
       target = chatFolderName(active.nextSeq, typeof parsed.createdAt === 'number' ? parsed.createdAt : Date.now());

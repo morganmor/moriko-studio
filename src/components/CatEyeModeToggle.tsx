@@ -146,7 +146,6 @@ export function useTypewriterStatus(text: string, holdMs = 0): { text: string; d
 
     setDone(false);
     if (isMotionReduced(useStore.getState().reduceMotion)) {
-      // No type/backspace animation: show full for holdMs, then clear the line.
       currentRef.current = text;
       setDisplay(text);
       if (holdMs > 0) {

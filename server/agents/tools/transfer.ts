@@ -114,7 +114,6 @@ async function transferTool(
   }
 
   const verb = mode === 'copy' ? 'Copied' : 'Moved';
-  // Addon v2 (A3): fs.change — move/rename/copy.
   try {
     recordFsChange({
       sessionId: ctx.sessionId,
@@ -123,7 +122,7 @@ async function transferTool(
       tool: mode === 'copy' ? 'agent__copy' : 'agent__move',
       from: from.absolute,
     });
-  } catch { /* best-effort */ }
+  } catch {  }
   return {
     ok: true,
     isError: false,
@@ -170,10 +169,9 @@ export async function renameTool(args: Record<string, unknown>, ctx: AgentToolCo
   const newRelative = source.outside
     ? destination
     : path.join(path.dirname(source.relative), name).split(path.sep).join('/');
-  // Addon v2 (A3): fs.change — rename.
   try {
     recordFsChange({ sessionId: ctx.sessionId, path: destination, op: 'rename', tool: 'agent__rename', from: source.absolute });
-  } catch { /* best-effort */ }
+  } catch {  }
   return { ok: true, isError: false, text: `Renamed ${source.relative} → ${newRelative}.` };
 }
 
@@ -194,8 +192,6 @@ export async function deleteTool(args: Record<string, unknown>, ctx: AgentToolCo
   const { root } = requireWorkspace(ctx);
   const { absolute, relative } = await resolveWithPermission('delete', inputPath, ctx, 'write');
 
-  // Addon Manager: addon sources are USER-ONLY. The agent never deletes
-  // addons — the user removes them via the Addon Hub's Remove button.
   if (isInsideAddonsSrc(absolute)) {
     return {
       ok: false,
@@ -258,10 +254,9 @@ export async function deleteTool(args: Record<string, unknown>, ctx: AgentToolCo
       text: `Delete failed: ${error instanceof Error ? error.message : 'filesystem error'}`,
     };
   }
-  // Addon v2 (A3): fs.change — delete.
   try {
     recordFsChange({ sessionId: ctx.sessionId, path: absolute, op: 'delete', tool: 'agent__delete' });
-  } catch { /* best-effort */ }
+  } catch {  }
   return {
     ok: true,
     isError: false,

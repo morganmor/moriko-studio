@@ -146,7 +146,6 @@ export function ToastHost() {
   useEffect(() => {
     pushToast = (t) => {
       const id = ++seq.current;
-      // Desain baris 182: while (children >= 3) firstElementChild.remove()
       setItems((prev) => [...prev.slice(-2), { ...t, id }]);
       timers.current.set(id, window.setTimeout(() => kill(id), t.dur));
     };

@@ -306,11 +306,10 @@ export function updateGoal(sessionId: string, goalId: string, patch: GoalPatch):
   }
   goal.updatedAt = Date.now();
   persistSession(sessionId);
-  // Addon v2 (A3): goal.change — observe point.
   try {
     const { emitPointAsync } = require('../addons/points.js') as typeof import('../addons/points.js');
     emitPointAsync('goal.change', { sessionId, goalId, status: goal.status });
-  } catch { /* best-effort */ }
+  } catch {  }
   return goal;
 }
 

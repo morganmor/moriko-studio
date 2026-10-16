@@ -32,12 +32,12 @@ function readAll(addonId: string, workspaceRoot?: string): Record<string, unknow
   try {
     const userFile = fileFor(addonId, 'user')!;
     if (existsSync(userFile)) Object.assign(out, JSON.parse(readFileSync(userFile, 'utf-8')));
-  } catch { /* empty */ }
+  } catch {  }
   if (workspaceRoot) {
     try {
       const wsFile = fileFor(addonId, 'workspace', workspaceRoot)!;
       if (existsSync(wsFile)) Object.assign(out, JSON.parse(readFileSync(wsFile, 'utf-8')));
-    } catch { /* empty */ }
+    } catch {  }
   }
   return out;
 }
@@ -82,7 +82,6 @@ export function getAllSettings(addonId: string, workspaceRoot?: string): Record<
   const values = readAll(addonId, workspaceRoot);
   const schema = schemaCache.get(addonId);
   if (!schema) return values;
-  // Fill defaults so the Hub form always shows a complete value set.
   const out: Record<string, unknown> = {};
   for (const [key, prop] of Object.entries(schema.properties)) {
     out[key] = values[key] !== undefined ? values[key] : prop.default;
@@ -103,12 +102,12 @@ export function setSetting(addonId: string, key: string, value: unknown, workspa
   let data: Record<string, unknown> = {};
   try {
     if (existsSync(file)) data = JSON.parse(readFileSync(file, 'utf-8')) as Record<string, unknown>;
-  } catch { /* start fresh */ }
+  } catch {  }
   data[key] = value;
   atomicWriteJson(file, data);
   try {
     void publishBusEvent('addon.settings', { addonId, key, value }, addonId);
-  } catch { /* best-effort */ }
+  } catch {  }
   for (const listener of [...listeners]) {
     try {
       listener(key, value, addonId);

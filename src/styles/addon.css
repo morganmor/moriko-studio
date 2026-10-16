@@ -9,26 +9,21 @@
    · Milik harness (tetap di index.css): .council-switch* (TopBar switcher),
      .rsat-gem-ic (ikon tombol TopBar), .addon-* kit host, token --c-notify-*.
    ========================================================================= */
-/* RSAT pixel board (R6) — token persis dari design/rsat-panel-pixel.html. */
 :root,.scope-light{
   --c-rsat-bronze:176 108 54;--c-rsat-silver:120 128 142;--c-rsat-gold:190 138 12;--c-rsat-diamond:10 150 170;
   --c-rsat-available:22 163 74;--c-rsat-claimed:2 132 199;--c-rsat-running:var(--al);--c-rsat-review:124 58 237;
   --c-rsat-done:22 163 74;--c-rsat-locked:140 146 158;--c-rsat-blocked:220 38 38;
   --c-rsat-add:22 163 74;--c-rsat-mod:2 132 199;--c-rsat-del:220 38 38;--c-rsat-ref:124 58 237;
   --c-rsat-sel:2 132 199;
-  /* permukaan pixel (bevel) */
   --c-rsat-face:222 214 204;--c-rsat-slot:196 187 176;--c-rsat-hi:255 255 255;--c-rsat-lo:146 134 122;--c-rsat-edge:30 24 20;
   --c-rsat-stone:140 140 140;--c-rsat-stone-dk:104 104 104;--c-rsat-shine:255 255 255;
   --c-rsat-tip-bg:26 12 40;--c-rsat-tip-edge:110 56 210;
   --c-rsat-toast-bg:30 24 40;--c-rsat-toast-ink:255 250 242;
-  /* invariant (sprite & HUD) — diwarisi .dark/.mocha */
   --c-rsat-skin:214 150 110;--c-rsat-hair:98 64 38;--c-rsat-xp:110 205 30;
   --c-rsat-toast-title:255 214 64;--c-rsat-toast-title-ch:196 160 255;
-  /* INTERLINKED (ComfyUI glowing node-wire graph) — kontras tinggi di light */
   --c-rsat-il-bg:226 220 212;--c-rsat-il-grid:172 162 150;--c-rsat-il-node:248 244 238;--c-rsat-il-head:228 220 210;
   --c-rsat-wire-data:2 132 199;--c-rsat-wire-type:124 58 237;--c-rsat-wire-active:22 163 74;
   --c-rsat-wire-cross:217 119 6;--c-rsat-wire-broken:220 38 38;--c-rsat-pin-bg:255 255 255;
-  /* COUNCIL — satu aksen lembut, harus terbaca di canvas terang. */
   --c-council-accent:124 58 237;--c-council-soft:246 243 255;--c-council-line:226 220 246;
 }
 .dark,.scope-dark{
@@ -61,13 +56,7 @@
 }
 
 
-/* ============================================================================
-   RSA/T — REBUILD DARI NOL (2026-10), port 1:1 dari design/split:
-     · rsat-panel-canvas.html  → root .rsat > .app > .work > .view > .view-in
-     · rsat-panel-topbar.html  → header .topbar (crumb + acting-as + theme
-                                 seg-ctl + accent swatch + demo controls)
-   Scoped di bawah `.rsat`; warna memakai token --c-rsat-* (light/dark/mocha)
-   di atas file ini. Bevel = box-shadow 4-sisi (--o2/--o3/--up*/--dn2).
+--dn2).
    Netralisasi gaya global host (.app/.work/.topbar/.crumb/.btn) wajib agar
    tak bocor ke pixel style.
    ========================================================================= */
@@ -95,7 +84,6 @@
 .rsat .row{display:flex;align-items:center;gap:8px}
 .rsat .eyebrow{font:700 10.5px/1 var(--f-px);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
 
-/* ── canvas: work area tengah (rsat-panel-canvas.html) ─────────────────── */
 .rsat .app{position:static;z-index:auto;display:flex;flex:1;min-width:0;min-height:0;height:auto;padding:14px}
 .rsat .work{position:relative;flex:1;min-width:0;display:flex;flex-direction:column;
   background:rgb(var(--c-panel));border:0;border-radius:0;
@@ -111,7 +99,6 @@
 .rsat .chip{font:700 9.5px var(--f-px);letter-spacing:.05em;text-transform:uppercase;padding:2px 7px;
   background:rgb(var(--c-rsat-slot));box-shadow:inset 0 0 0 2px rgb(var(--c-rsat-lo));color:var(--muted);border-radius:0}
 
-/* ── topbar (rsat-panel-topbar.html) ───────────────────────────────────── */
 .rsat .topbar{display:flex;align-items:center;gap:10px;height:auto;padding:10px 16px;
   background:rgb(var(--c-rsat-face));border-bottom:3px solid rgb(var(--c-rsat-edge));flex-wrap:wrap;flex:none;transition:none}
 .rsat .crumb{display:flex;align-items:center;gap:6px;height:auto;padding:0;border:0;border-radius:0;
@@ -120,7 +107,6 @@
 .rsat .crumb b{color:rgb(var(--c-ink))}
 .rsat .demo{display:flex;align-items:center;gap:6px;margin-left:auto;flex-wrap:wrap}
 
-/* kontrol (Minecraft button, field, swatch, seg-ctl) */
 .rsat .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:34px;padding:0 14px;margin:2px;
   font:700 11.5px var(--f-px);letter-spacing:.05em;text-transform:uppercase;white-space:nowrap;
   background:rgb(var(--c-rsat-face));border:0;border-radius:0;
@@ -144,7 +130,6 @@
   background:rgb(var(--c-rsat-face));box-shadow:var(--o2),var(--up2);border-radius:0}
 .rsat .seg-ctl button[aria-pressed=true]{background:rgb(var(--c-accent));color:rgb(var(--c-accent-ink));box-shadow:var(--o2),var(--dn2)}
 
-/* ── sprite: wajah creeper (desain SPR + .face) ────────────────────────── */
 .rsat .spr{display:block;width:100%;height:100%;shape-rendering:crispEdges;image-rendering:pixelated;overflow:visible}
 .rsat .spr .k{fill:rgb(var(--c-rsat-edge))}
 .rsat .spr .g{fill:rgb(var(--c-rsat-stone))}
@@ -155,22 +140,15 @@
 .rsat .spr .w{fill:rgb(var(--c-rsat-shine))}
 .rsat .face{width:18px;height:18px;display:inline-block;flex:none;vertical-align:middle;--sa:rgb(var(--c-rsat-mod))}
 
-/* Create agent: bingkai logo besar (portrait karakter) + Generate/Clear di bawahnya. */
 .rsat .alogo-col{align-items:center;flex:none}
 .rsat .alogo{width:96px;height:96px;padding:6px;display:grid;place-items:center;cursor:pointer;
   background:rgb(var(--c-rsat-stone));color:rgb(var(--c-rsat-edge));border-radius:0;
   box-shadow:var(--o2),var(--up2)}
 .rsat .alogo img{width:100%;height:100%;object-fit:cover;image-rendering:pixelated;display:block}
 .rsat .alogo:hover{background:rgb(var(--c-rsat-stone-dk))}
-/* Agent yang dipilih untuk diedit: border biru pada barisnya di roster. */
 .rsat .qrow.editing{outline:2px solid rgb(var(--c-rsat-sel));outline-offset:-2px}
 .rsat .pill.jump{cursor:pointer}
 
-/* ============================================================================
-   COUNCIL (Council Agent addon) — panel manajemen dewan. Token --c-council-*
-   (light/dark/mocha di atas). Memakai komponen host (.card/.btn/.mi) untuk
-   permukaan umum; hanya warna khas dewan yang pakai token sendiri.
-   ========================================================================= */
 .council{--f-council:var(--f-mono)}
 .council .page{max-width:1080px;margin:0 auto;padding:22px 24px 80px}
 .council h2{margin:0;font-size:19px;font-weight:600;letter-spacing:-.01em;color:rgb(var(--c-ink))}
@@ -194,7 +172,6 @@
 .council .tag.main{border-color:var(--line);background:rgb(var(--c-field));color:var(--muted)}
 .council .empty{padding:18px;border:1px dashed var(--line);border-radius:var(--r-md);
   text-align:center;color:var(--muted);font-size:12.5px}
-/* Dua kolom ala Create Agent: sesi/kiri, roster agent/kanan; runtuh di layar sempit. */
 .council .cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0 26px;align-items:start;margin-top:-4px}
 .council .col{min-width:0}
 @media (max-width:960px){.council .cols{grid-template-columns:1fr}}

@@ -31,7 +31,6 @@ async function assetInspectTool(args: Record<string, unknown>, ctx: AgentToolCon
     return { ok: true, isError: false, text: `No parseable assets found at ${resolved.relative} (supported: glb, gltf, png, jpg, webp, ktx2, wav, ogg, mp3).` };
   }
 
-  // Budget checks (on top of per-parser warnings).
   for (const r of reports) {
     if (r.bytes > budgetBytes) r.warnings.push(`file ${r.bytes} bytes exceeds byte budget ${budgetBytes}`);
     const dim = r.summary.match(/(\d+)×(\d+)/);

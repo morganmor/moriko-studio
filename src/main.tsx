@@ -52,10 +52,6 @@ async function boot(): Promise<void> {
         if (frame && typeof frame.topic === 'string') {
           useStore.getState().pushAddonEvent(frame);
           dispatchAddonBusFrame(frame);
-          // LIVE ADDON REGISTRY: enable/disable/reload from ANY browser (or the
-          // agent's addon_manage) repaints the sidebar section, Hub, and unmounts
-          // a disabled addon's open view — no manual refresh needed. useStore is
-          // already in boot() scope — no import here (this callback is not async).
           if (frame.topic === 'addons.registry') {
             window.dispatchEvent(new Event('moriko:addons-reloaded'));
             const view = useStore.getState().view;

@@ -159,7 +159,6 @@ function ImageCard({
       aria-label={`Open image — ${label.slice(0, 60)}`}
       onClick={() => onPreview(item.url)}
       onKeyDown={(event) => {
-        // Keys typed in the nested rename field must not open the lightbox.
         if (event.target !== event.currentTarget) return;
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
@@ -323,7 +322,6 @@ export function ImageHistoryView() {
         await createImageSession();
         setView('imagestudio');
       } catch {
-        // The API surfaces its own error state; stay put.
       }
     })();
   };

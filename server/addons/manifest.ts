@@ -100,7 +100,6 @@ export function validateManifest(raw: unknown): ManifestValidation {
 
   const apiRaw = m.apiVersion;
   if (apiRaw === undefined) {
-    // Legacy v1 — validated enough above; the rest is ignored.
     return { ok: errors.length === 0, errors, apiVersion: '1' };
   }
   if (apiRaw !== '2') {

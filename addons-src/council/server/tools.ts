@@ -37,7 +37,7 @@ function rsatRoster(api, sessionId) {
   try {
     const rsat = api.api?.use?.('rsat');
     if (rsat && typeof rsat.listAgents === 'function') return rsat.listAgents(sessionId) ?? [];
-  } catch { /* RSAT not installed */ }
+  } catch {  }
   return [];
 }
 
@@ -167,7 +167,6 @@ const toolDefs = [
         return { type: 'text', text: `No sub-session for agent "${agentId}" in this council. Active subs: ${subs.map((s) => `${s.agentName} [${s.agentId}]`).join(', ') || 'none'}. Dispatch agents via the RSAT board first.` };
       }
       const text = `Orchestrator instruction: ${message}`;
-      // RUNNING target: inject — the adapter drains it at the next round boundary.
       if (isSessionActive(api, member.sessionId)) {
         try {
           await api.sessions.inject([member.sessionId], {
@@ -181,8 +180,6 @@ const toolDefs = [
           return { type: 'text', text: `Failed to inject message: ${String(error)}` };
         }
       }
-      // IDLE target: a queued injection is never drained, so wake the sub-session
-      // instead — a SERVER-SIDE run starts with this instruction as its turn.
       const report = await wakeSessions(api, [{ sessionId: member.sessionId, text }]);
       return { type: 'text', text: report
         ? `${member.agentName} was idle — woken server-side with your instruction. It is working now; follow along with council_status.`
@@ -222,7 +219,7 @@ const toolDefs = [
         else missed.push(victim.agentName || victim.sessionId);
         try {
           api.bus.publish('council:stopped', { councilId: gate.mem.councilId, conversationId: victim.sessionId, agentId: victim.agentId, at: Date.now() });
-        } catch { /* best-effort */ }
+        } catch {  }
       }
       const parts = [];
       if (stopped.length) parts.push(`stopped: ${stopped.join(', ')}`);

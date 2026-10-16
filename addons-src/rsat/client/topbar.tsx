@@ -70,7 +70,7 @@ export default function Topbar({
 }) {
   return (
     <header className="topbar">
-      {/* Tombol back: kembali ke percakapan yang membuka board ini. */}
+      {}
       <button
         className="icon-btn host-toggle"
         type="button"
@@ -81,7 +81,7 @@ export default function Topbar({
       </button>
       <div className="crumb">
         Addons <b>›</b> RSA/T <b>›</b> <b>{VIEW_LABELS[view] ?? 'Overview'}</b>
-        {/* Tombol sidebar: DOM di dalam .crumb, visual absolut di pojok kanan topbar. */}
+        {}
         <button
           className="icon-btn"
           type="button"

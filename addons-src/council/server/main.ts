@@ -15,7 +15,6 @@ export async function activate(ctx) {
   const api = ctx.api;
   const on = ctx.on;
 
-  // Agent tools (readOnly flags feed the loop's parallel planner).
   for (const def of toolDefs) {
     api.tool.register({
       name: def.name,
@@ -26,16 +25,13 @@ export async function activate(ctx) {
     });
   }
 
-  // Per-session prompt fragment: council identity + members + brief.
   api.prompt.fragment(createPromptFragment(api));
 
-  // RPC surface for the panel (actor = user, enforced by the route).
   for (const [name, handler] of Object.entries(rpcHandlers)) {
     api.rpc.handle(name, (body, rpcCtx) =>
       handler(api, rpcCtx?.sessionId ?? body?.sessionId, body));
   }
 
-  // /council opens the panel.
   api.command.register({ name: 'council', description: 'Open the Council Agent panel', immediate: true });
   on('command.run', { command: 'council' }, async () => ({
     text: 'Opening the Council panel.',
@@ -46,5 +42,4 @@ export async function activate(ctx) {
 }
 
 export function deactivate() {
-  // The platform disposes every registered surface; nothing manual here.
 }

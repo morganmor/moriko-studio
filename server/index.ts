@@ -395,7 +395,7 @@ async function probeComfyuiModels(baseUrl: string): Promise<string[]> {
       if (!Array.isArray(files)) continue;
       const tag = folder === 'checkpoints' ? 'ckpt' : folder === 'diffusion_models' ? 'diff' : 'unet';
       for (const f of files) if (f) models.push(`${tag}:${f}`);
-    } catch { /* folder may not exist */ }
+    } catch {  }
   }
   return models;
 }
@@ -444,7 +444,6 @@ app.get(
       return;
     }
 
-    // ComfyUI detection — scan /models/{folder} instead of /models
     if (await isComfyui(base)) {
       const comfyuiModels = await probeComfyuiModels(base);
       res.json({ models: comfyuiModels });
@@ -457,8 +456,6 @@ app.get(
     const payload = (await response.json()) as { data?: Array<{ id?: string }> };
     const textModels = (payload.data ?? []).map((model) => model.id ?? '').filter(Boolean);
 
-    // Some providers (e.g. NanoGPT) have a dedicated /image-models endpoint
-    // that returns image models not listed in /models.
     let imageModels: string[] = [];
     try {
       const imgRes = await fetch(`${base}/image-models`, { headers });
@@ -466,7 +463,7 @@ app.get(
         const imgPayload = (await imgRes.json()) as { data?: Array<{ id?: string }> };
         imageModels = (imgPayload.data ?? []).map((m) => m.id ?? '').filter(Boolean);
       }
-    } catch { /* endpoint may not exist — ignore */ }
+    } catch {  }
 
     const merged = [...new Set([...textModels, ...imageModels])];
     res.json({ models: merged });
@@ -515,7 +512,6 @@ app.post(
       return;
     }
 
-    // ComfyUI detection — scan /models/{folder} instead of /models
     if (await isComfyui(baseUrl)) {
       const comfyuiModels = await probeComfyuiModels(baseUrl);
       res.json({ models: comfyuiModels });
@@ -528,7 +524,6 @@ app.post(
     const payload = (await response.json()) as { data?: Array<{ id?: string }> };
     const textModels = (payload.data ?? []).map((model) => model.id ?? '').filter(Boolean);
 
-    // Some providers (e.g. NanoGPT) have a dedicated /image-models endpoint.
     let imageModels: string[] = [];
     try {
       const imgRes = await fetch(`${baseUrl}/image-models`, { headers });
@@ -536,7 +531,7 @@ app.post(
         const imgPayload = (await imgRes.json()) as { data?: Array<{ id?: string }> };
         imageModels = (imgPayload.data ?? []).map((m) => m.id ?? '').filter(Boolean);
       }
-    } catch { /* endpoint may not exist — ignore */ }
+    } catch {  }
 
     const merged = [...new Set([...textModels, ...imageModels])];
     res.json({ models: merged });
@@ -635,8 +630,6 @@ app.post(
 
     const sessionId = typeof body.conversationId === 'string' ? body.conversationId : null;
 
-    // Addon v2 (A3): the session registry tracks this run for multi-agent
-    // coordination (presence, sessions.inject) and mirrors the steer lifecycle.
     const registrySessionId = steerSessionId ?? undefined;
     if (registrySessionId) {
       try {
@@ -646,7 +639,7 @@ app.post(
           workspacePath: getActiveWorkspace(registrySessionId)?.path,
           model: body.model,
         });
-      } catch { /* registry is best-effort */ }
+      } catch {  }
     }
 
     createStream(streamId, {
@@ -1217,9 +1210,6 @@ app.get(
 /** The Gallery collection itself lives in ./images/runtime.ts (shared with agent__image). */
 
 app.get('/api/gallery', (_req, res) => {
-  // no-store: the client refetches this on every bus event and view mount —
-  // a heuristic browser cache made agent-added images invisible until a
-  // hard refresh (count stale in the sidebar, grid stale in the view).
   res.setHeader('Cache-Control', 'no-store');
   res.json({ images: readGallery() });
 });
@@ -2023,8 +2013,6 @@ const httpServer = app.listen(PORT, () => {
 
   attachBrowserPanelWs(httpServer);
 
-  // Addon v2 (A9): seed builtin addons (addons-src/) BEFORE loading so a fresh
-  // install ships visual-context + rsat without a manual install step.
   void (async () => {
     try {
       const { seedBuiltinAddons } = await import('./addons/seed.js');
@@ -2036,14 +2024,12 @@ const httpServer = app.listen(PORT, () => {
     await loadAllAddons();
     startAddonWatcher((ids) => {
       console.log(`  Addons reloaded: ${ids.join(', ')}.`);
-      // LIVE: disk-side addon edits reach every browser without a refresh.
       void publishBusEvent('addons.registry', { reason: 'watcher', addonIds: ids }, 'moriko-host');
     });
-    // Addon v2 (A3): harness.start — observe point, fired after addons load.
     try {
       const { emitPoint } = await import('./addons/points.js');
       await emitPoint('harness.start', { at: Date.now() });
-    } catch { /* best-effort */ }
+    } catch {  }
   })();
 
   const configured = BUILT_IN_PROVIDERS.filter(

@@ -43,7 +43,7 @@ const publishRegistry = (payload: Record<string, unknown>): void => {
  *  tools/hooks/stores are never touched. */
 const reloadOne = async (id: string): Promise<void> => {
   const ok = await reloadAddon(id);
-  if (!ok) await loadAllAddons(); // addon dir vanished mid-flight → full resync
+  if (!ok) await loadAllAddons();
 };
 
 /** The builtin SOURCE folder for one addon id (null when not a builtin). */
@@ -83,9 +83,6 @@ function dirFor(id: string): string {
 }
 
 function scaffoldAddon(id: string, args: AddonManageArgs): string {
-  // Addon Manager: new addons are authored in the repo's addons-src/ (the
-  // agent's addon workspace). They seed into the runtime at the next boot /
-  // Hub reload, with builtin trust.
   const dir = addonsSrcDir(id) ?? path.resolve(process.cwd(), 'addons-src', id);
   if (existsSync(dir)) return `Addon "${id}" already exists — use action "edit" or "write" to modify it.`;
   mkdirSync(path.join(dir, 'client'), { recursive: true });
@@ -213,8 +210,6 @@ export async function addonManageTool(args: AddonManageArgs): Promise<HarnessToo
       }
 
       case 'remove': {
-        // USER-ONLY: the agent never deletes addons. The Addon Hub's Remove
-        // button (with its confirm modal) is the only deletion path.
         return err(
           'Removing addons is user-only — the agent cannot delete addons. ' +
           'Ask the user to remove it via the Addon Hub (Remove button, confirm modal).',

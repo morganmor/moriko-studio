@@ -48,7 +48,6 @@ export function WorkflowEditor({ open, onClose, workflows, selectedId, onSaved, 
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  // Re-seed the draft each time the modal opens on a workflow.
   useEffect(() => {
     if (!open) return;
     setDraft(draftOf(workflows.find((workflow) => workflow.id === selectedId) ?? workflows[0]));
@@ -124,7 +123,7 @@ export function WorkflowEditor({ open, onClose, workflows, selectedId, onSaved, 
       }
     >
       <div style={{ display: 'flex', flex: 1, minHeight: 0, gap: 14, padding: 16 }}>
-        {/* LEFT PAGE — the catalog */}
+        {}
         <div style={{ width: 210, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 6, minHeight: 0 }}>
           <span style={{ fontSize: 11.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--faint)' }}>
             Workflows
@@ -157,7 +156,7 @@ export function WorkflowEditor({ open, onClose, workflows, selectedId, onSaved, 
           </button>
         </div>
 
-        {/* RIGHT PAGE — the doctrine text */}
+        {}
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
           <input
             className="field"

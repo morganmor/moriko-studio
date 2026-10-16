@@ -152,7 +152,6 @@ export function renderVisualTool(args: Record<string, unknown>, ctx: AgentToolCo
   }
 
   const height = clampHeight(num(args, 'height'));
-  // F5.1 — vendor libs: validate ids; client injects the same-origin bundles.
   const rawLibs = Array.isArray(args.libs) ? args.libs : [];
   const libs = [...new Set(rawLibs.filter((l): l is string => typeof l === 'string' && VISUAL_LIBS.has(l)))];
   const badLibs = rawLibs.filter((l) => typeof l === 'string' && !VISUAL_LIBS.has(l));

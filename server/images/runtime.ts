@@ -33,7 +33,6 @@ import { publishBusEvent } from '../addons/bus.js';
 import { getUiState } from '../uiState.js';
 import type { ProviderPublic } from '../contracts.js';
 
-/* ────────────────────────── task bookkeeping ────────────────────────── */
 
 const imageTasks = new Map<string, ImageTaskRecord>();
 
@@ -76,7 +75,6 @@ function rememberTask(taskId: string, record: ImageTaskRecord): void {
   persistImageTasks();
 }
 
-/* ─────────────────────────── failure journal ────────────────────────── */
 
 export type ImageTaskEvent =
   | {
@@ -122,7 +120,6 @@ export function logImageTask(event: ImageTaskEvent): void {
   console.log(`[images] ${event.kind}: ${line.slice(0, 400)}`);
 }
 
-/* ───────────────────────── provider resolution ─────────────────────── */
 
 /**
  * Resolves the image target for a request: credentials (server key first,
@@ -160,7 +157,6 @@ async function resolveAdapterForTask(task: ImageTaskRecord) {
   return resolveImageAdapter(selection, task.credentials.baseUrl);
 }
 
-/* ──────────────────────── submit (shared ladder) ────────────────────── */
 
 /** Transport bound for reference images — shape/capacity are checked here. */
 const MAX_REFERENCE_IMAGES = 8;
@@ -190,7 +186,6 @@ export async function submitImageTask(input: ImageSubmitInput): Promise<{ taskId
 
   const { credentials, adapter } = await resolveImageTarget(providerId, input.apiKey?.trim() || undefined);
   const apiKey = credentials.apiKey || process.env.MODELSCOPE_API_KEY || '';
-  // ComfyUI and other local runtimes don't need an API key
   if (!apiKey && adapter.id !== 'comfyui-local') {
     throw new HttpError(
       400,
@@ -280,7 +275,6 @@ export async function submitImageTask(input: ImageSubmitInput): Promise<{ taskId
   return { taskId };
 }
 
-/* ──────────────────── poll (local save + terminal) ───────────────────── */
 
 const IMAGES_DIR = imagesDir;
 fs.mkdirSync(IMAGES_DIR, { recursive: true });
@@ -542,7 +536,6 @@ export async function runImageTask(
   }
 }
 
-/* ───────────────────────────── gallery ──────────────────────────────── */
 
 /**
  * The Gallery is a persisted, ordered list of image URLs — usually local ones
@@ -574,7 +567,6 @@ export function appendToGallery(urls: string[]): string[] {
   return next;
 }
 
-/* ─────────────────── provider capability listing ─────────────────────── */
 
 /**
  * Adapter capabilities for one provider, or undefined when the provider has
@@ -716,7 +708,6 @@ export async function resolveAgentImageTarget(
     if (entry) return pick(entry, preferred.model);
   }
 
-  // Saved Image Studio default (ui-state 'imageStudio', client-owned shape).
   try {
     const saved = getUiState()['imageStudio'] as { providerId?: unknown; model?: unknown } | undefined;
     if (saved && typeof saved === 'object') {

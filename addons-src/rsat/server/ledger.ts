@@ -43,12 +43,11 @@ export function createLedger(api) {
     const sessionId = event?.sessionId;
     const rel = String(event?.path ?? '').replace(/\\/g, '/');
     if (!rel) return;
-    if (rel.startsWith('.moriko/rsat/')) return; // our own files
+    if (rel.startsWith('.moriko/rsat/')) return;
 
     const doc = docForWrite(api, sessionId);
     if (!doc) return;
 
-    // Attribute: the claim-holder whose scope covers the path (any live claim).
     const op = event?.op ?? 'modify';
     const candidates = (doc.achievements || []).filter(
       (a) => ['claimed', 'in_progress', 'review'].includes(a.state) && inScope(a.scope, rel),
@@ -64,19 +63,16 @@ export function createLedger(api) {
       summary: `${op} ${rel} (${event?.tool ?? 'tool'})`,
     };
 
-    // One ledger per covering achievement (usually exactly one).
     for (const a of candidates.slice(0, 3)) {
       try {
         await appendLedger(api, sessionId, a.id, record);
         const a2 = docForWrite(api, sessionId)?.achievements?.find((x) => x.id === a.id);
         if (a2 && !(a2.files || []).some((f) => f.path === rel && f.op === op)) {
-          // Board entry starts WITHOUT a summary (design "⋯ awaiting summary")
-          // — the agent (rsat_note_file) or the user fills the one-line note.
           a2.files = [...(a2.files || []).slice(-99), { path: rel, op, at: new Date().toISOString(), by: record.by, summary: '', pending: true }];
           const { saveDoc } = await import('./store.js');
           await saveDoc(api, sessionId, docForWrite(api, sessionId), null);
         }
-      } catch { /* ledger is best-effort; never break the write */ }
+      } catch {  }
     }
     pushActivity({ kind: 'file', text: `${op} ${rel}`, achievementId: candidates[0].id, sessionId });
   };

@@ -330,7 +330,6 @@ export async function grepTool(rawArgs: Record<string, unknown>, ctx: AgentToolC
     return `${displayPath}:${lineNo}: ${cut ? `${trimmed.slice(0, MAX_LINE_CHARS)}…` : trimmed}`;
   };
 
-  // F2.3 — enclosing symbol annotation for TS/JS hits (default ON when ≤ 50 results).
   const enclosingOn = args.enclosing === undefined ? true : bool(args, 'enclosing');
   const wantEnclosing = enclosingOn && totalMatches <= 50;
   const enclosingCache = new Map<string, string | null>();

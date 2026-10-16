@@ -352,7 +352,6 @@ export async function streamOpenAiCompatible(
     resolveSteerPartRefs(steerParts);
     if (steerParts.length > 0) convo.push({ role: 'user', content: steerParts });
 
-    // Addon v2 (A3, Q2): queued addon notices ride the steer seam.
     const injections = drainInjections(params.sessionId ?? undefined);
     if (injections.length > 0) {
       const injectParts: Array<{ type: 'text'; text: string }> = injections.map((entry) => {

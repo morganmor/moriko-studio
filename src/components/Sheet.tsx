@@ -54,8 +54,7 @@ export function Sheet({
         className="sheet-panel"
         style={{ position: 'relative', display: 'flex', maxHeight: '78dvh', width: '100%', maxWidth: 448, flexDirection: 'column', borderRadius: 'var(--r-xl) var(--r-xl) 0 0', borderTop: '1px solid var(--line)', background: 'rgb(var(--c-elev))', boxShadow: 'var(--sh2)', ...(dragY ? { transform: `translateY(${dragY}px)` } : undefined) }}
       >
-        {/* Header: visible Back (top-left, above the scroll area) — closing
-            never depends on invisible affordances alone. */}
+        {}
         <div
           style={{ display: 'flex', flexShrink: 0, touchAction: 'none', cursor: 'grab', alignItems: 'center', gap: 8, padding: '6px 8px' }}
           onPointerDown={(event) => {

@@ -23,7 +23,7 @@ function fmtBytes(n: number): string {
 function parseGlb(buf: Buffer, file: string): AssetReport {
   const warnings: string[] = [];
   const summaryParts: string[] = [];
-  if (buf.length < 12 || buf.readUInt32LE(0) !== 0x46546c67) { // 'glTF'
+  if (buf.length < 12 || buf.readUInt32LE(0) !== 0x46546c67) {
     return { file, bytes: buf.length, kind: 'glb?', summary: 'invalid GLB magic', warnings: ['not a GLB file'] };
   }
   let json: Record<string, unknown> = {};
@@ -32,7 +32,7 @@ function parseGlb(buf: Buffer, file: string): AssetReport {
     while (offset + 8 <= buf.length) {
       const chunkLen = buf.readUInt32LE(offset);
       const chunkType = buf.readUInt32LE(offset + 4);
-      if (chunkType === 0x4e4f534a) { // JSON
+      if (chunkType === 0x4e4f534a) {
         json = JSON.parse(buf.subarray(offset + 8, offset + 8 + chunkLen).toString('utf8'));
         break;
       }
@@ -59,7 +59,6 @@ function parseGlb(buf: Buffer, file: string): AssetReport {
     for (const prim of prims) {
       const idxAcc = prim.indices as number | undefined;
       if (idxAcc === undefined) {
-        // non-indexed: POSITION count / 3
         const posAcc = prim.attributes as Record<string, number> | undefined;
         const posIdx = posAcc?.POSITION;
         if (typeof posIdx === 'number' && accessors[posIdx]) {
@@ -74,7 +73,6 @@ function parseGlb(buf: Buffer, file: string): AssetReport {
   }
   if (anyMissingIndex) warnings.push('at least one mesh primitive has no index buffer');
 
-  // bounding box from POSITION accessor min/max
   let bounds = '';
   for (const acc of accessors) {
     const min = acc.min as number[] | undefined;
@@ -85,7 +83,6 @@ function parseGlb(buf: Buffer, file: string): AssetReport {
     }
   }
 
-  // duration of longest animation
   let duration = '';
   for (const anim of animations) {
     const channels = (anim.channels as unknown[] | undefined)?.length ?? 0;
@@ -93,13 +90,10 @@ function parseGlb(buf: Buffer, file: string): AssetReport {
   }
   void duration;
 
-  // embedded image sizes
   const imageInfos: string[] = [];
   for (const img of images.slice(0, 12)) {
     const bv = img.bufferView as number | undefined;
     if (typeof bv !== 'number') continue;
-    // header sniff: PNG IHDR / JPEG SOF
-    // (bufferViews offsets are resolved from json — approximate: scan whole BIN for magic near offset)
     imageInfos.push(String(img.mimeType ?? 'image'));
   }
 
@@ -159,10 +153,10 @@ function parseJpeg(buf: Buffer, file: string): AssetReport {
 function parseWebp(buf: Buffer, file: string): AssetReport {
   let width = 0;
   let height = 0;
-  if (buf.length > 30 && buf.readUInt32LE(12) === 0x38504c56) { // VP8
+  if (buf.length > 30 && buf.readUInt32LE(12) === 0x38504c56) {
     width = buf.readUInt16LE(26) & 0x3fff;
     height = buf.readUInt16LE(28) & 0x3fff;
-  } else if (buf.length > 24 && buf.readUInt32LE(12) === 0x4c385056) { // VP8L
+  } else if (buf.length > 24 && buf.readUInt32LE(12) === 0x4c385056) {
     const bits = buf.readUInt32LE(21);
     width = (bits & 0x3fff) + 1;
     height = ((bits >> 14) & 0x3fff) + 1;

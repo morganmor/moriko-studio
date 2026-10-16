@@ -154,20 +154,17 @@ export function seedBuiltinAddons(): SeedReport {
     let id = entry;
     try {
       id = (JSON.parse(readFileSync(manifestPath, 'utf-8')) as { id?: string }).id ?? entry;
-    } catch { /* folder name is the fallback id */ }
+    } catch {  }
 
     const targetDir = installDir(id);
     const targetManifest = path.join(targetDir, 'addon.json');
     if (existsSync(targetManifest)) {
       if (isNewer(readVersion(manifestPath), readVersion(targetManifest))) {
-        // Upgrade: the shipped version is newer — delete the install and
-        // copy the source in (plain replacement, per the user's rule).
         rmSync(targetDir, { recursive: true, force: true });
         mkdirSync(targetDir, { recursive: true });
         cpSync(srcDir, targetDir, { recursive: true });
         report.seeded.push(id);
       } else {
-        // Existing install at the same/older version: never clobber it.
         report.kept.push(id);
       }
     } else {
@@ -179,7 +176,6 @@ export function seedBuiltinAddons(): SeedReport {
       }
       report.seeded.push(id);
     }
-    // Builtin trust: permissions pre-granted (still listed in the Hub).
     markBuiltin(id, readPermissions(manifestPath));
   }
   return report;

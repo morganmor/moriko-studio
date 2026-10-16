@@ -24,7 +24,6 @@ async function verifyTool(args: Record<string, unknown>, ctx: AgentToolContext):
   const level = str(args, 'level').trim().toLowerCase() || 'quick';
   const steps: StepResult[] = [];
 
-  // 1. Diagnostics (touched files).
   try {
     const { getLanguageService } = await import('../lsp-service.js');
     const ts = await import('typescript');
@@ -64,7 +63,6 @@ async function verifyTool(args: Record<string, unknown>, ctx: AgentToolContext):
   }
 
   if (level === 'full') {
-    // 3. Full typecheck.
     try {
       const outcome = await runShellCommand('pnpm typecheck', { cwd: root, timeoutMs: 180_000 });
       const errorCount = (outcome.stdout + outcome.stderr).split('\n').filter((l) => /error TS\d+/.test(l)).length;
@@ -77,7 +75,6 @@ async function verifyTool(args: Record<string, unknown>, ctx: AgentToolContext):
       steps.push({ step: 'typecheck(full)', ok: false, summary: `failed (${error instanceof Error ? error.message : 'error'})` });
     }
 
-    // 4. Architecture rules (when .moriko/architecture.json exists).
     const archPath = path.join(root, '.moriko', 'architecture.json');
     if (existsSync(archPath)) {
       try {

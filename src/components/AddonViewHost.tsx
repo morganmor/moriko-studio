@@ -53,17 +53,12 @@ const FALLBACK_VIEW: Record<string, string> = {
 };
 
 function getLazyView(addonId: string, view: string): ComponentType<{ viewName?: string }> {
-  // Module version in the key + URL: a registry change loads fresh code.
   const v = addonClientVersion();
   const key = `${addonId}/${view}@${v}`;
   const cached = viewCache.get(key);
   if (cached) return cached;
-  // View id may differ from the client file name (e.g. view "overview" lives in
-  // client/board.tsx). The registry's component field is server knowledge; the
-  // client resolves it by convention below via a tiny fallback map for rsat.
   const file = FALLBACK_VIEW[view] ?? view;
   const Lazy = lazy(() =>
-    // Server-side transpiled + jailed module; bare imports hit the host shim.
     import(/* @vite-ignore */ `/api/addons/${addonId}/client/${file}.js?v=${v}`)
       .then((mod) => {
         const component = (mod.default ?? mod[view] ?? mod.RsatApp ?? mod.App) as ComponentType<{ viewName?: string }> | undefined;
@@ -71,7 +66,6 @@ function getLazyView(addonId: string, view: string): ComponentType<{ viewName?: 
         return { default: component };
       })
       .catch(async (error) => {
-        // Convention fallback: many views can share one page module (rsat/board.tsx).
         if (file !== 'board') {
           const mod = await import(/* @vite-ignore */ `/api/addons/${addonId}/client/board.js?v=${v}`);
           const component = (mod.default ?? mod.RsatApp) as ComponentType<{ viewName?: string }> | undefined;
@@ -91,8 +85,6 @@ export function AddonViewHost({ viewKey }: { viewKey: string }) {
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
-    // Validate against the live registry so a removed/disabled addon never
-    // renders a broken page (the fallback view handles it).
     let cancelled = false;
     void fetch('/api/addons/views')
       .then((resp) => (resp.ok ? resp.json() : null))
@@ -101,11 +93,10 @@ export function AddonViewHost({ viewKey }: { viewKey: string }) {
         const hit = payload.views.some((v) => v.addonId === parsed?.addonId && v.id === parsed.view && v.location === 'sidebar');
         setMissing(!hit);
       })
-      .catch(() => { /* offline = let the lazy loader show the boundary */ });
+      .catch(() => {  });
     return () => { cancelled = true; };
   }, [parsed?.addonId, parsed?.view, tick]);
 
-  // LIVE REGISTRY: re-validate the open view on toggle/reload/delete.
   useEffect(() => {
     const onReload = () => setTick((n) => n + 1);
     window.addEventListener('moriko:addons-reloaded', onReload);

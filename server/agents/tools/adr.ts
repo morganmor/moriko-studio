@@ -54,7 +54,6 @@ async function adrTool(args: Record<string, unknown>, ctx: AgentToolContext): Pr
       const v = str(args, key).trim();
       if (v) body[key] = v;
     }
-    // Patch template numbering (template was rendered before nextN was known).
     const content = `# ${padNum(nextN)}. ${title}
 
 - **Status**: ${body.status ?? 'Accepted'}

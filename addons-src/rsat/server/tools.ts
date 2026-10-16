@@ -20,7 +20,6 @@ const fail = (text) => ({ ok: false, isError: true, text });
 async function run(fn, ctx) {
   try {
     const result = await fn();
-    // Auto-heartbeat: keep claims alive while the agent actively works.
     if (ctx?.api && ctx?.sessionId) {
       void engine.autoHeartbeat(ctx.api, ctx.sessionId, { kind: 'agent', sessionId: ctx.sessionId }).catch(() => {});
     }
@@ -56,8 +55,6 @@ export const toolDefs = [
       const lines = [
         `PRD "${s.prd.title}" [${s.prd.id}] — status: ${s.prd.status} · language: ${s.prd.language} · score ${s.score}/${s.maxScore}`,
         '',
-        // Effective state (deps done → available): the stored state can lag
-        // behind (locked at creation); agents must never see a stale lock.
         ...s.achievements.map((a) => {
           const raw = doc.achievements.find((x) => x.id === a.id);
           const eff = engine.effOf(doc, raw);
@@ -226,7 +223,6 @@ export const toolDefs = [
       const actor = agentActor(ctx);
       const doc = await engine.claim(api, ctx.sessionId, actor, args.id, args.label);
       const a = doc.achievements.find((x) => x.id === args.id);
-      // R4: klaim agent → injeksi ke sesi lain + status + frame live.
       await broadcast(api, ctx.sessionId, { type: 'claimed', target: args.id, by: actor, data: { label: actor.name } });
       return ok([
         `Claimed ${args.id} "${a.title}".`,
@@ -288,10 +284,9 @@ export const toolDefs = [
         path: args.path, op: args.op ?? 'modify', tool: 'rsat_note_file',
         by: agentActor(ctx), summary: `${args.op ?? 'modify'} ${args.path} — ${args.summary}`,
       });
-      // Also fill the BOARD entry (clears "⋯ awaiting summary").
       try {
         await engine.setFileSummary(ctx.api, ctx.sessionId, agentActor(ctx), args.id, args.path, args.summary);
-      } catch { /* file entry may not exist yet — the ledger line above stands */ }
+      } catch {  }
       return ok(`Ledger updated: ${args.path} → ${args.id}.`);
     }, ctx),
   },
@@ -401,7 +396,6 @@ export const toolDefs = [
       const { memoryOfSession } = await import('./agents.js');
       const { readAllLedgers } = await import('./store.js');
       const lines = ['CROSS-AGENT CONTEXT (what others have done):'];
-      // Recent ledger entries from all achievements
       const ledgers = readAllLedgers(api, ctx.sessionId, 30);
       if (ledgers.length > 0) {
         lines.push('', 'Recent file changes (all agents):');
@@ -409,7 +403,6 @@ export const toolDefs = [
           lines.push(`  ${l.by?.label ?? 'agent'}: ${l.op} ${l.path}${l.summary ? ` — ${l.summary}` : ''}`);
         }
       }
-      // Decisions from comments
       const decisions = [];
       for (const a of doc.achievements) {
         for (const c of a.comments || []) {
@@ -422,7 +415,6 @@ export const toolDefs = [
         lines.push('', 'Decisions by other agents:');
         lines.push(...decisions.slice(-10));
       }
-      // PRD architecture section if present
       if (doc.prd.architecture) {
         lines.push('', `Architecture: ${doc.prd.architecture}`);
       }

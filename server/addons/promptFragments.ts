@@ -19,7 +19,7 @@ export interface RegisteredFragment {
   when?: (ctx: PromptFragmentCtx) => boolean;
 }
 
-const fragments = new Map<string, RegisteredFragment>(); // key: addonId\0id
+const fragments = new Map<string, RegisteredFragment>();
 
 export function registerPromptFragment(fragment: RegisteredFragment): () => void {
   const key = `${fragment.addonId}\u0000${fragment.id}`;

@@ -400,7 +400,6 @@ export default function Basecamp({ onOpen }: { onOpen: (id: string) => void }) {
   const act = list.filter((a) => ['claimed', 'in_progress', 'review'].includes(a.state));
   const next = list.filter((a) => eff(list, a) === 'available');
 
-  // Export via server: file tersimpan di .moriko/rsat/exports/ + unduhan lokal.
   const onExport = () => {
     void (async () => {
       try {

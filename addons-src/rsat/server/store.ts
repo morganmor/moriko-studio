@@ -71,31 +71,26 @@ function fsWorkspaceHandle(rootPath) {
  *  board picker binding → session workspace → global active → any live
  *  session's path → process.cwd(). Never returns a handle whose root() throws. */
 export function workspaceOf(api, sessionId) {
-  // 1. Explicit board binding (its own picker) — persisted in the addon store.
   try {
     const binding = api.store?.get?.('workspacePath');
     if (binding && existsSync(binding)) return fsWorkspaceHandle(binding);
-  } catch { /* fall through */ }
-  // 2. Session-bound workspace (the active chat's folder).
+  } catch {  }
   try {
     const sessionWs = api.workspace?.forSession?.(sessionId);
     if (sessionWs?.root()) return sessionWs;
-  } catch { /* fall through */ }
-  // 3. Global active workspace.
+  } catch {  }
   try {
     if (api.workspace?.root?.()) return api.workspace;
-  } catch { /* fall through */ }
-  // 4. Any running session that carries a workspace path.
+  } catch {  }
   try {
     for (const s of api.sessions?.list?.() ?? []) {
       if (s.workspacePath && existsSync(s.workspacePath)) return fsWorkspaceHandle(s.workspacePath);
     }
-  } catch { /* fall through */ }
-  // 5. The harness process cwd (dev server runs inside the workspace).
+  } catch {  }
   try {
     const cwd = process.cwd();
     if (cwd && existsSync(cwd)) return fsWorkspaceHandle(cwd);
-  } catch { /* fall through */ }
+  } catch {  }
   return { root: () => null, read: () => '', write: async () => {}, list: () => [], exists: () => false };
 }
 
@@ -133,10 +128,6 @@ export function loadDocFrom(ws) {
   if (problems.length > 0) {
     throw new Error(`PRD failed validation: ${problems.slice(0, 3).join('; ')}${problems.length > 3 ? '…' : ''}`);
   }
-  // SELF-HEALING stale-lock sweep on every cold load: docs written before the
-  // refreshDependents fix carry 'locked' states whose deps are long done. A
-  // sweep here heals any legacy doc once, on first touch, without waiting for
-  // a new completion to trigger the transition hook.
   let healed = false;
   for (const a of doc.achievements) {
     if (a.state !== 'locked' && a.state !== 'available') continue;
@@ -153,7 +144,7 @@ export function loadDocFrom(ws) {
     }].slice(-MAX_HISTORY);
     try {
       ws.write(PRD_FILE, JSON.stringify(doc, null, 2));
-    } catch { /* heal is best-effort — effOf still renders correctly */ }
+    } catch {  }
   }
   cache.set(root, doc);
   return doc;
@@ -198,11 +189,10 @@ export async function saveDocFrom(api, ws, doc, event) {
     if (event) await appendEventFrom(ws, { ...event, rev: doc.rev });
     return doc;
   });
-  // Live board refresh (R4): one frame per persisted event, best-effort.
   if (event) {
     try {
       await api.bus.publish('rsat.changed', { event: { ...event, rev: doc.rev }, at: Date.now() });
-    } catch { /* bus is best-effort */ }
+    } catch {  }
   }
   return saved;
 }
@@ -225,7 +215,7 @@ export async function appendEventFrom(ws, event) {
   try {
     const existing = ws.exists(EVENTS_FILE) ? ws.read(EVENTS_FILE) : '';
     await ws.write(EVENTS_FILE, existing + line);
-  } catch { /* audit log is best-effort */ }
+  } catch {  }
 }
 
 /** Read the last N events (oldest first). */
@@ -238,9 +228,6 @@ export function readEvents(api, sessionId, limit = 200) {
   }).filter(Boolean);
 }
 
-// ---------------------------------------------------------------------------
-// Per-achievement file ledger (R5 storage side)
-// ---------------------------------------------------------------------------
 
 function ledgerFile(achievementId) {
   return `${DIR}/ledger/${achievementId}.jsonl`;
@@ -279,9 +266,6 @@ export function readAllLedgers(api, sessionId, limit = 500) {
   return out.slice(-limit).reverse();
 }
 
-// ---------------------------------------------------------------------------
-// Export/Import (R7)
-// ---------------------------------------------------------------------------
 
 export async function writeExport(api, sessionId, doc) {
   const ws = workspaceOf(api, sessionId);
@@ -292,7 +276,7 @@ export async function writeExport(api, sessionId, doc) {
 }
 
 export function writeImport(api, sessionId, content) {
-  const parsed = JSON.parse(content); // caller handles the parse error
+  const parsed = JSON.parse(content);
   const problems = validateDoc(parsed);
   if (problems.length > 0) throw new Error(`Import failed validation: ${problems.slice(0, 3).join('; ')}`);
   return migrate(parsed);

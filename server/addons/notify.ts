@@ -39,6 +39,5 @@ export function invalidateAddonView(addonId: string, viewId?: string): void {
   try {
     void publishBusEvent('addon.view.invalidate', { addonId, viewId: viewId ?? null }, addonId);
   } catch {
-    // best-effort
   }
 }

@@ -1383,7 +1383,6 @@ const MessageRow = memo(function MessageRow({
     );
   }
 
-  // HARNESS-EVENT turn: dedicated addon-event panel — never a user bubble.
   if (turn.kind === 'harness-event') {
     return (
       <div className="cv-auto hevent-row" style={{ width: '100%', padding: '2px 0' }}>
@@ -1548,10 +1547,7 @@ const MessageRow = memo(function MessageRow({
 
   return (
     <div className={cx('msg', runActive && 'live', isEffectivelyLast && 'last')} style={{ display: 'flex', gap: 12, position: 'relative' }}>
-      {/* Avatar di gutter kiri (absolut) — tidak memakan lebar kolom konten.
-          cv-auto punya paint containment (content-visibility:auto): avatar
-          HARUS di dalam box turn; gutter cv-auto = 44px (34px avatar + 10px
-          jarak), thread padding 28px jadi kelebihan 16px di luar thread. */}
+      {}
       <span
         className="av"
         aria-hidden="true"
@@ -2066,7 +2062,7 @@ function InjectionGroupCard({ injections }: { injections: TurnInjection[] }) {
       className="card"
       style={{ width: '100%', overflow: 'hidden', padding: 0, background: 'rgb(var(--c-elev) / 0.4)' }}
     >
-      {/* Card summary row — the only thing visible while collapsed */}
+      {}
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
@@ -2096,7 +2092,7 @@ function InjectionGroupCard({ injections }: { injections: TurnInjection[] }) {
               className="inner-scroll"
               style={{ maxHeight: 320, overflowY: 'auto', borderTop: '1px solid var(--line)' }}
             >
-              {/* Expand / collapse all — only useful with more than one block */}
+              {}
               {injections.length > 1 ? (
                 <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '4px 12px', borderBottom: '1px solid var(--line)' }}>
                   <button
@@ -2130,8 +2126,7 @@ function InjectionGroupCard({ injections }: { injections: TurnInjection[] }) {
                         aria-hidden="true"
                       />
                     </button>
-                    {/* Height-animated disclosure (grid 0fr→1fr) — content stays
-                        mounted while the card is open so closing eases too */}
+                    {}
                     <div className={cx('col', !rowOpen && 'shut')} aria-hidden={!rowOpen}>
                       <div className="col-in">
                         <pre
@@ -2273,17 +2268,6 @@ function CollapsePanel({
 
 type ReactScrollEvent = Parameters<NonNullable<import('react').HTMLAttributes<HTMLDivElement>['onScroll']>>[0];
 
-/* ── PANEL AUTO-FOLLOW (in-panel) ──────────────────────────────────────────
- * Autoscroll ISI panel (thinking / pill), TERPISAH dari follow thread
- * (useStickToBottom): hanya box panel yang digeser — layar context user
- * tidak disentuh saat teks tumbuh.
- *
- * Anti-lepas: follow dimatikan HANYA oleh input user ke atas (wheel/touch/
- * key, capture-phase) — bukan oleh event scroll. Saat streaming, konten
- * tumbuh tepat setelah set programatik; event scroll keburu mengukur
- * jarak ke dasar > threshold dan mematikan follow di tengah jalan
- * (laporan: reasoning scroll lepas). Resume: scroll user kembali ke dasar.
- */
 const PANEL_BOTTOM_SNAP = 48;
 
 function usePanelFollowScroll(open: boolean) {
@@ -2315,7 +2299,7 @@ function usePanelFollowScroll(open: boolean) {
   /** Nempel langsung di elemen scrollable panel — wiring lama menempel di
    *  wrapper non-overflow sehingga scrollTop-nya no-op total. */
   const onScroll = useCallback((event: ReactScrollEvent) => {
-    if (followRef.current) return; // set programatik saat following: abaikan
+    if (followRef.current) return;
     const box = event.currentTarget;
     followRef.current = box.scrollHeight - box.scrollTop - box.clientHeight < PANEL_BOTTOM_SNAP;
   }, []);
@@ -2447,7 +2431,6 @@ function ReasoningBlock({
     wasLive.current = live;
   }, [live]);
 
-  // Follow isi panel tiap flush teks reasoning (hanya saat panel terbuka).
   useEffect(() => {
     if (!open) return;
     scrollToBottom();
@@ -2514,11 +2497,6 @@ function ReasoningBlock({
   );
 }
 
-/* ── COMPACTION CHECKPOINT DESIGN (design/Compaction-Redesign.html) ────────
- * Shared presentation for both compaction surfaces: the live card (inline
- * turn) and the top block (no inline twin). English copy throughout. The
- * summary markdown is parsed light: `##` → sections, `- ` → items.
- */
 
 /** Light markdown parse: `##` headings → sections, `- `/`* `/`N.` → items. */
 function parseCompactionSections(text: string): { title: string; items: string[] }[] {
@@ -2768,7 +2746,6 @@ function compactionLead(sections: { title: string; items: string[] }[], summary:
   return compactionPlain(summary.split(/\r?\n/).find((line) => line.trim()) ?? '');
 }
 
-/* ── END COMPACTION CHECKPOINT DESIGN ───────────────────────────────────── */
 
 /**
  * Marker for a completed compaction: the turns before a point ride as a
@@ -2833,8 +2810,7 @@ function CompactionBlock({ compaction }: { compaction: ConversationCompaction })
           onOpen={() => setOpen(true)}
           peekId={`${bodyId}-peek`}
         />
-        {/* Body stays mounted so the grid collapse animates BOTH ways —
-            mounting on open removes the transition's start state (snap). */}
+        {}
         <div className={cx('col', !open && 'shut')} aria-hidden={!open}>
           <div className="col-in">
             <div className="cp-body-in" id={`${bodyId}-body`}>
@@ -3184,7 +3160,6 @@ function RunPill({
     ? (RUN_TOOL_VERB[currentTool.toolName] ?? currentTool.toolName)
     : word;
   const headTarget = currentTool ? runToolTarget(currentTool) : '';
-  // Desain: "Worked for 9.4s" saat settle, "Stopped after 9.4s" saat dihentikan.
   const durLabel = typeof processingMs === 'number' && processingMs >= 0
     ? `${(processingMs / 1000).toFixed(1)}s`
     : null;
@@ -3228,9 +3203,6 @@ function RunPill({
     })
     .filter((file): file is NonNullable<typeof file> => file !== null);
 
-  // Baris ke-4+ terdeteksi lewat offsetTop chip (offsetParent = .run-files).
-  // running/waiting ikut dependency: div hanya ter-render saat !running —
-  // saat settle, effect harus mengukur ulang pada box yang baru di-mount.
   useLayoutEffect(() => {
     if (filesOpen) {
       setFilesHidden(0);
@@ -3263,10 +3235,7 @@ function RunPill({
   const ribbonCells: RibbonCell[] = activity.flatMap((row, index): RibbonCell[] => {
     const key = `rc-${index}`;
     if (row.kind === 'activity' && row.segment.type === 'tool') {
-      // Waiting approval → sel pending berubah kuning (desain .s-wait).
       const st = waiting && row.segment.ok === undefined ? 'wait' : runToolStatus(row.segment, running);
-      // k-w = tool penulis (aksen), k-x = tool eksekusi (tinta pekat),
-      // netral = tool baca. fresh: animasi cellin saat sel baru muncul.
       const kindCls = RUN_WRITE_TOOLS.has(row.segment.toolName)
         ? 'k-w'
         : RUN_EXEC_TOOLS.has(row.segment.toolName)
@@ -3298,7 +3267,6 @@ function RunPill({
       }];
     }
     if (row.kind === 'interm' || (row.kind === 'activity' && row.segment.type === 'reasoning')) {
-      // Separator antar-fase: label = kalimat fase + jumlah step setelahnya.
       const phaseText = row.segment.type === 'text' || row.segment.type === 'reasoning' ? row.segment.text : '';
       let stepsAfter = 0;
       for (let j = index + 1; j < activity.length; j++) {
@@ -3320,8 +3288,6 @@ function RunPill({
     return () => window.clearTimeout(timer);
   }, [open]);
 
-  // Follow isi pill tiap event baru (tool call / text / reasoning) dan saat
-  // panel baru dibuka — hanya box pill, bukan layar thread.
   useEffect(() => {
     if (!open) return;
     scrollToBottom();
@@ -3980,8 +3946,7 @@ function CompactionCard({ turn, live, onDelete }: { turn: Turn; live: boolean; o
           headerId={`${bodyId}-head`}
           bodyId={`${bodyId}-body`}
         />
-        {/* Body stays mounted so the grid collapse animates BOTH ways —
-            mounting on open removes the transition's start state (snap). */}
+        {}
         <div className={cx('col', !open && 'shut')} aria-hidden={!open}>
           <div className="col-in">
             {turn.content ? (

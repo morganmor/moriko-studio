@@ -454,7 +454,6 @@ export async function resolveWithPermission(
     }
     return { absolute, relative: absolute, outside: false };
   }
-  // Addon Manager: addons-src/ is always accessible — even without a workspace.
   const addonsSrc = resolveAddonsSrcPath(raw);
   if (addonsSrc) {
     assertSelfHostAccess(addonsSrc.absolute, intent);

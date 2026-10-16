@@ -13,7 +13,7 @@ export type RpcHandler = (
   ctx: { actor: { kind: 'user' }; sessionId?: string },
 ) => unknown | Promise<unknown>;
 
-const handlers = new Map<string, RpcHandler>(); // key: addonId\0name
+const handlers = new Map<string, RpcHandler>();
 
 export function registerRpcHandler(addonId: string, name: string, handler: RpcHandler): () => void {
   const key = `${addonId}\u0000${name}`;

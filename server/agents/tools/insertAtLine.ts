@@ -40,8 +40,6 @@ export async function insertAtLineTool(args: Record<string, unknown>, ctx: Agent
   const crlf = content.includes('\r\n');
   const base = crlf ? content.replace(/\r\n/g, '\n') : content;
   // BUG (file kosong): base === '' dulu di-split jadi [''] sehingga append
-  // menghasilkan "\nhello" — baris kosong ekstra di baris 1. Sekarang file
-  // kosong = tidak ada baris ([]) dan trailing newline ditambahkan eksplisit.
   const rawLines = base === '' ? [] : base.split('\n');
   const view = rawLines.length > 1 && rawLines[rawLines.length - 1] === '' ? rawLines.slice(0, -1) : rawLines;
 
@@ -71,8 +69,6 @@ export async function insertAtLineTool(args: Record<string, unknown>, ctx: Agent
   }
 
   const at = insertAt - 1;
-  // Guard idempoten: panggilan insert_at_line ganda dengan blok identik di
-  // titik yang sama tidak menulis duplikat — dilaporkan sebagai sudah ada.
   const nonEmptyNew = newLines.filter((l) => l.trim().length > 0);
   if (nonEmptyNew.length >= 2) {
     const sliceAfter = view.slice(at, at + newLines.length).join('\n');

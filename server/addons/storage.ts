@@ -49,7 +49,6 @@ function load(key: string): StoreState {
       }
     }
   } catch {
-    // corrupt file → start empty rather than crash the addon host
   }
   state = { data, dirty: false, timer: null };
   stores.set(key, state);
@@ -67,7 +66,7 @@ function flush(key: string, state: StoreState): void {
     mkdirSync(path.dirname(key), { recursive: true });
     atomicWriteJson(key, state.data);
   } catch (error) {
-    state.dirty = true; // retry on next write/flush
+    state.dirty = true;
     console.error(`[addons] store flush failed for ${key}:`, error);
   }
 }
@@ -79,7 +78,6 @@ function schedule(key: string, state: StoreState): void {
     state.timer = null;
     flush(key, state);
   }, DEBOUNCE_MS);
-  // Keep the Node process alive for the pending flush only (not forever).
   state.timer.unref?.();
 }
 

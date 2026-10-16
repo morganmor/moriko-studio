@@ -1,18 +1,7 @@
-/* ════════════════════════════════════════════════════════════════════════
- * moriko-design-1 — CSS-first design system (no Tailwind).
- * Fase 3: @tailwind directives removed; Preflight replaced by design reset.
- * ════════════════════════════════════════════════════════════════════════ */
 
 @layer base {
-  /* ── moriko-design-1 — design tokens ────────────────────────────────────
-     RGB channel tokens + alpha scalars + derived tokens.
-     Mirrors design/*.html :root, .dark, .mocha blocks verbatim.
-     ──────────────────────────────────────────────────────────────────── */
 
-  /* accent split: light (--al) + dark (--ad) per accent swatch */
   :root{--al:234 88 12;--ad:249 115 22}
-  /* Input panel width: full-bleed below 780, grows gently with the viewport
-     (60vw) and caps at 900 — one token for every composer wrapper. */
   :root{--composer-w:clamp(780px,60vw,780px)}
   [data-accent=ember]{--al:234 88 12;--ad:249 115 22}
   [data-accent=sakura]{--al:219 39 119;--ad:244 114 182}
@@ -20,20 +9,15 @@
   [data-accent=ocean]{--al:2 132 199;--ad:56 189 248}
   [data-accent=violet]{--al:124 58 237;--ad:167 139 250}
 
-  /* font system */
   :root{--f-ui:"Inter",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--f-mono:"JetBrains Mono",ui-monospace,"Cascadia Code",Consolas,monospace;--f:var(--f-ui)}
   [data-font=system]{--f:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   [data-font=mono]{--f:var(--f-mono)}
 
-  /* radius tokens */
   :root{--r-sm:9px;--r-md:12px;--r-lg:16px;--r-xl:22px}
-  /* easing tokens */
   :root{--ease:cubic-bezier(.2,.8,.2,1);--spring:cubic-bezier(.34,1.56,.64,1)}
-  /* layout tokens */
   :root{--row:34px;--rail-w:260px;--dock-w:340px}
   [data-density=compact]{--row:30px}
 
-  /* light theme (warm paper) */
   :root,.scope-light{
     --c-canvas:246 244 241;--c-card:255 255 255;--c-panel:255 255 255;
     --c-pop:255 255 255;--c-field:250 248 246;--c-elev:255 237 224;
@@ -41,14 +25,11 @@
     --c-accent:var(--al);--c-accent-ink:255 255 255;--c-bubble:244 239 234;
     --c-shadow:60 40 20;--a-sh:.1;--c-hot:190 40 10;--c-dot:30 24 20;
     --c-paper:255 255 255;--c-danger:220 38 38;--c-ok:22 163 74;--c-warn:217 119 6;
-    /* soft = turunan accent (bukan literal per-theme) → ikut data-accent. */
     --c-accent-soft:color-mix(in srgb, rgb(var(--c-accent)) 14%, #fff);--c-rail-dot:140 146 158;
     --c-todo-high:220 38 38;--c-todo-medium:217 119 6;--c-todo-low:22 163 74;
-    /* Addon v2 notification host (A5) — center-top toasts. */
     --c-notify-bg:255 255 255;--c-notify-ink:30 24 20;--c-notify-line:232 226 220;
   }
 
-  /* dark theme (neutral charcoal + ember) */
   .dark,.scope-dark{
     --c-canvas:13 13 13;--c-card:21 21 21;--c-panel:26 26 26;
     --c-pop:30 30 30;--c-field:17 17 17;--c-elev:38 38 38;
@@ -60,7 +41,6 @@
     --c-notify-bg:30 30 30;--c-notify-ink:236 236 236;--c-notify-line:44 44 44;
   }
 
-  /* mocha theme (warm brown) */
   .mocha,.scope-mocha{
     --c-canvas:24 19 17;--c-card:33 27 24;--c-panel:38 31 28;
     --c-pop:44 36 32;--c-field:28 23 20;--c-elev:54 43 38;
@@ -74,7 +54,6 @@
   .swt{--c-accent:var(--al)}
   .dark .swt{--c-accent:var(--ad)}
 
-  /* derived tokens — computed from channel + alpha */
   :root,.scope-light,.scope-dark{
     --muted:rgb(var(--c-ink)/var(--a-muted));
     --faint:rgb(var(--c-ink)/var(--a-faint));
@@ -83,7 +62,6 @@
     --sh2:0 2px 6px rgb(var(--c-shadow)/var(--a-sh)),0 24px 60px -18px rgb(var(--c-shadow)/calc(var(--a-sh)*1.6));
   }
 
-  /* ── legacy token aliases (keep old names working during migration) ── */
   :root,.dark,.mocha{
     --c-surface:var(--c-paper);
     --c-elevated:var(--c-elev);
@@ -161,8 +139,6 @@
   }
 
   ::selection{background:rgb(var(--c-accent)/.28)}
-  /* Hidden scrollbars everywhere — wheel / touch / keyboard scrolling still
-     works. (User request 2026-10: panels look flush without bar gutters.) */
   *{scrollbar-width:none}
 
   ::-webkit-scrollbar {
@@ -184,16 +160,10 @@
   }
 }
 
-/* ---------------------------------------------------------------------------
- * moriko-design-1 — Component CSS
- * Ported verbatim from design/*.html. Pure CSS, no Tailwind.
- * --------------------------------------------------------------------------- */
 
-/* ── base utilities (design .ic, .grow, .min0, .center, .dim) ── */
 .ic{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .grow{flex:1}.min0{min-width:0;flex:1}.center{text-align:center}.dim{opacity:.5;pointer-events:none}
 
-/* ── ambient gradient orbs ── */
 .ambient{position:fixed;inset:0;pointer-events:none;z-index:0;overflow:hidden}
 .ambient span{position:absolute;width:46vmax;height:46vmax;border-radius:50%;background:radial-gradient(closest-side,rgb(var(--c-accent)/.13),transparent);animation:drift 28s ease-in-out infinite alternate}
 .ambient span:nth-child(1){left:-12vmax;top:-16vmax}
@@ -202,7 +172,6 @@
 @keyframes drift{to{transform:translate(6vmax,4vmax) scale(1.12)}}
 .no-amb .ambient{display:none}
 
-/* ── app shell ── */
 .app{position:relative;z-index:1;display:flex;height:100vh;height:100dvh;padding:10px 10px 10px 0}
 .rail{width:var(--rail-w);flex:none;display:flex;flex-direction:column;min-height:0;transition:width .32s var(--ease)}
 .rail-sm .rail{width:64px}
@@ -221,12 +190,9 @@
 .dock-in{width:var(--dock-w);height:100%;display:flex;flex-direction:column}
 .resizing,.resizing *{cursor:col-resize!important;user-select:none!important}
 .resizing .rail,.resizing .dock{transition:none}
-/* The fold eases its width 260ms — during a handle drag that lag made the
-   instantly-resized panel content spill past the fold's clipped edge. */
 .resizing .fold{transition:none}
 .scrim{position:fixed;inset:0;z-index:40;background:rgb(var(--c-shadow)/.45);backdrop-filter:blur(2px);opacity:0;pointer-events:none;transition:opacity .25s}
 
-/* ── brand / logo / wordmark ── */
 .brand{display:flex;align-items:center;gap:10px;height:52px;padding:0 2px}
 .logo{width:34px;height:34px;flex:none;border-radius:11px;background-color:rgb(var(--c-accent)/.12);background-position:center 58%;background-size:120%;background-repeat:no-repeat;image-rendering:pixelated;border:1px solid rgb(var(--c-accent)/.25);transition:transform .35s var(--spring)}
 .logo:hover{transform:rotate(-8deg) scale(1.06)}
@@ -247,7 +213,6 @@
 .col.shut{grid-template-rows:0fr}
 .col.shut>.col-in{visibility:hidden;transition:visibility 0s .3s}
 
-/* ── navigation rows ── */
 .nav{display:flex;align-items:center;gap:10px;width:100%;height:var(--row);padding:0 10px;border-radius:var(--r-sm);color:var(--muted);font-weight:500;transition:background .15s,color .15s}
 .nav:hover{background:rgb(var(--c-ink)/.06);color:rgb(var(--c-ink))}
 .nav span{flex:1;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -263,8 +228,6 @@
 .ws-h span{flex:1;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ws-in{padding-left:14px}
 .ws-empty{font-size:12px;color:var(--faint);padding:4px 12px 8px}
-/* BIND A FOLDER… (sidebar Workspace section) — gaya navsub agar menyatu
-   dengan daftar workspace di bawahnya; aksen mengikuti token tema. */
 .ws-bind{display:flex;align-items:center;gap:8px;width:100%;height:calc(var(--row) - 4px);padding:0 10px;border-radius:var(--r-sm);font-size:13px;color:var(--muted);transition:background .15s,color .15s}
 .ws-bind:hover{background:rgb(var(--c-ink)/.06);color:rgb(var(--c-ink))}
 .crow{display:flex;align-items:center;border-radius:var(--r-sm);position:relative}
@@ -295,14 +258,12 @@
 .dark .theme-tg .sun{opacity:0;transform:rotate(90deg) scale(.4)}
 .dark .theme-tg .moon{opacity:1;transform:none}
 
-/* ── icon button (.ib) ── */
 .ib{width:32px;height:32px;flex:none;display:grid;place-items:center;border-radius:var(--r-sm);color:var(--muted);transition:background .15s,color .15s,transform .15s}
 .ib:hover{background:rgb(var(--c-ink)/.07);color:rgb(var(--c-ink))}
 .ib:active{transform:scale(.92)}
 .ib.sm{width:28px;height:28px}.ib.xs{width:22px;height:22px;border-radius:6px}.ib.xs .ic{width:13px;height:13px}
 .ib[aria-expanded=true],.ib.on,.rail-mini .ib[aria-current=page],.rfoot .ib[aria-current=page]{background:rgb(var(--c-accent)/.14);color:rgb(var(--c-accent))}
 
-/* ── buttons (.btn) ── */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:34px;padding:0 14px;border-radius:var(--r-md);font-weight:600;background:rgb(var(--c-elev));border:1px solid var(--line);transition:background .15s,border-color .15s,transform .15s,box-shadow .2s;white-space:nowrap}
 .btn:hover{border-color:rgb(var(--c-accent)/.5)}
 .btn:active{transform:scale(.97)}
@@ -318,7 +279,6 @@
 .btn.xs .ic{width:13px;height:13px}
 .acts{display:flex;gap:6px;flex-wrap:wrap}
 
-/* ── topbar ── */
 .topbar{display:flex;align-items:center;gap:4px;height:54px;padding:0 10px;flex:none;border-bottom:1px solid transparent;transition:border-color .2s}
 .work.scrolled .topbar{border-bottom-color:var(--line)}
 .tb-title{display:flex;align-items:center;gap:8px;min-width:0;margin-left:4px}
@@ -326,7 +286,6 @@
 .title:not([readonly]):hover{border-color:var(--line)}
 .title:not([readonly]):focus{border-color:rgb(var(--c-accent)/.6);background:rgb(var(--c-field))}
 
-/* ── Council switcher (transparent dropdown below the title button) ── */
 .tb-title-col{display:flex;flex-direction:column;justify-content:center;min-width:0;flex:1;margin-left:4px;position:relative}
 .council-switch-wrap{position:absolute;top:100%;left:0;margin-top:1px;z-index:40}
 .council-switch{display:flex;align-items:center;gap:5px;max-width:min(340px,50vw);height:19px;padding:0 7px;border:1px solid transparent;border-radius:7px;background:none;color:var(--faint);font-size:11.5px;font-weight:500;outline:0}
@@ -343,7 +302,6 @@
 .bell.ringing .ic{animation:ring .8s var(--ease)}
 @keyframes ring{20%{transform:rotate(16deg)}40%{transform:rotate(-14deg)}60%{transform:rotate(8deg)}80%{transform:rotate(-4deg)}}
 
-/* ── views / pages ── */
 .views{flex:1;min-height:0;position:relative}
 .view{position:absolute;inset:0;overflow:auto;display:flex;flex-direction:column}
 .view.enter{animation:vin .38s var(--ease)}
@@ -354,7 +312,6 @@
 .page-head h2{margin:0;font-size:24px;letter-spacing:-.02em}
 .page-head p{margin:4px 0 0;color:var(--muted)}
 
-/* ── chat view / hero / suggestions ── */
 .chat-v{overflow:hidden}
 .chat-scroll{flex:1;min-height:0;overflow:auto;position:relative}
 .hero,.suggest{display:none}
@@ -373,7 +330,6 @@
 .greet{margin:8px 0 6px;font-size:26px;letter-spacing:-.025em;font-weight:700}
 .greet-sub{margin:0;color:var(--muted);max-width:480px}
 
-/* ── thread / messages ── */
 .thread{max-width:780px;margin:0 auto;padding:18px 28px 24px;display:flex;flex-direction:column;gap:22px}
 .thread.swap{animation:vin .3s var(--ease)}
 .msg{display:flex;gap:12px;animation:mIn .35s var(--ease) both;position:relative}
@@ -381,9 +337,6 @@
 @keyframes mIn{from{opacity:0;transform:translateY(10px)}}
 .msg.u{flex-direction:column;align-items:flex-end}
 .ub{max-width:82%;padding:10px 14px;border-radius:18px 18px 6px 18px;background:rgb(var(--c-bubble));border:1px solid var(--line);white-space:pre-line;word-wrap:break-word}
-/* USER BUBBLE PROSE — white-space: normal stops pre-line from turning the
-   markdown's inter-block "\n" text nodes into empty lines (the extra gaps).
-   Single Enter = <br> (softBreaksToHard), double Enter = paragraph gap. */
 .ub .md-body{font-size:14px;line-height:1.5;white-space:normal}
 .ub .md-body > * + *{margin-top:0.85em}
 .ub .md-body li{margin-top:0}
@@ -396,7 +349,6 @@
 .ufile .ic{width:13px;height:13px}
 .av{width:30px;height:30px;flex:none;border-radius:10px;background-color:rgb(var(--c-accent)/.12);background-image:var(--img-cat);background-position:center 58%;background-size:120%;background-repeat:no-repeat;image-rendering:pixelated;border:1px solid rgb(var(--c-accent)/.25)}
 .msg.live .av{animation:bob 1.2s ease-in-out infinite}
-/* Avatar absolut di gutter: hanya saat ada ruang; di layar sempit disembunyikan. */
 @media (max-width:900px){.msg>.av{display:none}}
 @keyframes bob{50%{transform:translateY(-3px)}}
 .ab{flex:1;min-width:0}
@@ -409,7 +361,6 @@
 .flash .ub,.flash .av{animation:flash 1.1s var(--ease)}
 @keyframes flash{30%{box-shadow:0 0 0 4px rgb(var(--c-accent)/.35)}}
 
-/* ── markdown (.md) ── */
 .md{line-height:1.65;word-wrap:break-word}
 .md>:first-child{margin-top:0}.md>:last-child{margin-bottom:0}
 .md p{margin:0 0 .8em}
@@ -425,7 +376,6 @@
 .md th,.md td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left}
 .md th{font-weight:600;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
 
-/* ── code block (.cb) ── */
 .cb{margin:0 0 .9em;border:1px solid var(--line);border-radius:var(--r-md);overflow:hidden;background:rgb(var(--c-field))}
 .cb-h{display:flex;align-items:center;justify-content:space-between;height:34px;padding:0 6px 0 12px;border-bottom:1px solid var(--line);font:500 11.5px var(--f-mono);color:var(--faint)}
 .cb-h .btn{height:24px}
@@ -434,7 +384,6 @@
 .caret{display:inline-block;width:7px;height:1.05em;margin-left:2px;vertical-align:-2px;border-radius:2px;background:rgb(var(--c-accent));animation:blink 1s steps(2) infinite}
 @keyframes blink{50%{opacity:0}}
 
-/* ── DESIGN-1 canvas render: live streaming wrap + code block card ── */
 .md-live > :last-child{margin-bottom:0}
 .md-live-tail{position:relative}
 .md-live-tail > :last-child{margin-bottom:0}
@@ -442,7 +391,6 @@
 .md-cb .cb-h .btn .ic{width:13px;height:13px}
 .md-cb pre code{display:block;white-space:pre}
 
-/* ── tool pill (.pill2) ── */
 .pill2{display:inline-flex;flex-direction:column;max-width:100%;margin-bottom:10px;border:1px solid var(--line);border-radius:14px;background:rgb(var(--c-field));overflow:hidden}
 .pill-h{display:flex;align-items:center;gap:8px;height:32px;padding:0 12px;font-size:12.5px;color:var(--muted)}
 .pill2.run .pill-h .pl{background:linear-gradient(90deg,var(--muted) 30%,rgb(var(--c-accent)) 50%,var(--muted) 70%);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:shine 1.6s linear infinite}
@@ -457,7 +405,6 @@
 .pill-b li .ic{width:13px;height:13px;color:rgb(var(--c-ok))}
 .pill-b li .spin{width:11px;height:11px}
 
-/* ── checkpoint rail (.cprail / .cp) ── */
 .cprail{position:absolute;right:14px;top:50%;translate:0 -50%;z-index:5;display:flex;flex-direction:column;gap:6px;padding:8px 6px;border-radius:999px;background:rgb(var(--c-pop)/.8);border:1px solid var(--line);backdrop-filter:blur(8px);opacity:0;pointer-events:none;transition:opacity .25s}
 .cprail.show{opacity:1;pointer-events:auto}
 .cp{position:relative;width:12px;height:12px;display:grid;place-items:center}
@@ -467,7 +414,6 @@
 .cp::after{content:attr(data-label);position:absolute;right:20px;top:50%;translate:0 -50%;max-width:240px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:4px 9px;border-radius:8px;background:rgb(var(--c-pop));border:1px solid var(--line);box-shadow:var(--sh2);font-size:12px;opacity:0;pointer-events:none;transition:opacity .15s}
 .cp:hover::after,.cp:focus-visible::after{opacity:1}
 
-/* ── composer dock (.cdock / .tobot / .mode) ── */
 .cdock{position:relative;flex:none;width:100%;max-width:var(--composer-w);margin:0 auto;padding:0 28px 14px}
 .tobot{position:absolute;bottom:calc(100% + 8px);left:0;right:0;margin:0 auto;width:max-content;display:flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:999px;background:rgb(var(--c-pop));border:1px solid var(--line);box-shadow:var(--sh2);font-size:12.5px;font-weight:500;animation:mIn .25s var(--ease)}
 .tobot .nd{display:none;width:7px;height:7px;border-radius:50%;background:rgb(var(--c-accent))}
@@ -475,7 +421,6 @@
 .mode{display:flex;align-items:center;gap:4px;height:22px;margin:0 0 6px 6px;font:700 10.5px/1 var(--f-mono);letter-spacing:.18em;color:rgb(var(--c-accent))}
 .mode .cur{width:6px;height:11px;background:currentColor;animation:blink 1s steps(2) infinite}
 
-/* ── composer ── */
 .composer{position:relative;border:1px solid var(--line);border-radius:var(--r-xl);background:rgb(var(--c-panel));box-shadow:var(--sh1);transition:border-color .25s,box-shadow .25s}
 .composer:focus-within{border-color:rgb(var(--c-accent)/.55);box-shadow:var(--sh1),0 0 0 4px rgb(var(--c-accent)/.1)}
 .composer.agent{border-color:rgb(var(--c-accent)/.4);box-shadow:var(--sh1),0 0 32px -10px rgb(var(--c-accent)/.55)}
@@ -530,7 +475,6 @@
 .hint{display:flex;justify-content:center;gap:14px;padding-top:8px;font-size:11.5px;color:var(--faint);opacity:0;transition:opacity .2s}
 .cdock:focus-within .hint{opacity:1}
 
-/* ── suggestion cards ── */
 .suggest{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;width:100%;max-width:var(--composer-w);margin:6px auto 0;padding:0 28px 24px}
 .sg{position:relative;display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:var(--r-lg);border:1px solid var(--line);background:rgb(var(--c-panel));text-align:left;overflow:hidden;transition:transform .25s var(--ease),border-color .2s;animation:mIn .4s var(--ease) both}
 .sg:nth-child(2){animation-delay:.05s}.sg:nth-child(3){animation-delay:.1s}.sg:nth-child(4){animation-delay:.15s}
@@ -541,7 +485,6 @@
 .spot::after{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(240px circle at var(--mx,50%) var(--my,50%),rgb(var(--c-accent)/.12),transparent 60%);opacity:0;transition:opacity .25s}
 .spot:hover::after{opacity:1}
 
-/* ── popovers / menus ── */
 .pop{position:fixed;z-index:50;left:0;top:0;min-width:220px;max-width:min(340px,calc(100vw - 16px));max-height:min(480px,calc(100vh - 16px));overflow:auto;padding:6px;border-radius:var(--r-lg);background:rgb(var(--c-pop));border:1px solid var(--line);box-shadow:var(--sh2);opacity:0;visibility:hidden;transform:translateY(var(--oy,4px)) scale(.97);transform-origin:var(--to,top left);transition:opacity .16s,transform .2s var(--ease),visibility 0s .2s}
 .pop.wide{min-width:300px;max-width:min(380px,calc(100vw - 16px))}
 .pop.open{opacity:1;visibility:visible;transform:none;transition:opacity .16s,transform .2s var(--ease)}
@@ -563,7 +506,6 @@
 .tip{position:fixed;z-index:90;left:0;top:0;max-width:260px;padding:5px 9px;border-radius:8px;background:rgb(var(--c-ink));color:rgb(var(--c-canvas));font-size:12px;font-weight:500;pointer-events:none;opacity:0;transform:translateY(3px);transition:opacity .12s,transform .12s}
 .tip.show{opacity:1;transform:none}
 
-/* ── dock ── */
 .dock-in{padding:0}
 .dock-head{display:flex;align-items:center;gap:6px;height:54px;padding:0 6px 0 4px;flex:none}
 .dswitch{display:flex;align-items:center;gap:8px;height:34px;padding:0 10px;border-radius:var(--r-md);font-weight:600}
@@ -579,7 +521,6 @@
 .lab-row .lab{margin:0}
 .hint2{margin:8px 0 0;font-size:12px;color:var(--faint);line-height:1.5}
 
-/* ── model card ── */
 .mc-top{display:flex;align-items:center;gap:10px}
 .mc-top .min0{display:flex;flex-direction:column}
 .mc-top b{font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -589,17 +530,14 @@
 .cap{font-size:11px;font-weight:500;padding:3px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
 .cap.a{border-color:rgb(var(--c-accent)/.4);color:rgb(var(--c-accent));background:rgb(var(--c-accent)/.08)}
 
-/* ── segmented control (.seg) ── */
 .seg{position:relative;display:flex;padding:3px;border-radius:var(--r-md);background:rgb(var(--c-field));border:1px solid var(--line)}
 .seg button{position:relative;z-index:1;flex:1;height:30px;border-radius:9px;font-size:13px;font-weight:500;color:var(--muted);transition:color .2s}
 .seg button[aria-checked=true]{color:rgb(var(--c-ink))}
 .seg .ind{position:absolute;left:0;top:3px;bottom:3px;width:var(--w,0);transform:translateX(var(--x,0));border-radius:9px;background:rgb(var(--c-elev));box-shadow:var(--sh1);transition:transform .3s var(--spring),width .3s var(--spring)}
 .seg.sm button{height:26px;font-size:12px}
-/* Tip-wrapped option: the wrapper span takes the flex slot, the button fills it. */
 .seg .seg-opt{flex:1;min-width:0;display:inline-flex}
 .seg .seg-opt>button{width:100%}
 
-/* ── model row / switch / accordion ── */
 .mrow{display:flex;align-items:center;gap:8px;width:100%;margin-top:12px;padding:10px 2px 0;border-top:1px solid var(--line);color:var(--muted);font-size:13px}
 .mrow span{flex:1;text-align:left}
 .mrow b{font-weight:600;color:rgb(var(--c-ink))}
@@ -619,7 +557,6 @@
 .acc.sub{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
 .acc.sub .acc-t{font-size:13px}
 
-/* ── form field (.field) ── */
 .field{width:100%;border:1px solid var(--line);border-radius:var(--r-md);background:rgb(var(--c-field));padding:10px 12px;outline:0;resize:vertical;line-height:1.5;transition:border-color .2s,box-shadow .2s}
 .field:focus{border-color:rgb(var(--c-accent)/.6);box-shadow:0 0 0 3px rgb(var(--c-accent)/.12)}
 .field.flash{animation:fflash .8s var(--ease)}
@@ -629,7 +566,6 @@
 .saved .ic{width:13px;height:13px}
 .saved.busy{color:var(--faint)}
 
-/* ── range inputs ── */
 .rng{display:grid;grid-template-columns:1fr auto;align-items:center;gap:6px 10px;margin-top:12px}
 .rng:first-of-type{margin-top:0}
 .rng label{font-size:13px;color:var(--muted)}
@@ -646,7 +582,6 @@ input[type=range]::-moz-range-thumb{width:13px;height:13px;border-radius:50%;bac
 input[type=range]:hover::-webkit-slider-thumb,input[type=range]:active::-webkit-slider-thumb{transform:scale(1.2)}
 .trk-wrap input[type=range]::-webkit-slider-runnable-track{background:linear-gradient(90deg,rgb(var(--c-accent)) var(--fill,50%),transparent var(--fill,50%)),rgb(var(--c-ink)/.14)}
 
-/* Dark inset well behind the sampling sliders (reference right-sidebar look). */
 .slider-well{
   height:24px;
   display:flex;
@@ -658,7 +593,6 @@ input[type=range]:hover::-webkit-slider-thumb,input[type=range]:active::-webkit-
 }
 .slider-well input[type=range]{flex:1;min-width:0}
 
-/* ── tool row / status pill / stepper ── */
 .trow{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--line)}
 .lab+.trow,.pop-h+.trow{border-top:0}
 .trow .min0{display:flex;flex-direction:column}
@@ -675,7 +609,6 @@ input[type=range]:hover::-webkit-slider-thumb,input[type=range]:active::-webkit-
 .stepper button:hover:not(:disabled){background:rgb(var(--c-ink)/.07);color:rgb(var(--c-ink))}
 .stepper output{min-width:26px;text-align:center;font:600 12.5px var(--f-mono)}
 
-/* ── KV rows / tree / diff ── */
 .mrow2{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0 4px;font-size:13px;color:var(--muted)}
 .kvrows{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:12.5px;margin-bottom:12px}
 .kvrows span:nth-child(odd){color:var(--faint)}
@@ -696,7 +629,6 @@ input[type=range]:hover::-webkit-slider-thumb,input[type=range]:active::-webkit-
 .dl.d{background:rgb(var(--c-danger)/.1);color:rgb(var(--c-danger));text-decoration:line-through;text-decoration-color:rgb(var(--c-danger)/.4)}
 .dl.c{color:var(--faint)}
 
-/* ── empty state ── */
 .empty:not(.view){display:flex;flex-direction:column;align-items:center;text-align:center;gap:6px;padding:18px 18px;border:1px dashed transparent;border-radius:var(--r-lg);color:var(--muted)}
 .empty:not(.view) b{color:rgb(var(--c-ink));font-size:15px}
 .empty:not(.view) p{margin:0 0 6px;font-size:13px;max-width:360px}
@@ -704,12 +636,10 @@ input[type=range]:hover::-webkit-slider-thumb,input[type=range]:active::-webkit-
 .eic .ic{width:22px;height:22px}
 .eic .ic svg{display:block;width:100%;height:100%}
 
-/* ── search ── */
 .search{display:flex;align-items:center;gap:10px;height:42px;padding:0 14px;margin-bottom:18px;border-radius:var(--r-md);border:1px solid var(--line);background:rgb(var(--c-field));color:var(--faint);transition:border-color .2s,box-shadow .2s}
 .search input{flex:1;min-width:0;border:0;outline:0;background:none;font-size:14px;color:rgb(var(--c-ink))}
 .search:focus-within{border-color:rgb(var(--c-accent)/.6);box-shadow:0 0 0 3px rgb(var(--c-accent)/.12)}
 
-/* ── history list ── */
 .hg{margin-bottom:18px}
 .hg-h{font-size:11.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin:0 0 6px 4px}
 .hg-l{border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden;background:rgb(var(--c-panel))}
@@ -729,7 +659,6 @@ mark{background:rgb(var(--c-accent)/.25);color:inherit;border-radius:3px;padding
 .thumbs{display:flex;padding-left:8px}
 .thumbs img{width:34px;height:34px;object-fit:cover;border-radius:9px;margin-left:-8px;border:2px solid rgb(var(--c-panel))}
 
-/* ── KPI / dashboard ── */
 .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:12px}
 .kpi{position:relative;overflow:hidden;display:flex;flex-direction:column;gap:4px;padding:16px;border-radius:var(--r-lg);border:1px solid var(--line);background:rgb(var(--c-panel));transition:transform .25s var(--ease)}
 .kpi:hover{transform:translateY(-2px)}
@@ -759,7 +688,6 @@ mark{background:rgb(var(--c-accent)/.25);color:inherit;border-radius:3px;padding
 .xax span{flex:1;text-align:center;white-space:nowrap;overflow:hidden}
 .sumline{font-variant-numeric:tabular-nums}
 
-/* ── usage / provider rows ── */
 .urow{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:10px;padding:10px 6px;border-top:1px solid var(--line);border-radius:8px;cursor:pointer;transition:opacity .2s,background .15s}
 .urow:first-child{border-top:0}
 .urow:hover{background:rgb(var(--c-ink)/.04)}
@@ -791,7 +719,6 @@ mark{background:rgb(var(--c-accent)/.25);color:inherit;border-radius:3px;padding
 .meter{flex:1;max-width:220px;height:8px;border-radius:4px;background:rgb(var(--c-ink)/.08);overflow:hidden}
 .meter i{display:block;height:100%;width:var(--w,0%);background:linear-gradient(90deg,rgb(var(--c-ok)),rgb(var(--c-accent)))}
 
-/* ── session form / image studio ── */
 .sform{position:relative;padding:12px;border-radius:var(--r-xl);border:1px solid var(--line);background:rgb(var(--c-panel));box-shadow:var(--sh1);margin-bottom:20px;transition:border-color .2s,box-shadow .2s}
 .sform:focus-within{border-color:rgb(var(--c-accent)/.55);box-shadow:var(--sh1),0 0 0 4px rgb(var(--c-accent)/.1)}
 .sform.shake{animation:shake .4s}
@@ -804,7 +731,6 @@ mark{background:rgb(var(--c-accent)/.25);color:inherit;border-radius:3px;padding
 .sess-h{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
 .sess-h b{font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
-/* ── gallery tiles ── */
 .tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
 .tile{position:relative;border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--line);background:rgb(var(--c-field));aspect-ratio:var(--ar,1);cursor:zoom-in;animation:mIn .4s var(--ease) both}
 .tile.settled{animation:none}
@@ -821,7 +747,6 @@ mark{background:rgb(var(--c-accent)/.25);color:inherit;border-radius:3px;padding
 .tile.drag{opacity:.4}.tile.over{outline:2px dashed rgb(var(--c-accent));outline-offset:3px}
 .samples{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
 
-/* ── image cards (design/image-viewer.html .grid/.card → history + gallery) ── */
 .icards{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}
 .icard{position:relative;padding:0;aspect-ratio:4/3;overflow:hidden;background:rgb(var(--c-field));border:1px solid var(--line);border-radius:var(--r-md);cursor:zoom-in;transition:border-color .2s,transform .2s var(--ease);animation:mIn .4s var(--ease) backwards}
 .icard:hover{border-color:rgb(var(--c-ink)/.3);transform:translateY(-2px)}
@@ -834,7 +759,6 @@ mark{background:rgb(var(--c-accent)/.25);color:inherit;border-radius:3px;padding
 .icard.ghost span{font-size:12px;color:var(--faint)}
 .tren{width:100%;height:30px;padding:0 10px;border:1px solid rgb(var(--c-accent)/.6);border-radius:var(--r-sm);background:rgb(var(--c-pop));outline:0;font-size:13px;color:rgb(var(--c-ink))}
 
-/* ── modal ── */
 .modal{position:fixed;inset:0;z-index:70;display:flex;align-items:center;justify-content:center;padding:20px;background:rgb(var(--c-shadow)/.45);backdrop-filter:blur(6px);opacity:0;visibility:hidden;transition:opacity .2s,visibility 0s .2s}
 .modal.open{opacity:1;visibility:visible;transition:opacity .2s}
 .mpanel{width:min(560px,100%);max-height:calc(100vh - 40px);display:flex;flex-direction:column;border-radius:var(--r-xl);background:rgb(var(--c-pop));border:1px solid var(--line);box-shadow:var(--sh2);transform:translateY(10px) scale(.97);transition:transform .3s var(--spring)}
@@ -857,7 +781,6 @@ mark{background:rgb(var(--c-accent)/.25);color:inherit;border-radius:3px;padding
 .pi b{color:rgb(var(--c-accent))}
 .pal-f{display:flex;gap:16px;padding:10px 16px;border-top:1px solid var(--line);font-size:11.5px;color:var(--faint)}
 
-/* ── keyboard shortcuts dialog (sidebar footer / `?`) ── */
 .kbd-groups{display:flex;flex-direction:column;gap:6px}
 .kbd-list{list-style:none;margin:0;padding:0 0 6px}
 .kbd-row{display:flex;align-items:center;gap:12px;padding:7px 4px;border-radius:var(--r-sm)}
@@ -865,7 +788,6 @@ mark{background:rgb(var(--c-accent)/.25);color:inherit;border-radius:3px;padding
 .kbd-row kbd{flex:none;min-width:86px;text-align:center}
 .kbd-row span{font-size:13px;color:var(--muted)}
 
-/* ── settings ── */
 .set-sec+.set-sec{margin-top:20px}
 .themes{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 .thc{display:flex;flex-direction:column;gap:6px;align-items:center;font-size:12.5px;font-weight:500;color:var(--muted)}
@@ -891,7 +813,6 @@ mark{background:rgb(var(--c-accent)/.25);color:inherit;border-radius:3px;padding
 .keys{display:grid;grid-template-columns:1fr auto;gap:10px 16px;align-items:center;font-size:13px}
 .keys>span:nth-child(even){display:flex;gap:4px;justify-content:flex-end}
 
-/* ── settings sidebar+panel layout (design panel-settings) ── */
 .modal-panel:has(.set-body) .mb{padding:0;overflow:hidden}
 .set-nav{display:flex;flex-direction:column;gap:2px;padding:10px 8px;border-right:1px solid var(--line);min-width:0}
 .set-nav .gl{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);padding:10px 10px 4px}
@@ -913,9 +834,7 @@ mark{background:rgb(var(--c-accent)/.25);color:inherit;border-radius:3px;padding
   .set-nav button{width:auto;white-space:nowrap}
 }
 
-/* (legacy modal lightbox styles — replaced by the image viewer section) */
 
-/* ── toasts ── */
 #toasts{position:fixed;right:16px;bottom:16px;z-index:80;display:flex;flex-direction:column;gap:8px;align-items:flex-end;pointer-events:none}
 .toast{position:relative;overflow:hidden;display:flex;align-items:center;gap:10px;min-width:260px;max-width:min(400px,calc(100vw - 32px));padding:10px 10px 10px 12px;border-radius:var(--r-lg);background:rgb(var(--c-pop));border:1px solid var(--line);box-shadow:var(--sh2);pointer-events:auto;animation:tIn .35s var(--spring)}
 .toast.out{animation:tOut .2s var(--ease) forwards}
@@ -929,7 +848,6 @@ mark{background:rgb(var(--c-accent)/.25);color:inherit;border-radius:3px;padding
 .toast:hover .tprog{animation-play-state:paused}
 @keyframes tprog{to{transform:scaleX(0)}}
 
-/* ── notices ── */
 .nt-list{max-height:340px;overflow:auto}
 .nt{display:flex;gap:10px;padding:9px 10px;border-radius:var(--r-sm)}
 .nt:hover{background:rgb(var(--c-ink)/.05)}
@@ -939,7 +857,6 @@ mark{background:rgb(var(--c-accent)/.25);color:inherit;border-radius:3px;padding
 .nt b{font-size:13px;font-weight:500}
 .nt span{font-size:11.5px;color:var(--faint)}
 
-/* ── context usage popover ── */
 .cx{min-width:280px;padding:6px 6px 4px}
 .cx-top{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px}
 .cx-top b{font-size:22px;letter-spacing:-.02em}
@@ -954,7 +871,6 @@ mark{background:rgb(var(--c-accent)/.25);color:inherit;border-radius:3px;padding
 .crow2 b{font:600 12px var(--f-mono)}
 .cx-f{margin-top:8px;padding-top:8px;border-top:1px solid var(--line);font-size:11.5px;color:var(--faint)}
 
-/* ── model picker ── */
 .mp-search{display:flex;align-items:center;gap:8px;height:36px;padding:0 10px;margin:2px 2px 6px;border-radius:var(--r-sm);border:1px solid var(--line);background:rgb(var(--c-field));color:var(--faint)}
 .mp-search input{flex:1;min-width:0;border:0;outline:0;background:none}
 .mp-list{max-height:260px;overflow:auto}
@@ -972,28 +888,22 @@ mark{background:rgb(var(--c-accent)/.25);color:inherit;border-radius:3px;padding
 .es:hover{color:rgb(var(--c-ink))}
 .es[aria-checked=true]{background:rgb(var(--c-accent));border-color:transparent;color:rgb(var(--c-accent-ink))}
 
-/* ── mobile watching / QR ── */
 .qr{width:180px;margin:6px auto;padding:10px;border-radius:14px;background:rgb(var(--c-paper))}
 .qr img{display:block;width:100%;image-rendering:pixelated}
 .mob-acts{display:flex;gap:6px;justify-content:center;padding:10px 4px 4px}
 
-/* ── kbd ── */
 kbd{font:500 10.5px/1 var(--f-mono);padding:3px 5px;border-radius:5px;border:1px solid var(--line);background:rgb(var(--c-field));color:var(--muted);white-space:nowrap}
 code{font-family:var(--f-mono)}
 
-/* ── design .cdock: the composer dock's spacing (design padding:0 28px 14px) ── */
 .composer-shell{padding:0 28px 14px}
 
-/* ── utilities kept alive after the Tailwind removal (Fase 3) ── */
 .w-full{width:100%}.min-w-0{min-width:0}.h-4{height:16px}.w-4{width:16px}
 .order-first{order:-9999}.ml-auto{margin-left:auto}
 .relative{position:relative}.absolute{position:absolute}.fixed{position:fixed}
 .hidden{display:none}.grid{display:grid}.isolate{isolation:isolate}\n.break-words{overflow-wrap:break-word}.whitespace-pre-wrap{white-space:pre-wrap}
 
-/* ── design .view.enter — views slide in on switch ── */
 .view-enter{animation:vin .38s var(--ease)}
 
-/* ── responsive ── */
 @media (max-width:1100px){
   .dock{position:fixed;right:0;top:0;bottom:0;z-index:45;width:min(380px,92vw)!important;opacity:1!important;padding:10px;transform:translateX(105%);transition:transform .32s var(--ease)}
   .dock-in{width:100%;border-radius:var(--r-xl);background:rgb(var(--c-canvas));border:1px solid var(--line);box-shadow:var(--sh2);padding:0 8px}
@@ -1033,16 +943,11 @@ code{font-family:var(--f-mono)}
   .tiles{grid-template-columns:repeat(2,1fr)}
 }
 
-/* ── reduced motion ── */
 .reduce *,.reduce *::before,.reduce *::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}
 .reduce .toast .tprog{animation-duration:var(--dur,4s)!important}
 .reduce .ambient{display:none}
 ::view-transition-old(root),::view-transition-new(root){animation:none;mix-blend-mode:normal}
 
-/* ════════════════════════════════════════════════════════════════════════
- * Legacy component aliases — keep existing Tailwind-based components working
- * during the migration window (Fase 3 will remove these).
- * ════════════════════════════════════════════════════════════════════════ */
 .surface-card{border-radius:var(--r-lg);border:1px solid var(--line);background:rgb(var(--c-paper))}
 .user-bubble{background-color:rgb(var(--c-bubble))}
 .icon-button{display:inline-flex;width:32px;height:32px;flex-shrink:0;align-items:center;justify-content:center;border-radius:var(--r-sm);color:var(--muted);transition:background .15s,color .15s}
@@ -1095,9 +1000,6 @@ code{font-family:var(--f-mono)}
 .md-body > * + * {
   margin-top: 0.85em;
 }
-/* DESIGN-1: margin ramping 0–1em — p tanpa margin UA default (15px),
-   spacing antar-blok tetap dari `> * + *`; blok pertama/terakhir dan
-   isi blockquote rata tepi agar box aksen tidak "gemuk". */
 .md-body p {
   margin: 0 0 0.8em;
 }
@@ -1307,12 +1209,6 @@ code{font-family:var(--f-mono)}
   overscroll-behavior: contain;
 }
 
-/* DIFF PANEL · split mode: muat scrollbar HORIZONTAL yang bertema — global
-   hide-scrollbars (user request 2026-10) mematikan SEMUA bar, tapi diff split
-   nyaris selalu lebih lebar dari dock 340px dan tanpa indikator isi memotong
-   di tengah kata tanpa alasan terlihat. Bar muncul hanya saat perlu
-   (scrollbar-gutter terlalu rakus untuk konten pas), thumb pakai token tema
-   agar terbaca di light/dark/mocha. */
 .sd-scroll {
   overflow-x: auto;
   scrollbar-width: auto;
@@ -1346,10 +1242,6 @@ code{font-family:var(--f-mono)}
 .cv-auto {
   content-visibility: auto;
   contain-intrinsic-size: auto 160px;
-  /* content-visibility = contain:layout style paint — painting dipotong di box
-     cv-auto yang mulai SETELAH padding thread (28px). Gutter 44px diselipkan
-     ke dalam box: avatar 34px + 10px jarak; margin -44 + padding 44 saling
-     meniadakan → posisi konten TIDAK berubah. */
   margin-left: -44px;
   padding-left: 44px;
 }
@@ -1455,11 +1347,8 @@ code{font-family:var(--f-mono)}
   isolation: isolate;
 }
 
-/* ── COMPACTION CHECKPOINT CARD (design/Compaction-Redesign.html) ────── */
-/* The design's stronger hairline, derived from theme ink per theme. */
 .cp-wrap{--line-strong:rgb(var(--c-ink)/.22)}
 
-/* Marker hairline with glowing accent dot. */
 .cp-marker{display:flex;align-items:center;gap:12px;margin:10px 0;
   font:500 11px/1 var(--f-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 .cp-marker::before,.cp-marker::after{content:"";height:1px;flex:1}
@@ -1469,7 +1358,6 @@ code{font-family:var(--f-mono)}
 .cp-marker i{width:6px;height:6px;border-radius:50%;background:rgb(var(--c-accent));
   box-shadow:0 0 0 3px rgb(var(--c-accent)/.12),0 0 12px rgb(var(--c-accent)/.55)}
 
-/* Card shell: accent spine on the left, elevated gradient surface. */
 .cp-card{position:relative;overflow:hidden;border:1px solid var(--line);border-radius:14px;
   background:linear-gradient(180deg,rgb(var(--c-elev)/.55),rgb(var(--c-card)));
   transition:border-color .2s}
@@ -1477,7 +1365,6 @@ code{font-family:var(--f-mono)}
   background:linear-gradient(180deg,rgb(var(--c-accent)),transparent 85%)}
 .cp-wrap:hover .cp-card,.cp-wrap[data-open="true"] .cp-card{border-color:var(--line-strong)}
 
-/* Header: icon tile + titles + stat chips + actions. */
 .cp-head{display:flex;align-items:stretch}
 .cp-toggle{appearance:none;background:none;border:0;color:inherit;font:inherit;text-align:left;cursor:pointer;
   flex:1;min-width:0;display:flex;align-items:center;gap:12px;padding:13px 8px 13px 18px}
@@ -1501,12 +1388,10 @@ code{font-family:var(--f-mono)}
 .cp-head .chev{transition:transform .25s}
 .cp-wrap[data-open="true"] .cp-head .chev{transform:rotate(180deg)}
 
-/* Delete confirmation strip. */
 .cp-confirm{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 18px;
   border-top:1px solid rgb(var(--c-danger)/.25);background:rgb(var(--c-danger)/.06);font:12.5px var(--f)}
 .cp-confirm span{flex:1;min-width:180px;color:rgb(var(--c-ink))}
 
-/* Collapsed peek: lead sentence + numbered section chips (grid 1fr→0fr). */
 .cp-peek{display:grid;grid-template-rows:1fr;transition:grid-template-rows .3s var(--ease)}
 .cp-wrap[data-open="true"] .cp-peek{grid-template-rows:0fr}
 .cp-peek-in{overflow:hidden;min-height:0}
@@ -1521,7 +1406,6 @@ code{font-family:var(--f-mono)}
   border:1px solid var(--line);border-radius:999px;padding:5px 10px}
 .cp-toc-chip span{color:rgb(var(--c-accent));opacity:.85}
 
-/* Open body: numbered sections, clamped items. */
 .cp-body-in{border-top:1px solid var(--line)}
 .cp-scroll{position:relative;max-height:min(62vh,520px);overflow:auto;padding:4px 18px 16px 22px;
   scrollbar-width:thin;
@@ -1697,18 +1581,16 @@ code{font-family:var(--f-mono)}
   }
 }
 
-/* ── RUN PILL (Moriko-Design2-canvas-full.html §.run, line 289–355) ── */
 .run {
   margin: 0 0 14px;
   border: 1px solid rgb(var(--c-line));
-  border-radius: 10px; /* --r-md */
+  border-radius: 10px;
   background: rgb(var(--c-field));
   container: run / inline-size;
   overflow: clip;
   transition: border-color 0.2s;
 }
 .run.live { border-color: rgb(var(--c-accent) / 0.35); }
-/* Waiting approval — border kuning seperti .run.waiting desain. */
 .run.waiting { border-color: rgb(var(--c-warn) / 0.6); }
 .run-head {
   display: flex;
@@ -1730,7 +1612,6 @@ code{font-family:var(--f-mono)}
   text-underline-offset: 3px;
 }
 .run-head .chev { color: rgb(var(--c-ink) / 0.42); flex-shrink: 0; }
-/* Thought line di atas pill — "Reasoning · 4.2s" ala desain .thought. */
 .thought {
   display: flex;
   align-items: center;
@@ -1748,10 +1629,6 @@ code{font-family:var(--f-mono)}
 .st-w { color: rgb(var(--c-warn)); }
 .st-e { color: rgb(var(--c-danger)); }
 .st-s { color: rgb(var(--c-ink) / 0.42); }
-/* Pixel spinner (2026-10) — cincin 8 piksel 2px pada grid 12px + inti bernapas.
-   Piksel SELALU lurus di grid: geraknya gelombang opacity + glow yang berjalan
-   mengelilingi cincin (pxwave), bukan rotasi. Rotasi kotak piksel (pxs lama,
-   steps(4)) membuat tepinya blur begitu mendarat di 45°. */
 .pxspin {
   position: relative;
   display: inline-block;
@@ -1767,8 +1644,6 @@ code{font-family:var(--f-mono)}
   opacity: 0.12;
   animation: pxwave 0.9s linear infinite;
 }
-/* Indeks anak = posisi cincin, urut berlawanan jarum jam: delay negatif
-   memajukan fase, sehingga kepala gelombang (fase 0) berjalan searah jarum jam. */
 .pxspin i:nth-child(1) { left: 0;    top: 0;    animation-delay: 0s; }
 .pxspin i:nth-child(2) { left: 0;    top: 5px;  animation-delay: -0.1125s; }
 .pxspin i:nth-child(3) { left: 0;    top: 10px; animation-delay: -0.225s; }
@@ -1782,7 +1657,6 @@ code{font-family:var(--f-mono)}
   top: 5px;
   animation: pxcore 1.8s ease-in-out infinite alternate;
 }
-/* Profil komet: naik cepat di ujung siklus, ekor meluruh panjang. */
 @keyframes pxwave {
   0%   { opacity: 1;    box-shadow: 0 0 4px rgb(var(--c-accent) / 0.45); }
   8%   { opacity: 0.72; box-shadow: 0 0 2px rgb(var(--c-accent) / 0.2); }
@@ -1799,7 +1673,6 @@ code{font-family:var(--f-mono)}
   to   { opacity: 0.42; }
 }
 @media (prefers-reduced-motion: reduce) {
-  /* Beku sebagai komet statis: kepala + dua ekor tetap terbaca. */
   .pxspin i { animation: none; }
   .pxspin i:nth-child(1) { opacity: 1; }
   .pxspin i:nth-child(2),
@@ -1851,7 +1724,6 @@ code{font-family:var(--f-mono)}
   padding: 0;
   transition: transform 0.15s, background 0.2s;
 }
-/* Area hover lebih luas dari sel 8px (desain: inset -5px -2px). */
 .cell::before { content: ""; position: absolute; inset: -5px -2px; }
 .cell:hover { transform: scaleY(1.25); }
 .cell.k-w { background: rgb(var(--c-accent)); }
@@ -1879,8 +1751,6 @@ code{font-family:var(--f-mono)}
   animation: cellp 0.9s steps(2) infinite;
   pointer-events: none;
 }
-/* Separator fase — informatif: hit-area ::before (garis 1px terlalu kecil
-   untuk di-hover) + highlight saat hover (tooltip <Tip> di atasnya). */
 .rb-sep {
   position: relative;
   width: 1px;
@@ -1906,7 +1776,6 @@ code{font-family:var(--f-mono)}
 @keyframes sayin {
   from { opacity: 0; transform: translateY(3px); }
 }
-/* PHASES — daftar fase di panel expand (desain .phases/.phs/.ph-say). */
 .phases {
   list-style: none;
   margin: 0;
@@ -1942,7 +1811,6 @@ code{font-family:var(--f-mono)}
   border-radius: 1px;
   background: rgb(var(--c-accent));
 }
-/* CALL — baris mono: icon + nama tool + target + diffstat + durasi. */
 .call {
   display: flex;
   align-items: center;
@@ -1951,7 +1819,7 @@ code{font-family:var(--f-mono)}
   min-height: 30px;
   margin-left: -8px;
   padding: 4px 8px;
-  border-radius: 7px; /* --r-sm */
+  border-radius: 7px;
   border: 0;
   background: none;
   font: 11.5px/1.35 var(--f-mono);
@@ -1988,9 +1856,8 @@ code{font-family:var(--f-mono)}
 .call .spin { width: 11px; height: 11px; }
 .call .st-e,
 .call .st-w { width: 14px; height: 14px; }
-/* RUN FILES — chip file hasil run yang settle (desain .run-files/.fchip). */
 .run-files {
-  position: relative; /* offsetParent pengukuran offsetTop chip + anchor veil */
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -2014,9 +1881,6 @@ code{font-family:var(--f-mono)}
 .fchip:hover { border-color: rgb(var(--c-ink) / 0.3); color: rgb(var(--c-ink)); }
 .fchip .ic { width: 13px; height: 13px; }
 
-/* Collapse run-files (paritas desain .rf-clip/.rf-veil): maks 3 baris chip
-   (26px + gap 6) + peek 14px baris ke-4 → max-height 96+14+12(padding) = 122px.
-   Veil = tombol expand blur di pojok bawah — BUKAN tombol dropdown. */
 .run-files.rf-clip {
   max-height: 122px;
   overflow: hidden;
@@ -2045,8 +1909,6 @@ code{font-family:var(--f-mono)}
 .rf-veil:hover { color: rgb(var(--c-ink) / 0.66); }
 .rf-veil span { pointer-events: none; }
 
-/* Toggle-back: saat expanded, tombol ghost di ujung daftar (ikut flex wrap,
-   gaya chip tanpa border) — klik = kembali ke 3 baris + veil. */
 .rf-less {
   display: inline-flex;
   align-items: center;
@@ -2061,7 +1923,6 @@ code{font-family:var(--f-mono)}
 .rf-less:hover { color: rgb(var(--c-ink) / 0.66); }
 .rf-less span { pointer-events: none; }
 
-/* ASK — box approval inline saat tool paused menunggu izin (desain .ask). */
 .ask {
   display: flex;
   align-items: flex-start;
@@ -2087,7 +1948,6 @@ code{font-family:var(--f-mono)}
 }
 .ask .min0 > span { font-size: 11.5px; color: rgb(var(--c-ink) / 0.42); }
 .ask-a { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; align-self: flex-end; }
-/* Bila pill sempit, sembunyikan meta step dan rapatkan indentasi ribbon. */
 @container run (max-width: 440px) {
   .run-meta .rn { display: none; }
   .ribbon,
@@ -2297,9 +2157,6 @@ code{font-family:var(--f-mono)}
   opacity: 1;
 }
 
-/* ---------------------------------------------------------------------------
- * Mobile & tablet (phones ≈ 9:20, tablets 768–1280)
- * --------------------------------------------------------------------------- */
 :root {
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -2307,7 +2164,6 @@ code{font-family:var(--f-mono)}
   --safe-right: env(safe-area-inset-right, 0px);
 }
 
-/* 44 px minimum touch targets on touch devices. */
 @media (pointer: coarse) {
   .icon-button {
     min-width: 44px;
@@ -2318,23 +2174,19 @@ code{font-family:var(--f-mono)}
   }
   .field {
     min-height: 44px;
-    font-size: 16px; /* iOS Safari: avoid focus zoom */
+    font-size: 16px;
   }
-  /* Touch: hover-reveal action bars stay visible (design hides them until hover). */
   .m-acts {
     opacity: 1;
   }
 }
 
-/* Composer control sections: transparent on desktop (the flat flex row keeps
-   its original order), real rows on phones — see the ≤560px block below. */
 .composer-row-1,
 .composer-row-2,
 .composer-actions {
   display: contents;
 }
 
-/* Desktop keeps the ORIGINAL order: icons · ws · spacer · model · ctx · send. */
 .composer-row-1 > * {
   order: 0;
 }
@@ -2345,26 +2197,18 @@ code{font-family:var(--f-mono)}
   order: 2;
 }
 
-/* The control bar owns its layout HERE: an inline flex style would beat the
-   ≤560px media query below — that is why the phone bar wrapped into a mess. */
 .composer-controls{display:flex;align-items:center;gap:4px}
-/* Thread jump arrows float above the composer, right-aligned INSIDE the card
-   width. The old inline left:100% sat outside it, where the right dock and
-   chat-v's overflow:hidden clipped them ("tertutup"). */
 .composer-nav{position:absolute;right:0;bottom:calc(100% + 6px);display:flex;flex-direction:row;align-items:center;gap:6px;z-index:5}
 
-/* Right-dock panels rendered inside the mobile drawer get their own surface. */
 @media (max-width: 1023px) {
   .dock-card {
     height: 100%;
     overflow: hidden;
     background: rgb(var(--c-canvas));
   }
-  /* Notices must not float above the nav / right drawers (z-40). */
   .notice-stack {
     z-index: 30;
   }
-  /* The dock switcher keeps its label but never pushes the title off-screen. */
   .rd-slot {
     min-width: 0;
     max-width: 46vw;
@@ -2372,8 +2216,6 @@ code{font-family:var(--f-mono)}
   }
 }
 
-/* Tablet / small laptop: the right dock fills the width instead of 88vw, so
-   the diff panel has enough room to be scrolled sideways. */
 @media (min-width: 561px) and (max-width: 1023px) {
   .drawer-slide-right {
     width: 100vw;
@@ -2381,7 +2223,6 @@ code{font-family:var(--f-mono)}
 }
 
 
-/* Phone: dialogs become bottom sheets, session bar tightens. */
 @media (max-width: 560px) {
   .modal-shell {
     padding: 0;
@@ -2400,19 +2241,13 @@ code{font-family:var(--f-mono)}
   }
 }
 
-/* Tablet portrait / small landscape: keep the workspace card breathing room. */
 @media (min-width: 561px) and (max-width: 1024px) {
   .modal-shell {
     padding: 0.75rem;
   }
 }
 
-/* ---------------------------------------------------------------------------
- * Phone polish round 2 (≤560px): composer rows, popovers, nav, title.
- * --------------------------------------------------------------------------- */
 
-/* Composer controls on phones: ONE compact Claude-style bar —
-   icons (CatEye · attach · goals · tools) · model pill · send. */
 @media (max-width: 560px) {
   .composer-controls {
     flex-wrap: nowrap;
@@ -2432,8 +2267,6 @@ code{font-family:var(--f-mono)}
   .composer-controls .composer-actions > * {
     order: 2;
   }
-  /* Workspace chip lives in the top bar now; spacer and context ring are
-     desktop luxuries the single phone bar cannot afford. */
   .composer-controls .cc-ws,
   .composer-controls .composer-spacer,
   .composer-controls .cc-ctx {
@@ -2449,14 +2282,13 @@ code{font-family:var(--f-mono)}
     max-width: 100%;
     overflow: hidden;
   }
-  /* Let the model name use the chip width instead of a fixed cap. */
   .composer-controls .cc-model > button > span:first-child {
     max-width: none;
     min-width: 0;
     flex: 1 1 auto;
   }
   .composer-controls .cc-model > button > span:nth-child(2) {
-    display: none; /* middot separator — visual budget on phones */
+    display: none;
   }
   .composer-controls .cc-chip > button,
   .composer-controls .cc-chip > .pill-button {
@@ -2464,12 +2296,10 @@ code{font-family:var(--f-mono)}
     overflow: hidden;
   }
 
-  /* Model picker on phones is the Sheet component — retire the old popover. */
   [data-model-popover] > [role='menu'] {
     display: none;
   }
 
-  /* The tools menu (wrench) becomes a bottom sheet. */
   [data-tools-popover],
   [data-context-popover] {
     position: static;
@@ -2490,9 +2320,7 @@ code{font-family:var(--f-mono)}
     border-radius: 16px;
     padding: 8px;
   }
-  /* (page dim removed — the sheet already floats above content) */
 
-  /* Thread jump buttons: float above the composer as a right-aligned row. */
   .composer-nav {
     left: auto;
     right: 0;
@@ -2512,13 +2340,10 @@ code{font-family:var(--f-mono)}
 }
 
 
-/* Session-bar controls never shrink — long titles must clip, not squeeze. */
 #moriko-session-bar > button {
   flex-shrink: 0;
 }
 
-/* Touch devices: tips are hover-only and stick after a tap → hide them;
-   hover-reveal affordances (title pencil) must not freeze visible either. */
 @media (hover: none) {
   [role='tooltip'] {
     display: none;
@@ -2528,9 +2353,6 @@ code{font-family:var(--f-mono)}
   }
 }
 
-/* ---------------------------------------------------------------------------
- * Effort slider — "thought field" (port of the mimo reference).
- * --------------------------------------------------------------------------- */
 @property --c {
   syntax: '<color>';
   inherits: true;
@@ -2543,7 +2365,6 @@ code{font-family:var(--f-mono)}
   --hot: #d42a00;
   --glass: rgba(0, 0, 0, 0.08);
   --glow: 0.4;
-  /* Heat tokens aligned with the ambient glow's accent palette (ember/amber). */
   --heat-0: #a09f98;
   --heat-1: #c8916a;
   --heat-2: #d97a35;
@@ -2590,7 +2411,6 @@ code{font-family:var(--f-mono)}
   text-transform: uppercase;
   color: rgb(var(--c-muted));
 }
-/* Hint sentence under the dot-matrix level word ("No extended reasoning..."). */
 .effort-desc {
   display: block;
   margin-top: 4px;
@@ -2601,8 +2421,6 @@ code{font-family:var(--f-mono)}
 .effort-name {
   display: grid;
   width: max-content;
-  /* Canvas carries 12px internal pad: -12 aligns the dots with the content
-     edge; -2 on top leaves a 10px gap under the field (name sits below it). */
   margin: -2px -12px 0;
   pointer-events: none;
 }
@@ -2652,7 +2470,6 @@ code{font-family:var(--f-mono)}
   -webkit-user-select: none;
   background: rgb(var(--c-field));
   border-radius: var(--r-md);
-  /*border: 1px solid var(--line);*/
   overflow: hidden;
 }
 
@@ -2683,8 +2500,6 @@ code{font-family:var(--f-mono)}
   cursor: grabbing;
 }
 .effort-slider:focus-visible {
-  /* Inset: the field is full-bleed, so an outside outline drew a full-width
-     orange line across the sheet. Keep the ring inside the field instead. */
   outline: 2px solid rgb(var(--c-accent));
   outline-offset: -4px;
 }
@@ -2703,8 +2518,6 @@ code{font-family:var(--f-mono)}
   color: var(--c);
 }
 
-/* ---------------------------------------------------------------- AMBIENT GLOW -- */
-/* Soft drifting accent-colored light behind the app shell (from design-1). */
 .ambient {
   position: fixed;
   inset: 0;
@@ -2730,8 +2543,6 @@ code{font-family:var(--f-mono)}
   .ambient { display: none; }
 }
 
-/* ------------------------------------------------------- PROJECT TREE TOUCHES -- */
-/* design-1 inspired: monospace, depth indent, hover glow, rounded rows. */
 .pt-tree-row {
   position: absolute;
   left: 0;
@@ -2747,9 +2558,6 @@ code{font-family:var(--f-mono)}
   color: rgb(var(--c-accent));
 }
 
-/* ---------------------------------------------------------- DIFF INLINE MODE -- */
-/* GitHub-style inline diff (design-1): full-width lines with +/- prefix,
-   green/red background, monospace.  Pairs with the "Split" side-by-side mode. */
 .diff-inline {
   font-family: ui-monospace, 'JetBrains Mono', SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
@@ -2759,8 +2567,6 @@ code{font-family:var(--f-mono)}
   border: 1px solid rgb(var(--c-hairline));
   border-radius: 12px;
   overflow: hidden;
-  /* Surface ROLE kartu/panel — bukan alias --c-paper yang light-only
-     (tak dioverride di .dark/.mocha → kotak putih, komplain user). */
   background: rgb(var(--c-panel));
   margin-bottom: 10px;
 }
@@ -2806,19 +2612,12 @@ code{font-family:var(--f-mono)}
   }
 }
 
-/* ---------------------------------------------------------- design-1 layer -- */
-/* Hero landing (greeting + suggestion cards), brand touches and the composer
-   busy sweep — ported from moriko-design-1.html. */
 
-/* Floating menus/popovers/tooltips sit on the design "pop" surface, one step
-   above the panels they float over (works because both utility classes are
-   present on the same element). */
 .bg-elevated.shadow-popover,
 .bg-surface.shadow-popover {
   background-color: rgb(var(--c-pop));
 }
 
-/* Composer keyboard hints — visible while the composer has focus (design .hint). */
 .composer-hint {
   opacity: 0;
   transition: opacity 0.2s;
@@ -2838,7 +2637,6 @@ kbd {
   white-space: nowrap;
 }
 
-/* Breathing halo behind the hero cat. */
 .d1-halo {
   position: absolute;
   inset: 8%;
@@ -2855,7 +2653,6 @@ kbd {
   }
 }
 
-/* Suggestion cards under the composer (2-col, spotlight hover, staggered in). */
 .d1-sg {
   position: relative;
   display: flex;
@@ -2928,7 +2725,6 @@ kbd {
   }
 }
 
-/* Composer busy: conic sweep traveling the border while streaming. */
 @property --d1ang {
   syntax: '<angle>';
   inherits: false;
@@ -2968,79 +2764,54 @@ kbd {
   }
 }
 
-/* ════════════════════════════════════════════════════════════════════════
- * Accessibility + breakpoint state classes (semantic, not a utility framework)
- * ════════════════════════════════════════════════════════════════════════ */
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 .skip-link{position:absolute;left:12px;top:12px;z-index:70;padding:8px 12px;border-radius:var(--r-md);background:rgb(var(--c-elev));color:rgb(var(--c-ink));font-size:14px;font-weight:600;text-decoration:none;transform:translateY(-300%)}
 .skip-link:focus{transform:none}
 
-/* Breakpoint state classes — design breakpoints (768 / 1024).
-   show-md: hidden below 768, flex at ≥768. hide-md: inverse. Same for lg. */
 .show-md{display:none}
 .show-lg{display:none}
 @media (min-width:768px){.show-md{display:flex}.hide-md{display:none}}
 @media (min-width:1024px){.show-lg{display:flex}.hide-lg{display:none}}
 
-/* ── Composer: semantic additions (design .chips/.chip idiom) ── */
-/* Row wrappers flatten into the control bar (children order via flex order) */
 .composer-controls > .contents{display:contents}
-/* Tip wrapper that fills a flex row (segmented role switch) */
 .tip-fill{min-width:0;flex:1}
-/* Two-column dialog pane (providers manager): satu panel, kolom tunggal di bawah 768px */
 .md\:grid2col{display:grid;grid-template-columns:minmax(0,1fr)}
 @media (min-width:768px){.md\:grid2col{grid-template-columns:240px minmax(0,1fr)}}
-/* Providers panel (referensi provider.html): sidebar berpagar, menumpuk di bawah 680px */
 .prov-side{border-right:1px solid var(--line);min-width:0}
 .prov-pane{min-width:0}
 @media (max-width:680px){
   .prov-side{border-right:0;border-bottom:1px solid var(--line)}
 }
-/* Attachment strip above the textarea — design .chips */
 .composer-attach{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:0 0 8px}
 .composer-attach:empty{display:none}
-/* Attachment thumbnails — design .chip proportions.
-   .att stays overflow:visible so .att-x can sit OUTSIDE the corner (never
-   clipped); the media layers (.att-clip / non-badge buttons) do the clipping. */
 .att{position:relative;width:64px;height:64px;flex:none;border-radius:var(--r-md);border:1px solid var(--line);background:rgb(var(--c-elev))}
 .att-clip,.att>button:not(.att-x){position:absolute;inset:0;overflow:hidden;border-radius:inherit}
 .att img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .3s var(--ease)}
 .att:hover img{transform:scale(1.05)}
-/* Remove badge — straddles outside the top-right corner (right/top:-6px). */
 .att .att-x{position:absolute;right:-6px;top:-6px;width:18px;height:18px;display:grid;place-items:center;border-radius:5px;background:rgb(var(--c-shadow)/.6);color:rgb(var(--c-paper));z-index:2;opacity:0;transition:opacity .15s}
 .att:hover .att-x,.att .att-x:focus-visible,.att:hover .att-over,.att .att-over:focus-visible{opacity:1}
 .att .att-x .ic{width:12px;height:12px}
-/* Crop/edit overlay on reference thumbnails — hover-revealed. */
 .att .att-over{opacity:0;transition:opacity .15s,background .15s}
 @media (hover:none){.att .att-x,.att .att-over{opacity:1}}
-/* Document attachment tile (icon + name) */
 .att-doc{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;width:100%;height:100%;color:var(--faint);transition:background .15s}
 .att-doc:hover{background:rgb(var(--c-ink)/.06)}
 .att-doc .ic{width:15px;height:15px}
 .att-doc span{max-width:52px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px;color:var(--faint)}
-/* Generic file chip (icon + name + size + x) — design .chip */
 .att-chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 4px 0 8px;border-radius:8px;border:1px solid var(--line);background:rgb(var(--c-elev));font-size:11.5px;color:rgb(var(--c-ink))}
 .att-chip .ic{width:13px;height:13px;color:var(--faint)}
 .att-chip .att-n{max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .att-chip .att-s{color:var(--faint);flex:none}
 .att-chip button{width:18px;height:18px;display:grid;place-items:center;border-radius:5px;color:var(--faint)}
 .att-chip button:hover{background:rgb(var(--c-ink)/.08);color:rgb(var(--c-ink))}
-/* Composer textarea — sits inside .composer-shell */
 .composer-ta{width:100%;max-height:200px;resize:none;background:transparent;border:0;outline:0;color:rgb(var(--c-ink));font-size:15px;line-height:1.625}
 .composer-ta::placeholder{color:var(--faint)}
-/* Design #input: the chat input's own padding inside design .cdock */
 .composer-shell .composer-ta{display:block;padding:14px 16px 4px;min-height:52px;max-height:240px;line-height:1.55}
-/* Centered (landing) shell: design spacing comes from .suggest wrapper */
 .composer-shell-centered{padding:0}
-/* Design .chips strip + design .cbar row */
 .composer-shell .composer-attach{padding:10px 12px 0}
 .composer-shell .composer-controls{padding:6px 8px 8px}
-/* Landing composer slot behaves like design .cdock (pb 14, not .suggest's 24) */
 .suggest.composer-slot{padding-bottom:14px}
-/* Agent-mode banner strip — design .mode idiom */
 .mode-banner{display:flex;height:22px;margin-bottom:6px;user-select:none;align-items:center;padding:0 6px;font:700 10.5px/1 var(--f-mono);letter-spacing:.18em;text-transform:uppercase;color:var(--faint)}
 .mode-banner.on{color:rgb(var(--c-accent))}
-/* Cat-eye mode toggle (design .eye idiom, pill variant) */
 .cat-eye{display:inline-flex;align-items:center;justify-content:center;width:46px;height:32px;flex:none;border:1px solid var(--line);border-radius:12px;background:transparent;transition:border-color .2s,background .2s,box-shadow .2s}
 .cat-eye:hover{border-color:rgb(var(--c-ink)/.6)}
 .cat-eye[aria-pressed=true]{border-color:rgb(var(--c-accent)/.6);background:rgb(var(--c-accent)/.1);box-shadow:0 0 10px rgb(var(--c-accent)/.4)}
@@ -3048,11 +2819,7 @@ kbd {
 .cat-eye svg{width:32px;height:16px}
 .cat-eye .eye-g{transform-origin:center;transition:transform .11s}
 .cat-eye .eye-g.blink{transform:scaleY(.08)}
-/* Canvas-chat design: the pupil drifts toward the cursor via --px/--py. */
 .cat-eye .pupil{transform:translate(var(--px,0),var(--py,0));transition:transform .12s}
-/* Pixel fills — theme tokens (light/dark/mocha + data-accent swatch):
-   .ec closed lids = muted ink · .eo open outline = accent · .ei iris = lighter
-   accent · .ep pupil = shadow (dark in every theme) · .eh specular = paper. */
 .cat-eye .ec{fill:var(--muted)}
 .cat-eye .eo{fill:rgb(var(--c-accent))}
 .cat-eye .ei{fill:color-mix(in srgb, rgb(var(--c-accent)) 60%, #fff)}
@@ -3060,29 +2827,22 @@ kbd {
 .cat-eye .eh{fill:rgb(var(--c-paper))}
 
 
-/* ── VisualCard helpers ── */
 .rz-h{transition:background .15s}
 .rz-h:hover{background:rgb(var(--c-accent)/.3)}
 .var-row{display:flex;flex-direction:column;gap:8px;padding:8px}
 @media (min-width:768px){.var-row{flex-direction:row}}
-/* hidden below 640, inline at ≥640 */
 .show-sm{display:none}
 @media (min-width:640px){.show-sm{display:inline}}
 
-/* ── Dashboard stat cards ── */
 .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
 @media (min-width:640px){.stat-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 
 
-/* ── Settings dialog: font style picker ── */
 .font-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 .font-opt{border:1px solid var(--line);border-radius:var(--r-md);padding:10px 12px;text-align:left;transition:border-color .15s,background .15s}
 .font-opt:hover{border-color:rgb(var(--c-accent) / 0.4)}
 
 
-/* ── Image viewer (design/image-viewer.html → ImageLightbox) ──
-   Scoped design tokens: the immersive chrome keeps the design's own dark
-   surfaces; the accent hooks into the active moriko accent (--c-accent). */
 .vr{--v-bg0:#07090a;--v-bg1:#0d1110;--v-bg2:#141917;--v-bg3:#1b211e;
   --v-line:rgba(255,255,255,.08);--v-line2:rgba(255,255,255,.15);
   --v-tx1:#eef2ef;--v-tx2:#a5afa9;--v-tx3:#6f7a74;
@@ -3194,13 +2954,11 @@ kbd {
 @media (pointer:coarse){.vnav{display:none}}
 @media (prefers-reduced-motion:reduce){.vr,.vr *{animation-duration:.01ms!important;transition-duration:.01ms!important}}
 
-/* ── History list rows ── */
 .hrow{transition:border-color .15s,background .15s}
 .hrow:hover{border-color:rgb(var(--c-accent) / 0.4);background:rgb(var(--c-elev))}
 .hdel{opacity:0;transition:opacity .15s}
 .hrow:hover .hdel,.hdel:focus-visible{opacity:1}
 
-/* ── Split diff (side-by-side) ── */
 .sd-head{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:0 8px 4px}
 .sd-seg{display:flex;align-items:center;gap:2px;border-radius:var(--r-md);border:1px solid var(--line);padding:2px}
 .sd-seg button{border-radius:var(--r-md);padding:2px 8px;font-size:10px;font-weight:500;transition:background .15s,color .15s}
@@ -3221,7 +2979,6 @@ kbd {
 .sd-cell{min-width:0;overflow:hidden;white-space:pre;padding:0 8px}
 .sd-cell.wrap{white-space:pre-wrap;word-break:break-all}
 
-/* ── Gallery tiles ── */
 .gtile img:hover{transform:scale(1.03)}
 .gtov{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;gap:4px;background:rgb(0 0 0 / .45);padding:6px;opacity:0;backdrop-filter:blur(4px);transition:opacity .2s;border-radius:0 0 var(--r-lg) var(--r-lg)}
 .gtile:hover .gtov,.gtile:focus-within .gtov{opacity:1}
@@ -3229,16 +2986,13 @@ kbd {
 .gtb:hover:not(:disabled){color:#fff}
 .gtb:disabled{opacity:.3}
 
-/* ── Usage chart + session picker ── */
 .uc-bar:hover>div{opacity:1}
 .pk-row:hover .hdel{opacity:1}
 
-/* ── Thread: hover action bar ── */
 .bar-row{width:100%;display:flex;align-items:center;gap:4px;opacity:0;transition:opacity .2s;flex-wrap: wrap}
 .bar-row:hover,.bar-row:focus-within,.bar-row:has(:focus-visible){opacity:1}
 @media (pointer:coarse){.bar-row{opacity:1}}
 
-/* ── Thread disclosures (reasoning / tool / freeze) ── */
 .rs-row:hover .rs-chev{opacity:1!important}
 .rs-del{opacity:0;transition:opacity .15s}
 .rs-row:hover .rs-del,.rs-del:focus-visible{opacity:1}
@@ -3248,12 +3002,9 @@ kbd {
 .tc-row:hover .tc-chev,.tc-row .tc-chev:focus-visible{opacity:1}
 .freeze-d[open] .chev{transform:rotate(180deg)}
 
-/* ── Model picker: two-pane grid at ≥768px ── */
 @media (min-width:768px){.mp-grid{grid-template-columns:220px minmax(0,1fr)}}
-/* Di dalam right-dock (~340px) picker menumpuk satu kolom. */
 .dock-in .mp-grid{grid-template-columns:minmax(0,1fr)}
 
-/* Shimmer Effect */
 @keyframes shimmer {
   0% {
     transform: translateX(-150%) skewX(-20deg);
@@ -3289,10 +3040,6 @@ kbd {
 }
 
 
-/* ---------------------------------------------------------------------------
- * ADDON v2 (A5) — NotificationHost (center-top toasts) + addon UI kit.
- * All colors read theme tokens (--c-*); no literals.
- * --------------------------------------------------------------------------- */
 .addon-notify-stack {
   position: fixed;
   top: calc(14px + env(safe-area-inset-top, 0px));
@@ -3352,7 +3099,6 @@ kbd {
   .addon-notify { animation: none; }
 }
 
-/* Themed kit pieces the addon host surface re-exports (A5). */
 .addon-card {
   border: 1px solid rgb(var(--c-line));
   border-radius: var(--r-md);
@@ -3397,7 +3143,6 @@ kbd {
 }
 .addon-widget-slot:empty { display: none; }
 
-/* --- Addon Hub (A6) ------------------------------------------------------ */
 .addon-hub {
   display: flex;
   flex-direction: column;
@@ -3475,10 +3220,7 @@ kbd {
 .addon-log-line.lvl-warn { color: rgb(var(--c-warn)); }
 .addon-log-time { flex: none; color: rgb(var(--c-ink) / var(--a-faint, .42)); }
 
-/* --- Addon sidebar section (A6) — reuses SectionLabel/NavGroup/SubItem;
-     only the status dot on the group icon is custom. ----------------------- */
 .addon-ic { position: relative; display: inline-flex; }
-/* Logo bawaan addon (manifest icon) — mask + currentColor agar ikut tema. */
 .addon-ic-img {
   display: block;
   width: 16px;
@@ -3500,7 +3242,6 @@ kbd {
   border-radius: 999px;
   background: rgb(var(--c-rail-dot));
 }
-/* TopBar "Open RSA/T board": gem pixel yang sama dengan logo addon di sidebar. */
 .rsat-gem-ic {
   display: block;
   width: 16px;
