@@ -69,6 +69,19 @@ export function validateDoc(doc) {
       if (a.tier && !TIERS.includes(a.tier)) problems.push(`${a.id}: invalid tier`);
       if (!Array.isArray(a.acceptance)) problems.push(`${a.id}: acceptance must be an array`);
       if (a.scope && (a.scope.include && !Array.isArray(a.scope.include))) problems.push(`${a.id}: scope.include must be an array`);
+      if (a.scope && (a.scope.exclude && !Array.isArray(a.scope.exclude))) problems.push(`${a.id}: scope.exclude must be an array`);
+      if (a.contracts !== undefined) {
+        if (!a.contracts || typeof a.contracts !== 'object') {
+          problems.push(`${a.id}: contracts must be an object`);
+        } else {
+          if (a.contracts.provides !== undefined && !Array.isArray(a.contracts.provides)) {
+            problems.push(`${a.id}: contracts.provides must be an array of strings`);
+          }
+          if (a.contracts.consumes !== undefined && !Array.isArray(a.contracts.consumes)) {
+            problems.push(`${a.id}: contracts.consumes must be an array of strings`);
+          }
+        }
+      }
       if (a.claim && !['user', 'agent', 'operator', 'system'].includes(a.claim.by?.kind)) problems.push(`${a.id}: claim.by invalid`);
       for (const dep of a.dependsOn || []) {
         if (!doc.achievements.some((x) => x.id === dep)) problems.push(`${a.id}: dependsOn "${dep}" not found`);

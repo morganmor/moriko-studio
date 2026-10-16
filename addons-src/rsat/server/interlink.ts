@@ -475,12 +475,76 @@ export function buildWorkspaceInterlink(api, sessionId, opts = {}) {
   let colX = 40;
   const nodes = [];
 
+  // Indeks semua export & import nyata per quest (di seluruh allFiles dalam scope quest)
+  // untuk validasi silang (cross-check) 1:1 antara kontrak manual (provides/consumes) dan AST nyata.
+  const normalizeSymName = (raw) =>
+    String(raw || '')
+      .trim()
+      .replace(/^default\s+/, '')
+      .replace(/\(\)$/, '')
+      .replace(/^type\s+/, '')
+      .trim();
+
+  const questAstIndex = new Map();
+  for (const a of doc?.achievements || []) {
+    const exportedSyms = new Set();
+    const importedSyms = new Set();
+    const scopedFiles = allFiles.filter(
+      (f) => inScope(a.scope, f) || (a.files || []).some((fl) => fl.path === f),
+    );
+    for (const sf of scopedFiles) {
+      const p = parsedMap.get(sf);
+      if (!p) continue;
+      for (const ex of p.exports || []) {
+        exportedSyms.add(normalizeSymName(ex.label));
+        if (ex.label.startsWith('default ')) exportedSyms.add('default export');
+      }
+      for (const im of p.imports || []) {
+        for (const s of im.symbols || []) {
+          importedSyms.add(normalizeSymName(s));
+        }
+      }
+    }
+    const declaredProvides = (a.contracts?.provides || []).map(normalizeSymName).filter(Boolean);
+    const declaredConsumes = (a.contracts?.consumes || []).map(normalizeSymName).filter(Boolean);
+    const matchedProvides = declaredProvides.filter((s) => exportedSyms.has(s));
+    const missingProvides = declaredProvides.filter((s) => !exportedSyms.has(s));
+    const matchedConsumes = declaredConsumes.filter((s) => importedSyms.has(s));
+    const missingConsumes = declaredConsumes.filter((s) => !importedSyms.has(s));
+    questAstIndex.set(a.id, {
+      quest: a,
+      scopedFiles,
+      exportedSyms,
+      importedSyms,
+      declaredProvides,
+      declaredConsumes,
+      matchedProvides,
+      missingProvides,
+      matchedConsumes,
+      missingConsumes,
+    });
+  }
+
   for (const m of modules) {
     const mFiles = filesByModule.get(m.id) || [];
-    if (mFiles.length === 0) continue;
-    const subCols = mFiles.length > 5 ? 2 : 1;
+    // Cari quest milik modul ini yang sudah mendeklarasikan kontrak tetapi belum punya file nyata di kanvas (Ghost Nodes)
+    const ghostQuests = (doc?.achievements || []).filter((a) => {
+      if (a.state === 'dropped') return false;
+      const targetModId = a.moduleId && modules.some((mod) => mod.id === a.moduleId) ? a.moduleId : modules[0]?.id;
+      if (targetModId !== m.id) return false;
+      const hasContract = (a.contracts?.provides?.length || 0) > 0 || (a.contracts?.consumes?.length || 0) > 0;
+      if (!hasContract) return false;
+      const hasSelectedFile = mFiles.some(
+        (f) => inScope(a.scope, f) || (a.files || []).some((fl) => fl.path === f),
+      );
+      return !hasSelectedFile;
+    });
+
+    const totalItems = mFiles.length + ghostQuests.length;
+    if (totalItems === 0) continue;
+    const subCols = totalItems > 5 ? 2 : 1;
     const colW = subCols === 2 ? 580 : 310;
-    const rows = Math.ceil(mFiles.length / subCols);
+    const rows = Math.ceil(totalItems / subCols);
     const clusterH = Math.max(460, rows * 195 + 80);
 
     clusters.push({
@@ -519,24 +583,112 @@ export function buildWorkspaceInterlink(api, sessionId, opts = {}) {
         (anyOwner?.state === 'done' ? 'completed' : 'unassigned');
 
       const ast = parsedMap.get(f) || { exports: [], imports: [] };
+      const qCheck = anyOwner ? questAstIndex.get(anyOwner.id) : null;
+      const hasDeclaredProvides = Boolean(qCheck && qCheck.declaredProvides.length > 0);
+      const hasDeclaredConsumes = Boolean(qCheck && qCheck.declaredConsumes.length > 0);
+      const declaredProvideSet = new Set(qCheck?.declaredProvides || []);
+      const declaredConsumeSet = new Set(qCheck?.declaredConsumes || []);
 
-      // Buat socket outputs dari exports nyata
-      const outputs = (ast.exports.length ? ast.exports : [{ label: 'module', kind: 'runtime' }])
-        .slice(0, 4)
-        .map((ex, i) => ({
-          id: `${nodeId}:out:${i}`,
+      // Validasi silang (Cross-check) antara AST exports file ini dan kontrak quest (`provides`)
+      const fileExportNames = (ast.exports || []).map((ex) => normalizeSymName(ex.label));
+      const undeclaredExports = hasDeclaredProvides
+        ? fileExportNames.filter((sym) => !declaredProvideSet.has(sym))
+        : [];
+
+      // Buat socket outputs dengan status kontrak: matched / missing / undeclared / unscoped
+      const rawOutputs = [];
+      for (const ex of ast.exports || []) {
+        const clean = normalizeSymName(ex.label);
+        const isMatched =
+          declaredProvideSet.has(clean) ||
+          (ex.label.startsWith('default ') && declaredProvideSet.has('default export'));
+        const contractStatus = hasDeclaredProvides ? (isMatched ? 'matched' : 'undeclared') : 'unscoped';
+        rawOutputs.push({
           label: ex.label,
           kind: ex.kind,
-        }));
-
-      // Buat socket inputs dari edge masuk nyata (id per indeks; edge sudah
-      // didedupe jadi satu pasangan file menghasilkan tepat satu socket).
-      const incomingEdges = filteredEdges.filter((e) => e.to === f);
-      const inputs = incomingEdges.slice(0, 4).map((e, i) => ({
-        id: `${nodeId}:in:${i}`,
-        label: e.symbols.slice(0, 2).join(', '),
-        kind: e.isType ? 'type' : /^use[A-Z]/.test(e.symbols[0] || '') ? 'hook' : 'runtime',
+          contractStatus,
+        });
+      }
+      // Tambahkan Ghost Sockets untuk simbol kontrak `provides` yang belum ada di AST (Missing Export)
+      if (qCheck && qCheck.missingProvides.length > 0) {
+        const isPrimaryFileForQuest = qCheck.scopedFiles[0] === f || qCheck.scopedFiles.length <= 1;
+        if (isPrimaryFileForQuest) {
+          for (const missingSym of qCheck.missingProvides) {
+            rawOutputs.push({
+              label: missingSym,
+              kind: 'runtime',
+              contractStatus: 'missing',
+            });
+          }
+        }
+      }
+      if (rawOutputs.length === 0) {
+        rawOutputs.push({ label: 'module', kind: 'runtime', contractStatus: 'unscoped' });
+      }
+      // Prioritaskan socket kontrak (missing & matched) di atas export tambahan (undeclared) agar noise berkurang
+      rawOutputs.sort((a, b) => {
+        const rank = { missing: 0, matched: 1, undeclared: 2, unscoped: 3 };
+        return (rank[a.contractStatus] ?? 3) - (rank[b.contractStatus] ?? 3);
+      });
+      const outputs = rawOutputs.slice(0, 4).map((ex, i) => ({
+        id: `${nodeId}:out:${i}`,
+        label: ex.label,
+        kind: ex.kind,
+        contractStatus: ex.contractStatus,
       }));
+
+      // Buat socket inputs dari edge masuk nyata + cross-check dengan `consumes`
+      const incomingEdges = filteredEdges.filter((e) => e.to === f);
+      const inputs = incomingEdges.slice(0, 4).map((e, i) => {
+        const edgeSyms = e.symbols.map(normalizeSymName);
+        let contractStatus = 'unscoped';
+        if (hasDeclaredConsumes) {
+          contractStatus = edgeSyms.some((s) => declaredConsumeSet.has(s)) ? 'matched' : 'undeclared';
+        }
+        return {
+          id: `${nodeId}:in:${i}`,
+          label: e.symbols.slice(0, 2).join(', '),
+          kind: e.isType ? 'type' : /^use[A-Z]/.test(e.symbols[0] || '') ? 'hook' : 'runtime',
+          contractStatus,
+        };
+      });
+
+      // Jika masih ada slot input dan ada kontrak `consumes` yang belum terpenuhi, tampilkan ghost input socket
+      if (qCheck && qCheck.missingConsumes.length > 0 && inputs.length < 4) {
+        const isPrimaryFileForQuest = qCheck.scopedFiles[0] === f || qCheck.scopedFiles.length <= 1;
+        if (isPrimaryFileForQuest) {
+          for (const missingCon of qCheck.missingConsumes.slice(0, 4 - inputs.length)) {
+            inputs.push({
+              id: `${nodeId}:in:${inputs.length}`,
+              label: missingCon,
+              kind: 'runtime',
+              contractStatus: 'missing',
+            });
+          }
+        }
+      }
+
+      const contractCheck = qCheck
+        ? {
+            questId: anyOwner.id,
+            declaredProvides: qCheck.declaredProvides,
+            declaredConsumes: qCheck.declaredConsumes,
+            matchedProvides: qCheck.matchedProvides,
+            missingProvides: qCheck.missingProvides,
+            undeclaredExports,
+            matchedConsumes: qCheck.matchedConsumes,
+            missingConsumes: qCheck.missingConsumes,
+          }
+        : undefined;
+
+      // Deteksi pelanggaran kontrak (Contract Drift / Missing Export)
+      let contractViolation;
+      if (qCheck && qCheck.missingProvides.length > 0) {
+        const isPrimaryFileForQuest = qCheck.scopedFiles[0] === f || qCheck.scopedFiles.length <= 1;
+        if (isPrimaryFileForQuest) {
+          contractViolation = `CONTRACT DRIFT (${anyOwner.id}): Missing promised export(s) [${qCheck.missingProvides.join(', ')}] in AST.`;
+        }
+      }
 
       const baseTitle = path.posix.basename(f);
 
@@ -557,6 +709,71 @@ export function buildWorkspaceInterlink(api, sessionId, opts = {}) {
         touched: Boolean(touchRec),
         inputs,
         outputs,
+        violation: contractViolation,
+        contractCheck,
+      });
+    });
+
+    // Tambahkan Ghost Nodes untuk quest yang sudah mendeklarasikan kontrak tetapi filenya belum dibuat
+    ghostQuests.forEach((gq, gIdx) => {
+      const idx = mFiles.length + gIdx;
+      const cIdx = idx % subCols;
+      const rIdx = Math.floor(idx / subCols);
+      const ghostPath = gq.scope?.include?.[0] || `${gq.id}/pending-contract.ts`;
+      const nodeId = `n:ghost:${gq.id}`;
+      const defaultX = colX + 26 + cIdx * 276;
+      const defaultY = 98 + rIdx * 192;
+      const pos = savedPos[nodeId] || { x: defaultX, y: defaultY };
+      const qCheck = questAstIndex.get(gq.id);
+      const holder = gq.claim?.label || gq.claim?.by?.name || 'unassigned';
+
+      const outputs = (qCheck?.declaredProvides || []).slice(0, 4).map((sym, i) => ({
+        id: `${nodeId}:out:${i}`,
+        label: sym,
+        kind: 'runtime',
+        contractStatus: 'missing',
+      }));
+      const inputs = (qCheck?.declaredConsumes || []).slice(0, 4).map((sym, i) => ({
+        id: `${nodeId}:in:${i}`,
+        label: sym,
+        kind: 'runtime',
+        contractStatus: 'missing',
+      }));
+
+      nodes.push({
+        id: nodeId,
+        file: `${gq.id} (pending)`,
+        fullPath: ghostPath,
+        title: `[Ghost] ${gq.title}`.slice(0, 38),
+        moduleId: m.id,
+        layer: m.layer,
+        questId: gq.id,
+        holder,
+        state: gq.state || 'available',
+        x: pos.x,
+        y: pos.y,
+        fanIn: 0,
+        fanOut: 0,
+        touched: false,
+        inputs,
+        outputs: outputs.length ? outputs : [{ id: `${nodeId}:out:0`, label: 'pending', kind: 'runtime', contractStatus: 'missing' }],
+        violation:
+          qCheck && qCheck.missingProvides.length > 0
+            ? `PENDING CONTRACT (${gq.id}): Awaiting implementation of [${qCheck.missingProvides.join(', ')}] in ${ghostPath}.`
+            : undefined,
+        contractCheck: qCheck
+          ? {
+              questId: gq.id,
+              declaredProvides: qCheck.declaredProvides,
+              declaredConsumes: qCheck.declaredConsumes,
+              matchedProvides: qCheck.matchedProvides,
+              missingProvides: qCheck.missingProvides,
+              undeclaredExports: [],
+              matchedConsumes: qCheck.matchedConsumes,
+              missingConsumes: qCheck.missingConsumes,
+            }
+          : undefined,
+        isGhost: true,
       });
     });
 
@@ -693,7 +910,26 @@ export function formatRslkServer(clusters, nodes, wires, meta = {}) {
       `[N:${n.file}] (quest:${n.questId ?? 'unassigned'} [${n.state} by ${n.holder}] | mod:${n.moduleId} | layer:${n.layer} | fanIn:${n.fanIn} fanOut:${n.fanOut} I=${I}) ${flags}`.trim(),
     );
     if (n.outputs?.length) {
-      lines.push(`  PROVIDES: ${n.outputs.map((o) => `${o.label}:${o.kind}`).join(', ')}`);
+      lines.push(
+        `  PROVIDES: ${n.outputs
+          .map((o) => {
+            const st =
+              o.contractStatus === 'matched'
+                ? '✓'
+                : o.contractStatus === 'missing'
+                  ? '✗MISSING:'
+                  : o.contractStatus === 'undeclared'
+                    ? '?UNDECLARED:'
+                    : '';
+            return `${st}${o.label}:${o.kind}`;
+          })
+          .join(', ')}`,
+      );
+    }
+    if (n.contractCheck && (n.contractCheck.declaredProvides.length > 0 || n.contractCheck.declaredConsumes.length > 0)) {
+      lines.push(
+        `  CONTRACT: matched=[${n.contractCheck.matchedProvides.join(',')}] missing=[${n.contractCheck.missingProvides.join(',')}] undeclared=[${n.contractCheck.undeclaredExports.join(',')}]`,
+      );
     }
     const outWires = wires.filter((w) => w.fromNode === n.id);
     for (const w of outWires) {
@@ -719,14 +955,22 @@ export function formatRslkServer(clusters, nodes, wires, meta = {}) {
     }
   }
 
+  const contractDrifts = nodes.filter(
+    (n) => n.contractCheck && n.contractCheck.missingProvides && n.contractCheck.missingProvides.length > 0,
+  );
   lines.push(``, `# 3. ARCHITECTURAL & MULTI-AGENT ALERTS`);
-  if (broken.length === 0 && cross.length === 0) {
-    lines.push(`(clean — 0 layer violations, 0 cross-agent collisions)`);
+  if (broken.length === 0 && cross.length === 0 && contractDrifts.length === 0) {
+    lines.push(`(clean — 0 layer/contract violations, 0 cross-agent collisions)`);
   } else {
     for (const w of broken) {
       const src = nodes.find((x) => x.id === w.fromNode);
       const dst = nodes.find((x) => x.id === w.toNode);
       lines.push(`[ALERT:VIOLATION] ${dst?.file} -> ${src?.file}: ${w.note}`);
+    }
+    for (const cn of contractDrifts) {
+      lines.push(
+        `[ALERT:CONTRACT_DRIFT] ${cn.questId ?? cn.file} (${cn.file}): Missing promised export(s) [${cn.contractCheck.missingProvides.join(', ')}] in AST.`,
+      );
     }
     for (const w of cross) {
       const src = nodes.find((x) => x.id === w.fromNode);
@@ -736,6 +980,40 @@ export function formatRslkServer(clusters, nodes, wires, meta = {}) {
   }
 
   return lines.join('\n');
+}
+
+/**
+ * Verifikasi apakah seluruh simbol yang dijanjikan di `achievement.contracts.provides`
+ * benar-benar telah di-export pada AST file di dalam scope quest tersebut.
+ */
+export function verifyQuestContracts(api, sessionId, achievement) {
+  const normalizeSymName = (raw) =>
+    String(raw || '')
+      .trim()
+      .replace(/^default\s+/, '')
+      .replace(/\(\)$/, '')
+      .replace(/^type\s+/, '')
+      .trim();
+  const provides = (achievement?.contracts?.provides || []).map(normalizeSymName).filter(Boolean);
+  if (provides.length === 0) {
+    return { ok: true, missingProvides: [], matchedProvides: [], scopedFiles: [] };
+  }
+  const graph = buildWorkspaceInterlink(api, sessionId, { force: true });
+  const qNodes = (graph.nodes || []).filter((n) => n.questId === achievement.id && !n.isGhost);
+  const matchedSet = new Set();
+  for (const n of qNodes) {
+    for (const m of n.contractCheck?.matchedProvides || []) {
+      matchedSet.add(m);
+    }
+  }
+  const missingProvides = provides.filter((s) => !matchedSet.has(s));
+  const matchedProvides = provides.filter((s) => matchedSet.has(s));
+  return {
+    ok: missingProvides.length === 0,
+    missingProvides,
+    matchedProvides,
+    scopedFiles: qNodes.map((n) => n.fullPath),
+  };
 }
 
 /**

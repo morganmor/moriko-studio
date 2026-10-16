@@ -16,6 +16,18 @@ export interface InterlinkSocket {
   id: string;
   label: string;
   kind: 'runtime' | 'type' | 'hook' | 'store';
+  contractStatus?: 'matched' | 'missing' | 'undeclared' | 'unscoped';
+}
+
+export interface ContractCheckSummary {
+  questId?: string;
+  declaredProvides: string[];
+  declaredConsumes: string[];
+  matchedProvides: string[];
+  missingProvides: string[];
+  undeclaredExports: string[];
+  matchedConsumes: string[];
+  missingConsumes: string[];
 }
 
 export interface InterlinkNode {
@@ -33,6 +45,8 @@ export interface InterlinkNode {
   fanOut: number;
   touched?: boolean;
   violation?: string;
+  contractCheck?: ContractCheckSummary;
+  isGhost?: boolean;
   inputs: InterlinkSocket[];
   outputs: InterlinkSocket[];
 }
@@ -137,7 +151,26 @@ export function generateRslkDsl(
       `[N:${n.file}] (quest:${n.questId ?? 'unassigned'} [${n.state ?? 'idle'} by ${n.holder ?? 'none'}] | mod:${n.moduleId} | layer:${n.layer} | fanIn:${n.fanIn} fanOut:${n.fanOut} I=${I}) ${flags}`.trim(),
     );
     if (n.outputs.length) {
-      lines.push(`  PROVIDES: ${n.outputs.map((o) => `${o.label}:${o.kind}`).join(', ')}`);
+      lines.push(
+        `  PROVIDES: ${n.outputs
+          .map((o) => {
+            const st =
+              o.contractStatus === 'matched'
+                ? '✓'
+                : o.contractStatus === 'missing'
+                  ? '✗MISSING:'
+                  : o.contractStatus === 'undeclared'
+                    ? '?UNDECLARED:'
+                    : '';
+            return `${st}${o.label}:${o.kind}`;
+          })
+          .join(', ')}`,
+      );
+    }
+    if (n.contractCheck && (n.contractCheck.declaredProvides.length > 0 || n.contractCheck.declaredConsumes.length > 0)) {
+      lines.push(
+        `  CONTRACT: matched=[${n.contractCheck.matchedProvides.join(',')}] missing=[${n.contractCheck.missingProvides.join(',')}] undeclared=[${n.contractCheck.undeclaredExports.join(',')}]`,
+      );
     }
     const outWires = wires.filter((w) => w.fromNode === n.id);
     for (const w of outWires) {
@@ -795,24 +828,32 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
                       {/* Input Sockets (Left) */}
                       <div className="il-col-in">
                         {node.inputs.length ? (
-                          node.inputs.map((inp, ii) => (
-                            <div key={`${inp.id}-${ii}`} className="il-sock">
-                              <span
-                                className="il-pin"
-                                style={
-                                  {
-                                    '--pc':
-                                      inp.kind === 'type'
-                                        ? WIRE_VAR.type
-                                        : inp.kind === 'hook'
+                          node.inputs.map((inp, ii) => {
+                            const st = inp.contractStatus;
+                            const pinVar =
+                              st === 'missing'
+                                ? 'var(--c-rsat-wire-broken)'
+                                : st === 'matched'
+                                  ? 'var(--c-rsat-done)'
+                                  : st === 'undeclared'
+                                    ? 'var(--c-rsat-wire-cross)'
+                                    : inp.kind === 'type'
+                                      ? WIRE_VAR.type
+                                      : inp.kind === 'hook'
                                         ? WIRE_VAR.active
-                                        : WIRE_VAR.data,
-                                  } as CSSProperties
-                                }
-                              />
-                              <span className="trunc">{inp.label}</span>
-                            </div>
-                          ))
+                                        : WIRE_VAR.data;
+                            const prefix =
+                              st === 'matched' ? '✓ ' : st === 'missing' ? '✗ ' : st === 'undeclared' ? '? ' : '';
+                            return (
+                              <div key={`${inp.id}-${ii}`} className="il-sock">
+                                <span
+                                  className="il-pin"
+                                  style={{ '--pc': pinVar } as CSSProperties}
+                                />
+                                <span className="trunc">{prefix}{inp.label}</span>
+                              </div>
+                            );
+                          })
                         ) : (
                           <span className="faint mono" style={{ fontSize: 9.5, paddingLeft: 8 }}>
                             (root entry)
@@ -822,26 +863,34 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
 
                       {/* Output Sockets (Right) */}
                       <div className="il-col-out">
-                        {node.outputs.map((out, oi) => (
-                          <div key={`${out.id}-${oi}`} className="il-sock">
-                            <span className="trunc">{out.label}</span>
-                            <span
-                              className="il-pin"
-                              style={
-                                {
-                                  '--pc':
-                                    out.kind === 'type'
-                                      ? WIRE_VAR.type
-                                      : out.kind === 'hook'
+                        {node.outputs.map((out, oi) => {
+                          const st = out.contractStatus;
+                          const pinVar =
+                            st === 'missing'
+                              ? 'var(--c-rsat-wire-broken)'
+                              : st === 'matched'
+                                ? 'var(--c-rsat-done)'
+                                : st === 'undeclared'
+                                  ? 'var(--c-rsat-wire-cross)'
+                                  : out.kind === 'type'
+                                    ? WIRE_VAR.type
+                                    : out.kind === 'hook'
                                       ? WIRE_VAR.active
                                       : out.kind === 'store'
-                                      ? WIRE_VAR.cross
-                                      : WIRE_VAR.data,
-                                } as CSSProperties
-                              }
-                            />
-                          </div>
-                        ))}
+                                        ? WIRE_VAR.cross
+                                        : WIRE_VAR.data;
+                          const suffix =
+                            st === 'matched' ? ' ✓' : st === 'missing' ? ' ✗' : st === 'undeclared' ? ' ?' : '';
+                          return (
+                            <div key={`${out.id}-${oi}`} className="il-sock">
+                              <span className="trunc">{out.label}{suffix}</span>
+                              <span
+                                className="il-pin"
+                                style={{ '--pc': pinVar } as CSSProperties}
+                              />
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
 
@@ -1044,29 +1093,86 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
                 </div>
 
                 <div className="eyebrow">{t('contracts')} (PROVIDES / CONSUMES)</div>
+                {selNode.contractCheck &&
+                (selNode.contractCheck.declaredProvides.length > 0 ||
+                  selNode.contractCheck.declaredConsumes.length > 0) ? (
+                  <div className="pn in" style={{ padding: '6px 8px', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    <span className="pill st-done">
+                      ✓ Matched: {selNode.contractCheck.matchedProvides.length}
+                    </span>
+                    {selNode.contractCheck.missingProvides.length > 0 ? (
+                      <span className="pill st-danger">
+                        ✗ Missing: {selNode.contractCheck.missingProvides.length}
+                      </span>
+                    ) : null}
+                    {selNode.contractCheck.undeclaredExports.length > 0 ? (
+                      <span className="pill st-warn">
+                        ? Undeclared: {selNode.contractCheck.undeclaredExports.length}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
                 <div className="col" style={{ gap: 6 }}>
-                  {selNode.outputs.map((o, oi) => (
-                    <div key={`${o.id}-${oi}`} className="qrow pn in" style={{ padding: '6px 8px' }}>
-                      <span className="chip">OUT</span>
-                      <b className="mono" style={{ fontSize: 11.5, flex: 1 }}>
-                        {o.label}
-                      </b>
-                      <span className="muted" style={{ fontSize: 11 }}>
-                        {o.kind}
-                      </span>
-                    </div>
-                  ))}
-                  {selNode.inputs.map((i, ii) => (
-                    <div key={`${i.id}-${ii}`} className="qrow pn in" style={{ padding: '6px 8px' }}>
-                      <span className="chip">IN</span>
-                      <span className="mono" style={{ fontSize: 11.5, flex: 1 }}>
-                        {i.label}
-                      </span>
-                      <span className="muted" style={{ fontSize: 11 }}>
-                        {i.kind}
-                      </span>
-                    </div>
-                  ))}
+                  {selNode.outputs.map((o, oi) => {
+                    const st = o.contractStatus;
+                    const badgeCls =
+                      st === 'matched'
+                        ? 'pill st-done'
+                        : st === 'missing'
+                          ? 'pill st-danger'
+                          : st === 'undeclared'
+                            ? 'pill st-warn'
+                            : 'chip';
+                    const badgeText =
+                      st === 'matched'
+                        ? 'OUT · ✓ MATCHED'
+                        : st === 'missing'
+                          ? 'OUT · ✗ MISSING'
+                          : st === 'undeclared'
+                            ? 'OUT · ? UNDECLARED'
+                            : 'OUT';
+                    return (
+                      <div key={`${o.id}-${oi}`} className="qrow pn in" style={{ padding: '6px 8px' }}>
+                        <span className={badgeCls}>{badgeText}</span>
+                        <b className="mono" style={{ fontSize: 11.5, flex: 1 }}>
+                          {o.label}
+                        </b>
+                        <span className="muted" style={{ fontSize: 11 }}>
+                          {o.kind}
+                        </span>
+                      </div>
+                    );
+                  })}
+                  {selNode.inputs.map((i, ii) => {
+                    const st = i.contractStatus;
+                    const badgeCls =
+                      st === 'matched'
+                        ? 'pill st-done'
+                        : st === 'missing'
+                          ? 'pill st-danger'
+                          : st === 'undeclared'
+                            ? 'pill st-warn'
+                            : 'chip';
+                    const badgeText =
+                      st === 'matched'
+                        ? 'IN · ✓ MATCHED'
+                        : st === 'missing'
+                          ? 'IN · ✗ MISSING'
+                          : st === 'undeclared'
+                            ? 'IN · ? UNDECLARED'
+                            : 'IN';
+                    return (
+                      <div key={`${i.id}-${ii}`} className="qrow pn in" style={{ padding: '6px 8px' }}>
+                        <span className={badgeCls}>{badgeText}</span>
+                        <span className="mono" style={{ fontSize: 11.5, flex: 1 }}>
+                          {i.label}
+                        </span>
+                        <span className="muted" style={{ fontSize: 11 }}>
+                          {i.kind}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               </>
             ) : (

@@ -15,6 +15,7 @@ import {
   normModules, normMilestones, normNonFunctional, normRisks, normTechnicalDecisions, normContracts,
 } from './model.js';
 import { loadDoc, saveDoc, archiveAndDelete, StoreLockedError } from './store.js';
+import { verifyQuestContracts } from './interlink.js';
 
 export class EngineError extends Error {}
 
@@ -335,6 +336,12 @@ export async function complete(api, sessionId, actor, id, reason) {
   const doc = requireDoc(api, sessionId);
   const a = requireAchievement(doc, id);
   if (!a.claim) throw new EngineError(`${id} is not claimed.`);
+  const contractVerification = verifyQuestContracts(api, sessionId, a);
+  if (!isUser(actor) && !contractVerification.ok) {
+    throw new EngineError(
+      `Contract Enforcer (${id}): Cannot mark complete — promised export(s) [${contractVerification.missingProvides.join(', ')}] in contracts.provides were not found in the AST of scoped files. Export the required symbol(s) or update the contract first.`,
+    );
+  }
   const boxes = a.acceptance || [];
   const allDone = boxes.length > 0 && boxes.every((b) => b.done);
   if (isUser(actor)) {
@@ -342,7 +349,7 @@ export async function complete(api, sessionId, actor, id, reason) {
     a.doneBy = actor;
     a.doneAt = new Date().toISOString();
     a.claim = undefined;
-  } else if (allDone) {
+  } else if (allDone && contractVerification.ok) {
     a.state = 'done';
     a.doneBy = actor;
     a.doneAt = new Date().toISOString();

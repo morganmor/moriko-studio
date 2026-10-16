@@ -36,20 +36,16 @@
         "architecture": { "type": "string", "description": "High-level system architecture description" },
         "modules": {
           "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "id": { "type": "string" },
-              "name": { "type": "string" },
-              "desc": { "type": "string" },
-              "scope": { "$ref": "#/definitions/scope" }
-            }
-          }
+          "maxItems": 60,
+          "items": { "$ref": "#/definitions/module" },
+          "description": "Architecture modules with layer boundaries, allowedImports, and file scopes"
         },
         "milestones": {
           "type": "array",
+          "maxItems": 30,
           "items": {
             "type": "object",
+            "required": ["id", "title"],
             "properties": {
               "id": { "type": "string" },
               "title": { "type": "string" },
@@ -123,8 +119,9 @@
           },
           "scope": { "$ref": "#/definitions/scope" },
           "dependsOn": { "type": "array", "items": { "type": "string" } },
-          "moduleId": { "type": "string" },
-          "milestoneId": { "type": "string" },
+          "moduleId": { "type": "string", "description": "Architecture module id (from prd.modules) this achievement belongs to" },
+          "milestoneId": { "type": "string", "description": "Milestone id (from prd.milestones) this achievement delivers" },
+          "contracts": { "$ref": "#/definitions/contracts" },
           "tags": { "type": "array", "items": { "type": "string" } },
           "state": { "enum": ["locked", "available", "claimed", "in_progress", "review", "done", "blocked", "dropped"] },
           "claim": {
@@ -138,7 +135,10 @@
             }
           },
           "comments": { "type": "array" },
-          "scopeChanges": { "type": "array" },
+          "scopeChanges": {
+            "type": "array",
+            "items": { "$ref": "#/definitions/scopeChange" }
+          },
           "files": {
             "type": "array",
             "items": {
@@ -172,12 +172,67 @@
     },
     "scope": {
       "type": "object",
+      "description": "File glob boundaries (include minus exclude) and write guard rules",
       "properties": {
         "include": { "type": "array", "items": { "type": "string" } },
         "exclude": { "type": "array", "items": { "type": "string" } },
         "maxFiles": { "type": "number" },
         "allowCreate": { "type": "boolean" },
         "allowDelete": { "type": "boolean" }
+      }
+    },
+    "module": {
+      "type": "object",
+      "required": ["id", "name"],
+      "description": "Architectural module with layer classification, allowed module imports, and file scope",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "desc": { "type": "string" },
+        "layer": {
+          "type": "string",
+          "enum": ["presentation", "application", "domain", "infrastructure", "shared", "ui", "state", "infra"]
+        },
+        "allowedImports": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Module ids that files inside this module are allowed to import from"
+        },
+        "scope": { "$ref": "#/definitions/scope" }
+      }
+    },
+    "contracts": {
+      "type": "object",
+      "required": ["provides", "consumes"],
+      "additionalProperties": false,
+      "description": "Explicit symbol contracts declared on an achievement and cross-validated 1:1 against real AST exports/imports in Interlinked",
+      "properties": {
+        "provides": {
+          "type": "array",
+          "maxItems": 30,
+          "items": { "type": "string" },
+          "description": "Public symbols (functions, constants, hooks, types, default export) promised by this achievement within its scope"
+        },
+        "consumes": {
+          "type": "array",
+          "maxItems": 30,
+          "items": { "type": "string" },
+          "description": "Upstream symbols this achievement expects to import from other modules/achievements"
+        }
+      }
+    },
+    "scopeChange": {
+      "type": "object",
+      "required": ["op", "paths", "reason", "by", "at"],
+      "properties": {
+        "at": { "type": "string" },
+        "by": { "$ref": "#/definitions/actor" },
+        "op": { "enum": ["widen", "narrow"] },
+        "paths": { "type": "array", "items": { "type": "string" } },
+        "reason": { "type": "string" },
+        "approved": { "type": "boolean" },
+        "approvedBy": { "$ref": "#/definitions/actor" },
+        "approvedAt": { "type": "string" }
       }
     }
   }
