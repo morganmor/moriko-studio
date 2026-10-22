@@ -206,17 +206,23 @@ export class McpStdioClient implements McpClient {
 export class McpHttpClient implements McpClient {
   private sessionId: string | null = null;
   private readonly url: string;
-  private readonly headers: Record<string, string> | undefined;
+  /** Static headers, or a getter re-resolved per request (e.g. OAuth tokens). */
+  private readonly headers: Record<string, string> | (() => Promise<Record<string, string>>) | undefined;
   private readonly label: string;
 
   constructor(
     url: string,
-    headers: Record<string, string> | undefined,
+    headers: Record<string, string> | (() => Promise<Record<string, string>>) | undefined,
     label: string,
   ) {
     this.url = url;
     this.headers = headers;
     this.label = label;
+  }
+
+  private async resolveHeaders(): Promise<Record<string, string>> {
+    if (typeof this.headers === 'function') return this.headers();
+    return this.headers ?? {};
   }
 
   private async post(body: Record<string, unknown>, expectResponse: boolean): Promise<unknown> {
@@ -229,7 +235,7 @@ export class McpHttpClient implements McpClient {
           'Content-Type': 'application/json',
           Accept: 'application/json, text/event-stream',
           ...(this.sessionId ? { 'Mcp-Session-Id': this.sessionId } : {}),
-          ...(this.headers ?? {}),
+          ...(await this.resolveHeaders()),
         },
         body: JSON.stringify(body),
       });

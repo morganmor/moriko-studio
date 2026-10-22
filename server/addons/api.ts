@@ -38,6 +38,7 @@ import { getSetting, setSetting, onSettingsChange } from './settings.js';
 import { registerRpcHandler } from './rpc.js';
 import { setStatus } from './contributions.js';
 import { exposeModApi, useModApi } from './modapi.js';
+import { assertPermission } from './permissions.js';
 import { getAddonScope } from './disposables.js';
 import type { AddonApi, AddonToolRegistration, AddonCommandRegistration, AddonToolCtx, AddonActor } from './types.js';
 import type { HarnessToolResult } from '../agents/tools/shared.js';
@@ -409,6 +410,13 @@ export function createAddonApi(addonId: string, opts: AddonApiOptions | string =
     harness: {
       touchedPaths(tool: string, args: Record<string, unknown>) {
         return touchedPaths(tool, args);
+      },
+      /** P2 (moco-canvas): headless measurement of standalone HTML. Gated by
+       *  the sensitive "harness.render" permission — setContent only. */
+      async measureHtml(html: string, viewports: Array<{ name: string; width: number; height: number }>) {
+        assertPermission(addonId, 'harness.render');
+        const { measureHtml } = await import('../agents/spatial-runtime.js');
+        return measureHtml(html, viewports);
       },
     },
     prompt: {

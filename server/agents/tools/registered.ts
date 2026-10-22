@@ -20,5 +20,6 @@ import './scaffold.js';
 import './game-probe.js';
 import './shader-check.js';
 import './asset-inspect.js';
+import './skills.js';
 import './sub-agent.js';
 export {};

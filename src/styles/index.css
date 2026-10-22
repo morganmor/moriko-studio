@@ -445,6 +445,12 @@
 .eye .pupil{transform:translate(var(--px,0),var(--py,0));transition:transform .12s}
 .pill{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 10px;border-radius:999px;border:1px solid var(--line);font-size:12.5px;font-weight:500;color:var(--muted);transition:border-color .15s,color .15s,background .15s;max-width:100%}
 .pill:hover,.pill[aria-expanded=true]{color:rgb(var(--c-ink));border-color:rgb(var(--c-accent)/.5)}
+/* Active pill — same accent treatment as .ib[aria-expanded=true]. */
+.pill.on{color:rgb(var(--c-accent));border-color:rgb(var(--c-accent)/.5);background:rgb(var(--c-accent)/.12)}
+/* PLAN MODE — a hard gate, so the chip is filled, not merely tinted: it must
+   stay legible while the user reads the thread, not only when hovered. */
+.pill.plan{color:rgb(var(--c-accent-ink));background:rgb(var(--c-accent));border-color:rgb(var(--c-accent))}
+.pill.plan:hover{color:rgb(var(--c-accent-ink));background:rgb(var(--c-accent));border-color:rgb(var(--c-accent));opacity:.9}
 .pill .ic{width:14px;height:14px}
 .tcount{min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:rgb(var(--c-accent));color:rgb(var(--c-accent-ink));font-size:10.5px;font-weight:700;display:grid;place-items:center}
 .tcount:empty{display:none}
@@ -3206,6 +3212,79 @@ kbd {
 }
 .addon-perm-table { width: 100%; margin-top: 8px; border-collapse: collapse; font-size: 12px; }
 .addon-perm-table td { padding: 4px 8px 4px 0; border-bottom: 1px solid rgb(var(--c-line) / .6); color: var(--muted); }
+/* ── Addon terminal (Hub Logs tab) — CMD/UNIX console styling ─────────── */
+.aterm {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  background: #14120f; /* fixed dark console — reads like a real terminal in every theme */
+  color: #d4d0c8;
+}
+.aterm-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: #1e1b17;
+  border-bottom: 1px solid #34302a;
+  font-family: var(--f-mono);
+  font-size: 11.5px;
+}
+.aterm-dots { display: inline-flex; gap: 5px; }
+.aterm-dots i {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: #4a453d; display: inline-block;
+}
+.aterm-dots i:first-child { background: #b3584a; }
+.aterm-dots i:nth-child(2) { background: #b3924a; }
+.aterm-dots i:nth-child(3) { background: #6f9e58; }
+.aterm-title { color: #a8a29a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aterm-chips { display: inline-flex; gap: 6px; margin-left: auto; }
+.aterm-chip {
+  font-size: 10.5px; padding: 1px 7px; border-radius: 999px;
+  border: 1px solid #3c372f; color: #a8a29a; white-space: nowrap;
+}
+.aterm-chip.err { color: #e08c7e; border-color: #6b3a32; }
+.aterm-chip.warn { color: #d9b56a; border-color: #6b5a32; }
+.aterm-btn {
+  flex: none; font-family: var(--f-mono); font-size: 11px;
+  background: transparent; border: 1px solid #3c372f; border-radius: 6px;
+  color: #a8a29a; padding: 2px 8px; cursor: pointer;
+}
+.aterm-btn.on { color: #8fc97a; border-color: #3f5a34; }
+.aterm-pick { padding: 8px 12px; background: #1a1815; border-bottom: 1px solid #2c2822; }
+.aterm-select {
+  font-family: var(--f-mono); font-size: 12px; width: 100%;
+  background: #14120f; color: #d4d0c8;
+  border: 1px solid #3c372f; border-radius: 6px; padding: 5px 8px;
+}
+.aterm-body {
+  font-family: var(--f-mono);
+  font-size: 11.5px;
+  line-height: 1.65;
+  padding: 10px 14px 14px;
+  height: min(52vh, 480px);
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.aterm-line { display: flex; gap: 10px; align-items: baseline; }
+.aterm-line.muted { color: #6e675c; }
+.aterm-time { flex: none; color: #6e675c; }
+.aterm-lvl { flex: none; font-weight: 600; color: #7a9ec2; }
+.aterm-line.error .aterm-lvl { color: #e08c7e; }
+.aterm-line.warn .aterm-lvl { color: #d9b56a; }
+.aterm-line.error .aterm-text { color: #e8a196; }
+.aterm-line.warn .aterm-text { color: #dcc084; }
+.aterm-src {
+  flex: none; font-size: 9.5px; padding: 0 5px; border-radius: 4px;
+  border: 1px solid #4a5a6b; color: #7a9ec2; letter-spacing: .06em;
+}
+.aterm-dur { flex: none; color: #6f9e58; }
+.aterm-text { color: #c9c4ba; min-width: 0; }
+
 .addon-hub-logcard {
   display: flex;
   flex-direction: column;
@@ -3242,7 +3321,9 @@ kbd {
   border-radius: 999px;
   background: rgb(var(--c-rail-dot));
 }
-.rsat-gem-ic {
+/* Topbar addon launch buttons (AddonTopbarButtons) — icon masked from the
+   addon's own resources/icon.svg, themed via currentColor. */
+.tb-addon-ic {
   display: block;
   width: 16px;
   height: 16px;

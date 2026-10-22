@@ -366,6 +366,12 @@ export async function saveNodePositions(api, sessionId, body) {
   return ok(await persistPos(api, sessionId, body?.positions ?? {}));
 }
 
+/** Clear all saved node positions — every node returns to the tidy default grid. */
+export async function clearNodePositions(api, sessionId) {
+  const { clearNodePositions: clearPos } = await import('./interlink.js');
+  return ok(await clearPos(api, sessionId));
+}
+
 /** The registry of handlers main.ts wires into ctx.rpc.handle. */
 export const rpcHandlers = {
   state, start, pause, updatePrd: updatePrdRpc, reviewAccept, reviewReject, deleteAchievement, deletePrd, restoreAchievement,
@@ -375,5 +381,5 @@ export const rpcHandlers = {
   workspaces, setWorkspace,
   comment, createPrd: createPrdRpc, claim,
   agents, createAgent, updateAgent, deleteAgent, bindAgentSession,
-  interlinkGraph, saveNodePositions, setIlQuality,
+  interlinkGraph, saveNodePositions, clearNodePositions, setIlQuality,
 };

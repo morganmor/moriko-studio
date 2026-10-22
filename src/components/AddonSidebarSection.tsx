@@ -155,7 +155,7 @@ export const AddonSidebarSection = memo(function AddonSidebarSection({ go }: { g
             aria-current={view === 'addons' ? 'page' : undefined}
             className="ib xs"
           >
-            <DIcon name="plug" className="ic" aria-hidden="true" />
+            <DIcon name="addon" className="ic" aria-hidden="true" />
           </button>
         </div>
       </div>

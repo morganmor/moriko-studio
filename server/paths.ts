@@ -55,6 +55,8 @@ export const apiKeysFile = path.join(HOME_ROOT, 'api-keys.json');
 export const visionFile = path.join(HOME_ROOT, 'vision.json');
 /** User-registered MCP tool servers. */
 export const mcpFile = path.join(HOME_ROOT, 'mcp.json');
+/** Figma MCP OAuth tokens (machine-level, like mcp.json). */
+export const figmaAuthFile = path.join(HOME_ROOT, 'figma-auth.json');
 /** Agent harness settings + allowed-directory allowlist. */
 export const agentsFile = path.join(HOME_ROOT, 'agents.json');
 /** Server-wide user settings (image retention window…). */
@@ -63,6 +65,8 @@ export const settingsFile = path.join(HOME_ROOT, 'settings.json');
 export const remindersFile = path.join(HOME_ROOT, 'reminders.json');
 /** User-authored / user-customized agent workflows. */
 export const workflowsFile = path.join(HOME_ROOT, 'workflows.json');
+/** Global agent skills (SKILL.md folders, open Agent Skills spec). */
+export const skillsDir = path.join(HOME_ROOT, 'skills');
 /**
  * CLIENT/UI STATE — the small per-device preferences that used to live in the
  * browser's localStorage: theme, zoom, font, sidebar, saved prompts, the last

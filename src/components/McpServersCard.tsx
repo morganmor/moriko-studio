@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useState } from 'react';
-import { FlaskConical, ListFilter, Loader2, Plus, Trash2 } from './icons';
+import { FlaskConical, Figma, ListFilter, Loader2, Plus, Trash2 } from './icons';
 
 import {
   addMcpServer,
+  connectFigma,
   deleteMcpServer,
+  disconnectFigma,
+  getFigmaAuth,
   listMcpServers,
   listServerTools,
   testMcpServer,
   updateMcpServer,
+  type FigmaAuthStatus,
   type McpServerTool,
 } from '../lib/api';
 import { Tip, cx } from './ui';
@@ -30,6 +34,7 @@ interface McpServer {
   command?: string;
   args?: string[];
   url?: string;
+  auth?: 'figma';
   disabledTools?: string[];
 }
 
@@ -64,6 +69,10 @@ export function McpServersCard() {
   });
   const [testStates, setTestStates] = useState<Record<string, TestState | 'testing'>>({});
   const [busy, setBusy] = useState(false);
+  /** Figma OAuth state — separate from the generic server list. */
+  const [figma, setFigma] = useState<FigmaAuthStatus | null>(null);
+  const [figmaBusy, setFigmaBusy] = useState(false);
+  const [figmaError, setFigmaError] = useState<string | null>(null);
   /** Per-server tools panel: which are open, and their tool list. */
   const [openPanels, setOpenPanels] = useState<Set<string>>(new Set());
   const [toolsByServer, setToolsByServer] = useState<Record<string, McpServerTool[] | 'loading'>>({});
@@ -79,6 +88,7 @@ export function McpServersCard() {
 
   useEffect(() => {
     void refresh();
+    void getFigmaAuth().then(setFigma).catch(() => setFigma({ connected: false }));
   }, [refresh]);
 
   const handleAdd = async () => {
@@ -152,8 +162,151 @@ export function McpServersCard() {
     }
   };
 
+  /** Full OAuth round-trip: server opens Figma consent, resolves after tokens land. */
+  const handleFigmaConnect = async () => {
+    if (figmaBusy) return;
+    setFigmaBusy(true);
+    setFigmaError(null);
+    try {
+      await connectFigma();
+      setFigma(await getFigmaAuth());
+      // Register the Figma remote MCP server once so its tools appear in the list.
+      if (!servers.some((server) => server.auth === 'figma')) {
+        await addMcpServer({
+          name: 'Figma',
+          transport: 'http',
+          url: 'https://mcp.figma.com/mcp',
+          auth: 'figma',
+          enabled: true,
+        });
+        await refresh();
+      }
+    } catch (error) {
+      setFigmaError(error instanceof Error ? error.message : 'Figma sign-in failed');
+    } finally {
+      setFigmaBusy(false);
+    }
+  };
+
+  const handleFigmaDisconnect = async () => {
+    setFigmaBusy(true);
+    setFigmaError(null);
+    try {
+      await disconnectFigma();
+      setFigma({ connected: false });
+    } catch (error) {
+      setFigmaError(error instanceof Error ? error.message : 'Figma disconnect failed');
+    } finally {
+      setFigmaBusy(false);
+    }
+  };
+
+  /** Registers the Figma desktop Dev Mode MCP server (no OAuth needed). */
+  const handleFigmaDesktop = async () => {
+    if (figmaBusy) return;
+    setFigmaBusy(true);
+    setFigmaError(null);
+    try {
+      if (servers.some((server) => server.auth === 'figma' || server.url === 'http://127.0.0.1:3845/mcp')) return;
+      await addMcpServer({
+        name: 'Figma Desktop',
+        transport: 'http',
+        url: 'http://127.0.0.1:3845/mcp',
+        enabled: true,
+      });
+      await refresh();
+    } catch (error) {
+      setFigmaError(error instanceof Error ? error.message : 'Failed to add Figma Desktop server');
+    } finally {
+      setFigmaBusy(false);
+    }
+  };
+
+  /** PAT path — works on the free Starter plan via Figma's REST API. */
+  const [figmaPat, setFigmaPat] = useState('');
+  const handleFigmaPat = async () => {
+    if (figmaBusy || !figmaPat.trim()) return;
+    setFigmaBusy(true);
+    setFigmaError(null);
+    try {
+      if (!servers.some((server) => server.command?.includes('figma-developer-mcp'))) {
+        await addMcpServer({
+          name: 'Figma (Framelink)',
+          transport: 'stdio',
+          command: 'npx',
+          args: ['-y', 'figma-developer-mcp', '--stdio'],
+          env: { FIGMA_API_KEY: figmaPat.trim() },
+          enabled: true,
+        });
+      }
+      setFigmaPat('');
+      await refresh();
+    } catch (error) {
+      setFigmaError(error instanceof Error ? error.message : 'Failed to add Framelink Figma server');
+    } finally {
+      setFigmaBusy(false);
+    }
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {figma !== null ? (
+        <div className="card" style={{ borderRadius: 'var(--r-md)', padding: '8px 12px', background: 'rgb(var(--c-canvas))' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: 'rgb(var(--c-ink))', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Figma className="ic" aria-hidden="true" />
+                Figma (remote MCP)
+              </p>
+              <p style={{ margin: 0, fontSize: 11, color: 'var(--faint)' }}>
+                {figma.connected
+                  ? `Connected via OAuth${figma.obtainedAt ? ` · ${new Date(figma.obtainedAt).toLocaleString()}` : ''}`
+                  : 'Remote Figma MCP requires Moriko to be listed in Figma\u2019s MCP catalog. No Figma desktop app? Use the remote server below.'}
+              </p>
+              {!figma.connected ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+                  <input
+                    type="password"
+                    value={figmaPat}
+                    onChange={(event) => setFigmaPat(event.target.value)}
+                    onKeyDown={(event) => { if (event.key === 'Enter') void handleFigmaPat(); }}
+                    placeholder="Figma personal access token (free plan)"
+                    style={{ flex: 1, minWidth: 0, fontSize: 12 }}
+                    autoComplete="off"
+                  />
+                  <button type="button" onClick={() => void handleFigmaPat()} disabled={!figmaPat.trim()} className="btn primary sm">
+                    Use PAT
+                  </button>
+                </div>
+              ) : null}
+              {figmaError ? (
+                <p style={{ margin: '2px 0 0', fontSize: 11, color: 'rgb(var(--c-danger))' }}>{figmaError}</p>
+              ) : null}
+            </div>
+            {figmaBusy ? (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--faint)', flexShrink: 0 }}>
+                <Loader2 className="ic spin" aria-hidden="true" />
+                {figma.connected ? 'Signing out…' : 'Waiting for Figma consent…'}
+              </span>
+            ) : figma.connected ? (
+              <button type="button" onClick={() => void handleFigmaDisconnect()} className="btn ghost sm">
+                Disconnect
+              </button>
+            ) : (
+              <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                <button type="button" onClick={() => void handleFigmaDesktop()} className="btn ghost sm">
+                  Add Desktop server
+                </button>
+                <button type="button" onClick={() => void handleFigmaConnect()} className="btn primary sm">
+                  <Figma className="ic" aria-hidden="true" />
+                  Connect Figma
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
+
       {loaded && servers.length === 0 && !adding ? (
         <p style={{ margin: 0, fontSize: 12, color: 'var(--muted)' }}>
           No MCP servers yet. Add one below (e.g. a local filesystem server) and enable

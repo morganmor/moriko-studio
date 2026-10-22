@@ -3,10 +3,11 @@ import { parseDataUrl } from '../contracts.js';
 import { anthropicThinkingBudget, anthropicMaxOutput, createThinkingScrubState, flushThinkingScrub, scrubInlineThinkingFragment, ALL_THINK_TAGS } from '../reasoning.js';
 import { coerceText } from '../textUtil.js';
 import { assertOk, iterateSse, type StreamHandler, type StreamParams } from '../sse.js';
+import { idle, STREAM_IDLE_MS } from '../liveness.js';
 import { resolveSteerPartRefs } from '../attachmentStore.js';
 import { drainSteers, steerTextOf, steersToUserParts } from '../steer.js';
 import { drainInjections, injectionText } from '../addons/inject.js';
-import { buildSystemInstruction } from './openai.js';
+import { buildSystemSegments } from './openai.js';
 import { gateToolImages, imageCapableFor, separateImageParts, IMAGE_OMITTED_NOTE } from './visionGate.js';
 import {
   createLoopGuard,
@@ -18,11 +19,14 @@ import {
   type LoopStopReason,
 } from '../mcp/loop.js';
 
+/** Marks the END of a reusable prefix (Anthropic prompt caching). */
+type CacheControl = { type: 'ephemeral' };
+
 /** Anthropic content blocks this adapter can produce from generic parts. */
 type AnthropicBlock =
-  | { type: 'text'; text: string }
-  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
-  | { type: 'document'; source: { type: 'base64'; media_type: string; data: string } }
+  | { type: 'text'; text: string; cache_control?: CacheControl }
+  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string }; cache_control?: CacheControl }
+  | { type: 'document'; source: { type: 'base64'; media_type: string; data: string }; cache_control?: CacheControl }
   | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
   | {
       type: 'tool_result';
@@ -30,6 +34,7 @@ type AnthropicBlock =
       /** String, or blocks when the result carries inline images (native vision). */
       content: string | Array<AnthropicBlock>;
       is_error?: boolean;
+      cache_control?: CacheControl;
     };
 
 /**
@@ -79,6 +84,79 @@ function toAnthropicContent(content: ChatMessage['content']): string | Anthropic
     }
   }
   return blocks.length > 0 ? blocks : '';
+}
+
+/**
+ * PROMPT CACHING (5A).
+ *
+ * Anthropic re-bills the instruction prefix on every request unless a
+ * breakpoint marks where the reusable region ends. Three are placed (the API
+ * allows four):
+ *   1. end of the STABLE system prompt — caches the tool schemas + base rules,
+ *   2. end of the previous message,
+ *   3. end of the last message.
+ *
+ * 2 and 3 are what make a tool loop cheap: every round re-sends the whole
+ * conversation, and each round reads the prefix the previous one wrote.
+ *
+ * A gateway that does not implement `cache_control` answers 400. That is
+ * detected once, the latch flips, and the request is retried WITHOUT
+ * breakpoints — an incompatible endpoint costs one rejected call, not a chat.
+ * Set MORIKO_DISABLE_PROMPT_CACHE=1 to skip breakpoints entirely.
+ */
+let cacheControlSupported = process.env.MORIKO_DISABLE_PROMPT_CACHE !== '1';
+
+/** The API caps breakpoints at 4; one is spent on the system block. */
+const MESSAGE_CACHE_BREAKPOINTS = 2;
+
+function systemBlocks(
+  params: StreamParams,
+  cache: boolean,
+): string | AnthropicBlock[] | undefined {
+  const { stable, volatile } = buildSystemSegments(params);
+  if (!stable && !volatile) return undefined;
+  // No stable prefix → nothing worth a breakpoint; keep the plain string form.
+  if (!cache || !stable) return [stable, volatile].filter(Boolean).join('\n\n');
+  const blocks: AnthropicBlock[] = [
+    { type: 'text', text: stable, cache_control: { type: 'ephemeral' } },
+  ];
+  if (volatile) blocks.push({ type: 'text', text: volatile });
+  return blocks;
+}
+
+/** Strips breakpoints from a previous round so they never accumulate past 4. */
+function clearMessageCache(
+  convo: Array<{ role: 'user' | 'assistant'; content: string | AnthropicBlock[] }>,
+): void {
+  for (const message of convo) {
+    if (!Array.isArray(message.content)) continue;
+    for (const block of message.content) {
+      if ('cache_control' in block) delete block.cache_control;
+    }
+  }
+}
+
+/** Marks the conversation tail: the previous message and the last one. */
+function markMessageCache(
+  convo: Array<{ role: 'user' | 'assistant'; content: string | AnthropicBlock[] }>,
+): void {
+  let marked = 0;
+  for (let index = convo.length - 1; index >= 0 && marked < MESSAGE_CACHE_BREAKPOINTS; index -= 1) {
+    const message = convo[index];
+    if (typeof message.content === 'string') {
+      if (!message.content.trim()) continue;
+      message.content = [
+        { type: 'text', text: message.content, cache_control: { type: 'ephemeral' } },
+      ];
+      marked += 1;
+      continue;
+    }
+    const last = message.content[message.content.length - 1];
+    // tool_use blocks cannot carry cache_control; fall back to the message before.
+    if (!last || last.type === 'tool_use') continue;
+    last.cache_control = { type: 'ephemeral' };
+    marked += 1;
+  }
 }
 
 /** Maps the UI thinking level onto Anthropic's `thinking.budget_tokens`. */
@@ -207,47 +285,71 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
   const frozen = params.settings.trust?.outputFrozen === true;
   let choiceMade = false;
 
-  for (;;) {
-    const useTools = prepared.count > 0 && !forcedStop;
-
-    const body: Record<string, unknown> = {
-      model,
-      stream: true,
-      max_tokens: settings.maxOutputTokens ?? anthropicMaxOutput(model),
-      messages: convo,
-      ...(prepared.defs && useTools
-        ? {
-            tools: prepared.defs,
-            ...(frozen && !choiceMade
-              ? { tool_choice: { type: 'tool', name: 'agent__harness_choice' } }
-              : {}),
-          }
-        : {}),
-    };
-
-    const systemInstruction = buildSystemInstruction(params);
-    if (systemInstruction) body.system = systemInstruction;
-
-    if (thinking) {
-      body.thinking = thinking;
-      body.max_tokens = Math.max(
-        settings.maxOutputTokens ?? anthropicMaxOutput(model),
-        thinking.budget_tokens + 1024,
-      );
-    } else {
-      body.temperature = settings.temperature;
-    }
-
-    const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/messages`, {
+  /** One POST to the Messages endpoint — the body differs only by caching.
+   *  Accepts the streaming-phase signal (idle-bound) so silence aborts the
+   *  connection, not just a user Stop. */
+  const post = (payload: Record<string, unknown>, fetchSignal: AbortSignal): Promise<Response> =>
+    fetch(`${baseUrl.replace(/\/+$/, '')}/messages`, {
       method: 'POST',
-      signal,
+      signal: fetchSignal,
       headers: {
         'Content-Type': 'application/json',
         'anthropic-version': '2023-06-01',
         ...(apiKey ? { 'x-api-key': apiKey } : {}),
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(payload),
     });
+
+  for (;;) {
+    const streamIdle = idle(signal, STREAM_IDLE_MS, 'STREAM_IDLE');
+    try {
+    const useTools = prepared.count > 0 && !forcedStop;
+
+    const buildBody = (cache: boolean): Record<string, unknown> => {
+      // Breakpoints are re-placed every round; never let them accumulate.
+      clearMessageCache(convo);
+      if (cache) markMessageCache(convo);
+      const system = systemBlocks(params, cache);
+      const body: Record<string, unknown> = {
+        model,
+        stream: true,
+        max_tokens: settings.maxOutputTokens ?? anthropicMaxOutput(model),
+        messages: convo,
+        ...(prepared.defs && useTools
+          ? {
+              tools: prepared.defs,
+              ...(frozen && !choiceMade
+                ? { tool_choice: { type: 'tool', name: 'agent__harness_choice' } }
+                : {}),
+            }
+          : {}),
+        ...(system ? { system } : {}),
+      };
+      if (thinking) {
+        body.thinking = thinking;
+        body.max_tokens = Math.max(
+          settings.maxOutputTokens ?? anthropicMaxOutput(model),
+          thinking.budget_tokens + 1024,
+        );
+      } else {
+        body.temperature = settings.temperature;
+      }
+      return body;
+    };
+
+    const cache = cacheControlSupported;
+    let response = await post(buildBody(cache), streamIdle.signal);
+    if (!response.ok && cache) {
+      const detail = await response.text().catch(() => '');
+      if (/cache_control/i.test(detail)) {
+        // Endpoint does not implement breakpoints: latch off, retry clean.
+        cacheControlSupported = false;
+        response = await post(buildBody(false), streamIdle.signal);
+      } else {
+        // Any other failure: hand assertOk the exact body it would have read.
+        await assertOk(new Response(detail, { status: response.status }), 'Anthropic');
+      }
+    }
 
     await assertOk(response, 'Anthropic');
     if (!response.body) throw new Error('Anthropic returned an empty stream.');
@@ -273,7 +375,7 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
       { id: string; name: string; arguments: string; opened: boolean }
     >();
 
-    for await (const payload of iterateSse(response.body)) {
+    for await (const payload of iterateSse(response.body, () => streamIdle.reset())) {
       let event: AnthropicEvent;
       try {
         event = JSON.parse(payload) as AnthropicEvent;
@@ -486,5 +588,8 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
     }
 
     convo.push({ role: 'user', content: resultBlocks });
+    } finally {
+      streamIdle.clear();
+    }
   }
 }

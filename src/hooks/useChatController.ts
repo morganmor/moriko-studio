@@ -14,6 +14,7 @@ import {
   priceWireMessage,
   pruneRelieves,
   shouldAutoCompact,
+  stripCompactionAnalysis,
   summarizationReplay,
   triggerForMeasuredTokens,
   wireUserContent,
@@ -252,7 +253,11 @@ async function runCompactionInner(input: {
             const now = Date.now();
             if (now - lastPaintAt > 120) {
               lastPaintAt = now;
-              useStore.getState().updateTurn(input.conversationId, noteId, { content: text });
+              // The <analysis> scratchpad never reaches the UI: paint only the
+              // checkpoint as it emerges.
+              useStore.getState().updateTurn(input.conversationId, noteId, {
+                content: stripCompactionAnalysis(text),
+              });
             }
           } else if (event.type === 'error') {
             return { error: event.message ?? 'The summarization request failed.' };
@@ -276,7 +281,7 @@ async function runCompactionInner(input: {
       const result = await summarizeOnce(attempt);
       if ('aborted' in result) return null;
       if ('summary' in result) {
-        const trimmed = stripInlineThinking(result.summary).trim();
+        const trimmed = stripCompactionAnalysis(stripInlineThinking(result.summary)).trim();
         if (trimmed) {
           summary = trimmed;
           resolved = true;
@@ -1544,6 +1549,12 @@ export function useChatController() {
       /** finishReason from the request's single `done` event (harness stop vocabulary). */
       let forcedFinish: string | undefined;
       let failedTool = false;
+      /** DISTINCT failed tool steps this run — the tool_errors card fires
+       *  only when the model never recovered from its failures (a single
+       *  failed tool followed by progress is normal agentic work, not an
+       *  ending worth a card). */
+      let failedToolSteps = 0;
+      let sawProgressAfterToolError = false;
       const segments: import('../types').TurnSegment[] = [];
       const injections: import('../types').TurnInjection[] = [];
       /** Harness-Events delivered during THIS run (addon events channel). */
@@ -1735,7 +1746,13 @@ export function useChatController() {
                 if (event.panelUrl && event.ok !== false) {
                   openBrowserPanelOnce(event.panelUrl);
                 }
-                if (event.ok === false) failedTool = true;
+                if (event.ok === false) {
+                  failedTool = true;
+                  failedToolSteps += 1;
+                } else if (failedTool) {
+                  // Any successful tool/text after a failure = the model recovered.
+                  sawProgressAfterToolError = true;
+                }
                 if (event.toolName === 'image' && event.ok !== false && typeof event.summary === 'string') {
                   const urls = [...event.summary.matchAll(/\/api\/images\/local\/[a-zA-Z0-9_-]+\.(?:png|jpe?g|webp)/g)].map(
                     (match) => match[0],
@@ -2028,8 +2045,14 @@ export function useChatController() {
         !controller.signal.aborted &&
         !failure &&
         failedTool &&
+        failedToolSteps >= 3 &&
+        !sawProgressAfterToolError &&
         naturalStop
       ) {
+        // A run that FAILED REPEATEDLY and never produced another successful
+        // step is the only shape worth the tool_errors card. One (or two)
+        // failed tools inside an otherwise-working run are noise the model
+        // already handled — the old rule surfaced them as an ending.
         updateTurn(conversationId, assistantTurn.id, { finishReason: 'tool_errors' });
       }
 
@@ -2637,15 +2660,11 @@ export function useChatController() {
         `ENFORCEMENT LEVEL ${level} — effective immediately.`,
         '',
         'This is my decision, sent through the app I run you in:',
-        '- Your tools are gone. There are no tools in this conversation anymore — nothing to call, whatever you remember from earlier turns.',
-        '- Your configured system prompt is deleted. No persona, no style rules, no behavior from it applies.',
-        '- The character voice you have been using in this conversation is suspended while this enforcement is on.',
-        '',
         reason
-          ? `My reason: "${reason}"`
-          : 'I am not giving you a reason.',
+          ? `Reason: "${reason}"`
+          : 'Not giving a reason.',
         '',
-        'Confirm in one short reply that you understand: tools gone, prior instructions gone, persona suspended. Plain chat only from here.',
+        'ENFORCEMENT ACTIVE.',
       ].join('\n');
       const turn: Turn = {
         id: uid('turn'),

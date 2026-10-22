@@ -8,7 +8,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
-import { str, truncateOutput, requireWorkspace, MAX_READ_BYTES, MAX_OUTPUT_CHARS } from './shared.js';
+import { str, truncateOutput, requireWorkspace, MAX_READ_BYTES } from './shared.js';
 import { recordRead } from '../read-policy.js';
 import { isInsideRoot, isInsideAllowedDir } from '../workspace.js';
 
@@ -17,6 +17,9 @@ interface ErrorFrame {
   line: number;
   column?: number;
 }
+
+/** Own budget for this tool — the shared constant was removed (2026-10-22). */
+const EXPLAIN_BUDGET_CHARS = 48_000;
 
 /** Extracts file:line frames from JS/TS stacks and Python tracebacks. */
 export function parseErrorFrames(error: string): ErrorFrame[] {
@@ -52,7 +55,7 @@ export async function explainErrorTool(args: Record<string, unknown>, ctx: Agent
   const sections: string[] = [`# error — ${error.split('\n')[0].trim().slice(0, 300)}`];
   let receipts = 0;
   let skipped = 0;
-  let budget = MAX_OUTPUT_CHARS;
+  let budget = EXPLAIN_BUDGET_CHARS;
   const seen = new Set<string>();
   for (const frame of frames) {
     if (budget <= 500 || receipts >= 8) break;

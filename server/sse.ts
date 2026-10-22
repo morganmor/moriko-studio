@@ -48,8 +48,15 @@ export class UpstreamError extends Error {
 /**
  * Reads a `text/event-stream` response and yields each `data:` payload.
  * Handles CRLF, multi-line data fields, and chunk boundaries that split an event.
+ *
+ * `onActivity` (when provided) is called on every `reader.read()` that returns
+ * data — a sign-of-life that lets the caller's `idle()` silence-budget reset,
+ * so a long-but-healthy stream is never killed while a stalled one is.
  */
-export async function* iterateSse(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
+export async function* iterateSse(
+  body: ReadableStream<Uint8Array>,
+  onActivity?: () => void,
+): AsyncGenerator<string> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -58,6 +65,7 @@ export async function* iterateSse(body: ReadableStream<Uint8Array>): AsyncGenera
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      onActivity?.();
       buffer += decoder.decode(value, { stream: true });
 
       let boundary = buffer.search(/\r?\n\r?\n/);

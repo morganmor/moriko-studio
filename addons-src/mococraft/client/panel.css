@@ -1,0 +1,76 @@
+/* Mococraft panel styles — addon-owned (per AGENTS.md: addon CSS stays in
+   the addon's own files, prefixed .moco-). Uses harness --c-* tokens where
+   available, falls back to neutrals. */
+.moco-root {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12.5px;
+}
+.moco-h {
+  margin: 6px 0 2px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c-muted, #777);
+}
+.moco-sub { margin: 0; color: var(--c-muted, #777); }
+.moco-sub code { font-size: 11px; }
+
+.moco-dna-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.moco-dna-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px;
+  text-align: left;
+  border: 1px solid var(--c-hairline, #ddd);
+  border-radius: 6px;
+  background: var(--c-elevated, #fff);
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+.moco-dna-card:hover { border-color: var(--c-accent, #888); }
+.moco-dna-card.is-active { outline: 2px solid var(--c-accent, #555); }
+.moco-dna-swatch { display: flex; gap: 3px; }
+.moco-dna-swatch i { width: 14px; height: 14px; border-radius: 3px; border: 1px solid rgba(0,0,0,0.12); }
+
+.moco-active {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px;
+  border: 1px solid var(--c-hairline, #ddd);
+  border-radius: 6px;
+  background: var(--c-elevated, #fafafa);
+}
+.moco-bans { color: var(--c-bad, #a04040); }
+
+.moco-scans { width: 100%; border-collapse: collapse; }
+.moco-scans th {
+  text-align: left;
+  font-size: 10.5px;
+  color: var(--c-muted, #777);
+  border-bottom: 1px solid var(--c-hairline, #ddd);
+  padding: 2px 4px;
+}
+.moco-scans td { padding: 3px 4px; border-bottom: 1px solid var(--c-hairline, #eee); }
+.moco-file { font-family: ui-monospace, monospace; font-size: 11px; word-break: break-all; }
+.moco-num { font-variant-numeric: tabular-nums; text-align: right; }
+
+.moco-macros { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.moco-macros li {
+  padding: 6px 8px;
+  border: 1px solid var(--c-hairline, #ddd);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.moco-macros small { color: var(--c-muted, #777); }

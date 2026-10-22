@@ -261,6 +261,9 @@ export interface AddonApi {
   /** v2 (A3): touched-path extraction (the guard's official helper). */
   harness: {
     touchedPaths(tool: string, args: Record<string, unknown>): Array<{ path?: string; from?: string; to?: string; unknown: boolean }>;
+    /** P2 (moco-canvas): measure standalone HTML in the shared headless
+     *  browser — setContent only, never navigation. Gated by harness.render. */
+    measureHtml(html: string, viewports: Array<{ name: string; width: number; height: number }>): Promise<unknown>;
   };
   /** v2 (A4): per-session prompt fragments (budgeted, ordered). */
   prompt: {

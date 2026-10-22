@@ -31,6 +31,34 @@ export const BUILT_IN_PROVIDERS: ProviderDefinition[] = [
     note: 'Chat Completions API. Reasoning models accept a reasoning_effort hint.',
   },
   {
+    id: 'google',
+    label: 'Google Gemini',
+    kind: 'gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    envKey: 'GEMINI_API_KEY',
+    envBaseUrl: 'GEMINI_BASE_URL',
+    models: [
+      'gemini-4-argon',
+      'gemini-3.8-flash',
+      'gemini-3.7-flash',
+      'gemini-3.6-flash',
+      'gemini-3.5-flash',
+      'gemini-3.5-flash-lite',
+      'gemini-3.1-pro-preview',
+      'gemini-2.5-pro',
+      'gemini-2.5-flash',
+      'gemini-2.5-flash-lite',
+      'gemini-3.1-flash-image',
+      'gemini-2.5-flash-image',
+    ],
+    imageAdapter: 'gemini-native',
+    docsUrl: 'https://ai.google.dev/gemini-api/docs',
+    note:
+      'Native generateContent API. Tools are declared with parametersJsonSchema (full JSON ' +
+      'Schema); Gemini 3+ takes thinkingLevel, 2.5 takes thinkingBudget. ' +
+      'Image models (Nano Banana) generate and edit images here too.',
+  },
+  {
     id: 'comfyui',
     label: 'ComfyUI (Local)',
     kind: 'openai',

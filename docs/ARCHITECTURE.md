@@ -239,7 +239,7 @@ next stream round … until the model ends its turn OR the LoopGuard trips
 
 Termination is round-independent (`mcp/loop.ts` `createLoopGuard`), never a
 silent count; the guard folds when either of two containment tracks observes
-`STALL_REPEATS` (3) consecutive rounds:
+`STALL_REPEATS` (12) consecutive rounds:
 
 - **exact-signature stall** — the same set of call signatures
   (`wire name` + key-sorted args JSON, see `toolCallSignature`) repeated

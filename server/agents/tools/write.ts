@@ -11,6 +11,7 @@ import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:f
 import path from 'node:path';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, bool } from './shared.js';
+import { healEditedContent, formatHealNotes } from '../edit-heal.js';
 import { buildUnifiedDiff, diffStatFromOps } from '../diff.js';
 import { recordAfterWrite, hasCurrentRead, readRequiredMessage, staleReadMessage, getReadEntry } from '../read-policy.js';
 import { resolveWriteTarget, verifyWrittenSyntax, hashGuardError } from './edit-core.js';
@@ -49,21 +50,28 @@ export async function writeTool(args: Record<string, unknown>, ctx: AgentToolCon
     return { ok: false, isError: true, text: 'Creating an empty file needs no write tool call — nothing to write. If you intended to create an empty file, pass a single newline: content: "\\n".' };
   }
 
+  // POST-EDIT HEAL — a full-file write gets the same duplicate / delimiter /
+  // syntax + redeclaration pass as every other edit tool.
+  const heal = healEditedContent('', content, absolute);
+  const healNote = formatHealNotes(heal);
+  const finalContent = heal.content;
+
   if (dryRun) {
     return {
       ok: true,
       isError: false,
       text:
         `dryRun -- NO changes written. ${exists ? 'Overwriting' : 'Creating'} ${relative} ` +
-        `(${Buffer.byteLength(content, 'utf8')} bytes) would succeed — call write again with dryRun: false to apply.`,
-      diff: buildUnifiedDiff('', content, relative),
-      diffstat: diffStatFromOps('', content),
+        `(${Buffer.byteLength(finalContent, 'utf8')} bytes) would succeed — call write again with dryRun: false to apply.` +
+        healNote,
+      diff: buildUnifiedDiff('', finalContent, relative),
+      diffstat: diffStatFromOps('', finalContent),
     };
   }
 
   try {
     mkdirSync(path.dirname(absolute), { recursive: true });
-    writeFileSync(absolute, content, 'utf8');
+    writeFileSync(absolute, finalContent, 'utf8');
   } catch (error) {
     return {
       ok: false,
@@ -73,7 +81,7 @@ export async function writeTool(args: Record<string, unknown>, ctx: AgentToolCon
   }
 
   if (verifySyntax) {
-    const syntaxFailure = await verifyWrittenSyntax(absolute, content);
+    const syntaxFailure = await verifyWrittenSyntax(absolute, finalContent);
     if (syntaxFailure.failed) {
       try {
         rmSync(absolute, { force: true });
@@ -95,14 +103,14 @@ export async function writeTool(args: Record<string, unknown>, ctx: AgentToolCon
   } catch {
     postMtime = Date.now();
   }
-  recordAfterWrite(ctx.sessionId, absolute, content, postMtime);
+  recordAfterWrite(ctx.sessionId, absolute, finalContent, postMtime);
 
   return {
     ok: true,
     isError: false,
-    text: `${exists ? 'Overwrote' : 'Created'} ${relative} (${Buffer.byteLength(content, 'utf8')} bytes).`,
-    diff: buildUnifiedDiff('', content, relative),
-    diffstat: diffStatFromOps('', content),
+    text: `${exists ? 'Overwrote' : 'Created'} ${relative} (${Buffer.byteLength(finalContent, 'utf8')} bytes).` + healNote,
+    diff: buildUnifiedDiff('', finalContent, relative),
+    diffstat: diffStatFromOps('', finalContent),
   };
 }
 

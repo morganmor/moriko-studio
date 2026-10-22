@@ -602,6 +602,54 @@ export function getReadEntry(
 }
 
 /**
+ * RENDERED-SCOPE MEMORY — the automatic "unchanged" short-circuit.
+ *
+ * A read_file call is often repeated with the SAME arguments: the model forgot
+ * it already looked, or it is being careful. Re-rendering that window buys
+ * nothing and costs context, so read_file answers with a stub instead — the
+ * model no longer has to remember to send lastHash.
+ *
+ * Deliberately in-memory and deliberately NOT a receipt: after a restart the
+ * map is empty and the next read simply renders (correct, just less cheap).
+ * The read-before-edit gate above stays the only authority for editing.
+ */
+export interface RenderedScope {
+  /** Deterministic signature of the request (mode + window + options). */
+  key: string;
+  /** Full sha256 of the content at render time. */
+  hash: string;
+  /** Session read revision quoted in the footer at render time. */
+  rev: number;
+  /** ms epoch of the render. */
+  at: number;
+}
+
+const renderedScopes = new Map<string, RenderedScope>();
+
+function scopeSlot(session: string, absolute: string): string {
+  return `${session}\u0000${absolute}`;
+}
+
+export function markRenderedScope(
+  session: string | undefined,
+  absolute: string,
+  key: string,
+  hash: string,
+  rev: number,
+): void {
+  if (!session) return;
+  renderedScopes.set(scopeSlot(session, absolute), { key, hash, rev, at: Date.now() });
+}
+
+export function getRenderedScope(
+  session: string | undefined,
+  absolute: string,
+): RenderedScope | undefined {
+  if (!session) return undefined;
+  return renderedScopes.get(scopeSlot(session, absolute));
+}
+
+/**
  * STRUCTURAL-READ MEMORY (fold-first enforcement, soft).
  *
  * A fold/outline/read_all call MAps a file structurally (signature tree or

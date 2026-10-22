@@ -20,6 +20,7 @@ import { readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, truncateOutput, resolveAddonsSrcTarget } from './shared.js';
+import { healEditedContent, formatHealNotes } from '../edit-heal.js';
 import { snapshotFile } from '../vault.js';
 import { buildUnifiedDiff, diffStatFromOps } from '../diff.js';
 import { recordAfterWrite, getReadEntry, hasCurrentRead, readRequiredMessage, staleReadMessage } from '../read-policy.js';
@@ -331,6 +332,7 @@ export async function applyPatchTool(args: Record<string, unknown>, ctx: AgentTo
 
   const written: string[] = [];
   const diffParts: string[] = [];
+  const healNotes: string[] = [];
   let diffAdded = 0;
   let diffRemoved = 0;
   for (const { relPath, absolute, newContent } of applied) {
@@ -341,21 +343,28 @@ export async function applyPatchTool(args: Record<string, unknown>, ctx: AgentTo
       } catch {
         beforeContent = '';
       }
-      writeFileSync(absolute, newContent);
+      // POST-EDIT HEAL — same duplicate / delimiter / syntax pass as the
+      // single-file edit tools, applied per patched file before writing.
+      const heal = healEditedContent(beforeContent, newContent, absolute);
+      if (heal.repairs.length > 0 || heal.warnings.length > 0) {
+        healNotes.push(`${relPath}${formatHealNotes(heal)}`);
+      }
+      const healedContent = heal.content;
+      writeFileSync(absolute, healedContent);
       let postMtime = 0;
       try {
         postMtime = statSync(absolute).mtimeMs;
       } catch {
         postMtime = Date.now();
       }
-      recordAfterWrite(ctx.sessionId, absolute, newContent, postMtime);
+      recordAfterWrite(ctx.sessionId, absolute, healedContent, postMtime);
       written.push(relPath);
-      const stat = diffStatFromOps(beforeContent, newContent);
+      const stat = diffStatFromOps(beforeContent, healedContent);
       if (stat) {
         diffAdded += stat.added;
         diffRemoved += stat.removed;
       }
-      const piece = buildUnifiedDiff(beforeContent, newContent, relPath);
+      const piece = buildUnifiedDiff(beforeContent, healedContent, relPath);
       if (piece && piece !== '(no textual change)') diffParts.push(piece);
     } catch (error) {
       failures.push(`${relPath}: write failed — ${error instanceof Error ? error.message : 'unknown'}`);
@@ -373,7 +382,9 @@ export async function applyPatchTool(args: Record<string, unknown>, ctx: AgentTo
   return {
     ok: true,
     isError: false,
-    text: `Patch applied atomically — ${written.length} file(s): ${written.join(', ')}`,
+    text:
+      `Patch applied atomically — ${written.length} file(s): ${written.join(', ')}` +
+      (healNotes.length > 0 ? `\n${healNotes.join('\n')}` : ''),
     diff: diffParts.length > 0 ? diffParts.join('\n') : undefined,
     diffstat: diffAdded > 0 || diffRemoved > 0 ? { added: diffAdded, removed: diffRemoved } : undefined,
   };

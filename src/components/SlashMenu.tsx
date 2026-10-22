@@ -20,6 +20,9 @@ export interface SlashCommand {
   builtin: boolean;
   /** Optional [arg] hint appended to the label in the list. */
   argumentHint?: string;
+  /** True for discovered agent skills — sent as plain text; the harness
+   *  activates the skill server-side for that turn. */
+  skill?: boolean;
 }
 
 export interface SlashMenuHandle {
@@ -64,7 +67,9 @@ export function useSlashMenu(
 ): SlashMenuHandle {
   const [state, setState] = useState<SlashState>({ list: null, sel: 0 });
   const addonCommands = useRef<SlashCommand[]>([]);
+  const skillCommands = useRef<SlashCommand[]>([]);
   const [addonTick, setAddonTick] = useState(0);
+  const [skillTick, setSkillTick] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -95,8 +100,45 @@ export function useSlashMenu(
     };
   }, []);
 
+  // SKILLS — ONE slash entry: /skills lists what's available (hint shows the
+  // installed names); /skills <name> [args] — sent as text — activates that
+  // skill server-side (the harness injects its full body for the turn).
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const resp = await fetch('/api/skills');
+        if (!resp.ok) return;
+        const payload = (await resp.json()) as {
+          skills: Array<{ name: string; description: string }>;
+        };
+        if (cancelled) return;
+        const names = payload.skills.map((skill) => skill.name);
+        const preview = names.slice(0, 4).join(', ') + (names.length > 4 ? `, +${names.length - 4} more` : '');
+        skillCommands.current = [
+          {
+            c: '/skills',
+            h: names.length ? `Available skills: ${preview}` : 'No skills installed (~/.moriko-studio/skills or .moriko/skills)',
+            builtin: false,
+            skill: true,
+            argumentHint: '[skill] [args]',
+          },
+        ];
+        setSkillTick((tick) => tick + 1);
+      } catch {
+      }
+    };
+    void load();
+    const interval = window.setInterval(load, 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, []);
+
   const all = useRef<SlashCommand[]>([]);
-  all.current = [...builtin, ...addonCommands.current];
+  all.current = [...builtin, ...addonCommands.current, ...skillCommands.current];
+  void skillTick;
 
   useEffect(() => {
     const match = /^\/(\w*)$/.exec(draft);

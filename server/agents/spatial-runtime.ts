@@ -50,6 +50,74 @@ export async function loadPlaywright(): Promise<PlaywrightModule | null> {
 }
 
 
+/** SwiftShader launch args shared by the probe tools (software WebGL — the
+ *  headless host has no guaranteed GPU). */
+export const SWIFT_SHADER_ARGS = ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
+
+/**
+ * SHARED PROBE BROWSER — one headless instance reused ~60 s across probe tool
+ * calls (game_probe, shader_check). A cold Edge launch costs 2–5 s per call;
+ * the sliding-TTL cache removes it. Concurrent callers share one launch.
+ */
+const PROBE_BROWSER_TTL_MS = 60_000;
+let probeBrowser: import('playwright-core').Browser | null = null;
+let probeLaunch: Promise<import('playwright-core').Browser> | null = null;
+let probeCloseTimer: ReturnType<typeof setTimeout> | null = null;
+
+function closeProbeBrowser(): void {
+  const stale = probeBrowser;
+  probeBrowser = null;
+  probeLaunch = null;
+  probeCloseTimer = null;
+  void stale?.close().catch(() => undefined);
+}
+
+export async function getReusableBrowser(args: string[] = SWIFT_SHADER_ARGS): Promise<import('playwright-core').Browser> {
+  const pw = await loadPlaywright();
+  if (!pw) throw new Error('playwright-core is not installed. Run: pnpm add -D playwright-core.');
+  if (probeBrowser?.isConnected()) {
+    // Sliding TTL: every reuse reschedules the idle close.
+    if (probeCloseTimer) clearTimeout(probeCloseTimer);
+    probeCloseTimer = setTimeout(closeProbeBrowser, PROBE_BROWSER_TTL_MS);
+    probeCloseTimer.unref?.();
+    return probeBrowser;
+  }
+  probeLaunch ??= (async () => {
+    if (probeBrowser) await probeBrowser.close().catch(() => undefined);
+    let browser;
+    try {
+      browser = await pw.chromium.launch({ headless: true, channel: 'msedge', args });
+    } catch {
+      browser = await pw.chromium.launch({ headless: true, args });
+    }
+    probeBrowser = browser;
+    probeCloseTimer = setTimeout(closeProbeBrowser, PROBE_BROWSER_TTL_MS);
+    probeCloseTimer.unref?.();
+    return browser;
+  })();
+  try {
+    return await probeLaunch;
+  } catch (error) {
+    probeLaunch = null;
+    throw new Error(`Could not launch headless browser: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+
+/** Force-close the shared probe browser AND reset its cache — used by the
+ *  game_probe watchdog to break hung page promises. Concurrent in-flight
+ *  calls see their page promises reject (browser gone). */
+export async function killProbeBrowser(): Promise<void> {
+  const stale = probeBrowser;
+  probeBrowser = null;
+  probeLaunch = null;
+  if (probeCloseTimer) {
+    clearTimeout(probeCloseTimer);
+    probeCloseTimer = null;
+  }
+  await stale?.close().catch(() => undefined);
+}
+
 /** Data dir for runtime captures: <workspace>/.moriko-dat/spatial/ — User
  *  decision: screenshot & baseline live INSIDE the workspace so the agent can
  *  read them back (read-policy forbids reading outside the workspace root).
@@ -158,7 +226,10 @@ export function assertAllowedTarget(raw: string, allowPublic: boolean): URL {
 
 
 const DEFAULT_VIEWPORT = { width: 1440, height: 900 };
-const RUNTIME_TIMEOUT_MS = 20_000;
+/** Per-stage load bound — a localhost dev server should never need more. */
+const RUNTIME_LOAD_TIMEOUT_MS = 10_000;
+/** Watchdog for the WHOLE capture — force-closes the shared browser when hit. */
+const RUNTIME_DEADLINE_MS = 60_000;
 const MAX_RUNTIME_REGIONS = 400;
 
 /** The in-page extraction script — runs inside the browser, returns plain JSON. */
@@ -283,7 +354,9 @@ export interface RuntimeCaptureResult {
   notes: string[];
 }
 
-/** Launch → navigate → extract → screenshot → close. Throws with clear text on missing browsers. */
+/** Capture → navigate → extract → screenshot. Uses the SHARED probe browser
+ *  (cached, sliding 60 s TTL) — one cold launch serves game_probe, shader_check
+ *  and this. Throws with clear text on missing browsers. */
 export async function captureRuntime(
   rawUrl: string,
   opts: { allowPublic?: boolean; viewport?: { w: number; h: number }; saveScreenshot?: boolean; saveBaseline?: boolean } = {},
@@ -303,16 +376,14 @@ export async function captureRuntime(
     height: Math.min(Math.max(opts.viewport?.h ?? DEFAULT_VIEWPORT.height, 200), 2160),
   };
 
+  // Watchdog: a stuck page force-closes the shared probe browser so all
+  // pending page promises reject instead of stacking 20 s stage timeouts.
+  const deadline = setTimeout(() => { void killProbeBrowser(); }, RUNTIME_DEADLINE_MS);
+  deadline.unref?.();
+
   let browser;
   try {
-    try {
-      browser = await pw.chromium.launch({
-        headless: true,
-        channel: 'msedge',
-      });
-    } catch {
-      browser = await pw.chromium.launch({ headless: true });
-    }
+    browser = await getReusableBrowser();
   } catch (error) {
     throw new Error(
       'Could not launch a headless browser (tried channel "msedge", then "chromium"). Install Microsoft Edge or run ' +
@@ -321,10 +392,11 @@ export async function captureRuntime(
     );
   }
 
+  let page: import('playwright-core').Page | null = null;
   try {
-    const page = await browser.newPage({ viewport });
-    await page.goto(url.toString(), { waitUntil: 'commit', timeout: RUNTIME_TIMEOUT_MS });
-    await page.waitForLoadState('domcontentloaded', { timeout: RUNTIME_TIMEOUT_MS });
+    page = await browser.newPage({ viewport });
+    await page.goto(url.toString(), { waitUntil: 'commit', timeout: RUNTIME_LOAD_TIMEOUT_MS });
+    await page.waitForLoadState('domcontentloaded', { timeout: RUNTIME_LOAD_TIMEOUT_MS }).catch(() => undefined);
     try {
       await page.waitForLoadState('networkidle', { timeout: 4_000 });
     } catch {
@@ -418,7 +490,8 @@ export async function captureRuntime(
 
     return { url: url.toString(), map, screenshot, notes };
   } finally {
-    await browser.close().catch(() => undefined);
+    clearTimeout(deadline);
+    await page?.close().catch(() => undefined);
   }
 }
 
@@ -508,4 +581,148 @@ export function renderRuntimeReport(
     for (const n of comparison.notes.slice(0, 6)) lines.push(`  ~ ${n}`);
   }
   return lines.join('\n');
+}
+
+// ─── MOCO CANVAS MEASURE (P2) ────────────────────────────────────────────────
+// Render compiled scene HTML via page.setContent (NO navigation, NO network)
+// and extract real geometry for every [data-mcv-id] element. Reuses the shared
+// probe browser — no second launch, no new dependency (plan §9).
+
+export interface MeasuredNode {
+  id: string;
+  tag: string;
+  rect: { x: number; y: number; w: number; h: number };
+  text: string;
+  lines: number;
+  fontSize: number;
+  fontWeight: number;
+  color: string;
+  /** first opaque ancestor background (cascade resolved in-page) */
+  resolvedBg: string;
+  fontFamily: string;
+  overflow: boolean;
+  interactive: boolean;
+  hasMcVChildren: boolean;
+}
+
+export interface MeasuredViewport {
+  name: string;
+  width: number;
+  height: number;
+  docOverflowX: boolean;
+  bodyBg: string;
+  nodes: MeasuredNode[];
+}
+
+export interface MeasureHtmlResult {
+  ok: boolean;
+  viewports: MeasuredViewport[];
+  notes: string[];
+  error?: string;
+}
+
+/** In-page extraction for Moco Canvas: rect, text lines, computed colors. */
+const MCV_EXTRACT_SCRIPT = `
+(() => {
+  const alphaOf = (c) => {
+    if (!c || c === 'none' || c === 'transparent') return 0;
+    const slash = /\\/\\s*([\\d.]+)\\s*\\)$/.exec(c);
+    if (slash) return parseFloat(slash[1]);
+    const rgba = /rgba?\\([^)]*[,\\/]\\s*([\\d.]+)\\s*\\)$/.exec(c);
+    return rgba ? parseFloat(rgba[1]) : 1;
+  };
+  const bgOf = (el) => {
+    let cur = el;
+    while (cur && cur !== document.documentElement) {
+      const c = getComputedStyle(cur).backgroundColor;
+      if (alphaOf(c) > 0.6) return c;
+      cur = cur.parentElement;
+    }
+    return getComputedStyle(document.body).backgroundColor || 'rgb(255, 255, 255)';
+  };
+  const lineCount = (el) => {
+    try {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const rects = Array.from(range.getClientRects()).filter((r) => r.width > 1 && r.height > 1);
+      if (rects.length === 0) return 0;
+      const tops = [];
+      for (const r of rects) {
+        const t = Math.round(r.top);
+        if (!tops.some((v) => Math.abs(v - t) <= 2)) tops.push(t);
+      }
+      return tops.length;
+    } catch { return 0; }
+  };
+  const nodes = [];
+  for (const el of document.querySelectorAll('[data-mcv-id]')) {
+    const st = getComputedStyle(el);
+    if (st.display === 'none' || st.visibility === 'hidden') continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 && r.height < 1) continue;
+    nodes.push({
+      id: el.getAttribute('data-mcv-id'),
+      tag: el.tagName.toLowerCase(),
+      rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
+      text: (el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 90),
+      lines: lineCount(el),
+      fontSize: parseFloat(st.fontSize) || 0,
+      fontWeight: parseInt(st.fontWeight, 10) || 400,
+      color: st.color,
+      resolvedBg: bgOf(el),
+      fontFamily: st.fontFamily.slice(0, 80),
+      overflow: el.scrollWidth > el.clientWidth + 1,
+      interactive: el.matches('button, a, input, select, textarea, [role="button"]'),
+      hasMcVChildren: el.querySelector('[data-mcv-id]') !== null,
+    });
+  }
+  return {
+    docOverflowX: document.documentElement.scrollWidth > window.innerWidth + 1,
+    bodyBg: getComputedStyle(document.body).backgroundColor,
+    nodes,
+  };
+})();
+`;
+
+export interface MeasureViewportSpec {
+  name: string;
+  width: number;
+  height: number;
+}
+
+/** Measure standalone HTML in the shared headless browser (setContent — no
+ *  navigation). One page per viewport, serialised, each failures-isolated. */
+export async function measureHtml(
+  html: string,
+  viewports: MeasureViewportSpec[],
+): Promise<MeasureHtmlResult> {
+  let browser: import('playwright-core').Browser;
+  try {
+    browser = await getReusableBrowser();
+  } catch (error) {
+    return {
+      ok: false,
+      viewports: [],
+      notes: [],
+      error: `headless browser unavailable: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+
+  const out: MeasuredViewport[] = [];
+  const notes: string[] = [];
+  for (const vp of viewports) {
+    let page: import('playwright-core').Page | null = null;
+    try {
+      page = await browser.newPage({ viewport: { width: vp.width, height: vp.height } });
+      await page.setContent(html, { waitUntil: 'load', timeout: 10_000 });
+      await page.waitForTimeout(120);
+      const data = (await page.evaluate(MCV_EXTRACT_SCRIPT)) as Omit<MeasuredViewport, 'name' | 'width' | 'height'>;
+      out.push({ name: vp.name, width: vp.width, height: vp.height, ...data });
+    } catch (error) {
+      notes.push(`${vp.name}: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      await page?.close().catch(() => undefined);
+    }
+  }
+  return { ok: out.length > 0, viewports: out, notes };
 }

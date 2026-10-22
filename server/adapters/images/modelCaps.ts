@@ -44,6 +44,8 @@ const EDIT_PATTERNS: Array<{ test: RegExp; maxReferences: number }> = [
  * adapter (see `capabilities.maxReferences`).
  */
 const UNIFIED_PATTERNS: Array<{ test: RegExp; maxReferences: number }> = [
+  // Nano Banana (Gemini image family): text-to-image AND reference-image editing.
+  { test: /gemini-[\d.]+-(?:flash|pro)-image|gemini-2\.5-flash-image/i, maxReferences: 8 },
   { test: /flux[\.-]2-klein/i, maxReferences: 4 },
   { test: /flux[\.-]2-(dev|pro|max)/i, maxReferences: 8 },
   { test: /qwen[\s._-]*image[\s._-]*2[\s._-]?1(?![\s\S]*-t2i\b)/i, maxReferences: 1 },

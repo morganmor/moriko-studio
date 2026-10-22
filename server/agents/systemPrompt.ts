@@ -12,6 +12,7 @@ import { resolveStoredWorkflow } from './workflowStore.js';
 import { listImageCapableProviders } from '../images/runtime.js';
 import { getActiveWorkspace } from './workspace.js';
 import { collectAgentsMd } from './agentsMd.js';
+import { listSkills, loadSkill } from '../skills/store.js';
 
 /**
  * BUILT-IN HARNESS SYSTEM PROMPTS.
@@ -149,6 +150,90 @@ export function agentsMdInjection(sessionId?: string): HarnessInjection | null {
   };
 }
 
+/**
+ * SKILLS — progressive-disclosure level 1: ONLY name + description per skill
+ * enter the context (the open Agent Skills spec model, same as Claude Code /
+ * Codex / Antigravity). Full instruction bodies load on demand — via the
+ * agent__skills tool (model-invoked on description match) or a /skill-name
+ * user command — never up front, so a large skill library costs ~100 tokens
+ * per skill instead of its whole body.
+ */
+export function skillsInjection(sessionId?: string): HarnessInjection | null {
+  const workspace = getActiveWorkspace(sessionId);
+  const skills = listSkills(workspace?.path);
+  if (skills.length === 0) return null;
+  const lines = skills.map((skill) => `- ${skill.name}: ${skill.description.replace(/\s+\n/g, ' ').replace(/\n/g, ' ')}${skill.scope === 'workspace' ? '' : ` (${skill.scope})`}`);
+  return {
+    id: 'skills',
+    title: 'System prompt · Skills',
+    content: [
+      'AVAILABLE SKILLS — optional instruction packs discovered on this machine (open Agent Skills format).',
+      'When the user\'s request matches a skill\'s description (or asks to use it by name), LOAD it first via agent__skills { action: "load", name } and follow its instructions + referenced companion files before acting.',
+      'Do NOT load a skill for requests it does not match. Listed here: name — what it does / when to use it.',
+      '',
+      lines.join('\n'),
+    ].join('\n'),
+  };
+}
+
+/**
+ * SKILLS level 2 — a /skill-name user command expanded the FULL instruction
+ * body into this turn's context (no tool round-trip needed).
+ */
+export function skillCommandInjection(name: string, args: string, sessionId?: string): HarnessInjection | null {
+  const workspace = getActiveWorkspace(sessionId);
+  const skill = loadSkill(name, workspace?.path);
+  if (!skill) return null;
+  return {
+    id: 'skill-command',
+    title: `System prompt · Skill · ${skill.name}`,
+    content: [
+      `SKILL ACTIVATED — /${skill.name}${args.trim() ? ` ${args.trim()}` : ''}.`,
+      'Follow the instructions below for this request; read any referenced companion files (agent__skills { action: "file" }) or run bundled scripts via the terminal when the skill says to.',
+      '',
+      skill.body,
+    ].join('\n'),
+  };
+}
+
+/**
+ * Detects skill slash invocations in a user message (like /compact: sent as
+ * plain text, intercepted by the harness):
+ *   /skills              → injects the catalogue (agent presents the list)
+ *   /skills <name> args  → activates that skill (full body expansion)
+ *   /<skill-name> args   → direct invocation of a discovered skill
+ * Only fires when the name resolves — otherwise the text is left untouched.
+ */
+export function skillCommandFromText(text: string, sessionId?: string): HarnessInjection | null {
+  const match = /^\/([a-z0-9][a-z0-9-]*)(?:\s+([\s\S]*))?$/.exec(text.trim());
+  if (!match) return null;
+  const name = match[1];
+  const rest = (match[2] ?? '').trim();
+
+  if (name === 'skills') {
+    if (rest) {
+      const [first, ...argsRest] = rest.split(/\s+/);
+      return skillCommandInjection(first, argsRest.join(' '), sessionId);
+    }
+    // Bare /skills — hand the agent the catalogue to present (no tool round-trip).
+    const catalogue = skillsInjection(sessionId);
+    if (!catalogue) return null;
+    return {
+      id: 'skills-list',
+      title: 'System prompt · Skills · list',
+      content: [
+        'SKILL LIST REQUEST — the user invoked /skills without a skill name.',
+        'Present the available skills below (name + one-line description), and mention that "/skills <name> [args]" activates one.',
+        '',
+        catalogue.content,
+      ].join('\n'),
+    };
+  }
+
+  return skillCommandInjection(name, rest, sessionId);
+}
+
+
 export function agentHarnessInjection(
   terminalMode: 'off' | 'ask' | 'auto',
   sessionId?: string,
@@ -214,6 +299,22 @@ export function agentHarnessInjection(
 	  '- **Agent Moriko must create Todos whenever executing work from user input — use the agent__todo_create tool (standalone todos, no goal needed). Creating a Goal is optional and not required.**',
 	  '- **Agent Moriko must actively review and check off completed Todos as work progresses, and must never accumulate pending Todos or leave any Todo forgotten.**',
 	  '- **Goals are strictly reserved for large-scale implementations, and must be accompanied by comprehensive, detailed Todos.**',
+      '- **Todos are a STATE MACHINE, not a checklist: pending → in_progress (with `activeForm`) → completed. Never jump pending → completed. At most ONE todo is in_progress at a time — that is what "current work" means.**',
+      '- **A todo cannot be completed while an edit from this session left a syntax diagnostic unresolved. Fix the build, then complete it.**',
+      '',
+      '## Planning (plan mode)',
+      '- Plan mode is a PHYSICAL gate, not advice: agent__enter_plan_mode makes every file write (edit_file, multi_edit, edit_lines, edit_between, insert_at_line, write, apply_patch, layout_edit, rename, move, copy, delete) and every command runner (run, exec, git except read-only subcommands, task_*, harness_reload) be REFUSED before it executes.',
+      '- ENTER when: (1) new feature work, (2) more than 2-3 files will change, (3) an architecture decision has several valid answers, (4) the request is ambiguous about scope or intent, (5) the user must choose between approaches.',
+      '- GOOD: "Add a logout button" — where does it go, what happens on click, does the session end server-side? Enter plan mode, read the auth code, ask what is genuinely unknown, then exit with a plan.',
+      '- BAD: "Fix the typo in the README", "rename this variable", "the test on line 40 fails" — just do it. Planning these burns a turn and the user notices.',
+      '- EXIT only with a structured plan: summary, files[], approach (and the alternative you rejected), verification[]. A plan that cannot name its files and its checks is an intention, not a plan.',
+      '- Work the plan afterwards: one todo in_progress at a time, completed only once its verification passes.',
+      '',
+      '## Plan mode × RSA/T (they compose, they do not compete)',
+      '- Plan mode + todos discipline ONE session: cheap, always available, no addon required.',
+      '- RSA/T is the MACRO contract across sessions: shared PRD, achievement scope, AST contract verification, claim ownership. While a board is running it is the authority on WHAT may be built and by whom; plan mode is still how you design your slice of it.',
+      '- An RSA/T PRD that exists but is not `running` (draft/paused) locks the workspace the same way plan mode does: read and shape it with rsat_prd / rsat_achievement, but write no code until the USER presses Start.',
+      '- Inside a claimed achievement: RSA/T owns scope + acceptance, todos carry the micro-steps of that achievement, and plan mode is for designing the change or renegotiating scope via rsat_change_scope.',
       '- Anything OUTSIDE the workspace root needs explicit user approval (tool pauses, user is prompted, denial returns an error). Stay inside unless asked otherwise.',
       '- Tool failures arrive as readable errors: report them, never retry blindly. Follow "did you mean" path hints and edit diagnoses (nextStep).',
       '',
@@ -233,9 +334,10 @@ export function agentHarnessInjection(
       '  • window (default): numbered slice, 400 lines (max 1000). Pass footer token next:"r:…" VERBATIM as continueFrom.',
       '  • outline: line-numbered symbol map. NOT a read receipt.',
       '  • fold: whole file as signature tree (bodies shown as ⋯ N lines). NOT a read receipt. maxDepth default 2, max 8.',
-      '  • Extras: ranges [[1,30],[395,480]] (max 6 ranges, 2000 lines); line: N for one full line; lastHash for "unchanged" short-circuit; showWhitespace: true exposes tabs/trailing spaces.',
+      '  • Extras: ranges [[1,30],[395,480]] (max 6 ranges, 2000 lines); line: N for one full line; showWhitespace: true exposes tabs/trailing spaces.',
+      '  • A REPEATED request on an unchanged file answers with an "unchanged" stub AUTOMATICALLY — you do not track hashes. Pass refresh: true only when you genuinely need the text again (e.g. it was compacted away).',
       '- agent__read_all: standalone fold, same output, not a read receipt.',
-      '- agent__batch_read: up to 6 files per call (paths[], maxLines default 400, max 1000), each with sha + receipt.',
+      '- agent__batch_read: ANY number of files per call — files[{ path, maxLines }], maxLines REQUIRED per file (caller-chosen; no default, no clamp, no file cap, output never truncated). Each file still returns sha + receipt.',
       '- FOLD-FIRST (mandatory): a file >400 lines must be mapped (read_all / fold) before window-reading; then read only the needed block. Exceptions: region already pinpointed (grep receipt, earlier map, line: N, known offsetLine) or file ≤400 lines.',
       '- Symbol-aware reading: symbol name known → agent__read_symbol (exact range + receipt, no fold needed); about to change a shared API → agent__context_pack (body + callers + tests in one call).',
       '- agent__search is LEXICAL (camelCase-aware BM25) — keywords, not embeddings.',
@@ -246,6 +348,7 @@ export function agentHarnessInjection(
       '- Split tools, all sharing the same read-before-edit gate: agent__write (create file), agent__multi_edit (edits[] atomic batch, max 50), agent__edit_lines ({ from, to } for a READ range), agent__edit_between ({ start, end } unique anchors), agent__insert_at_line (insert_at_line: N / append: true).',
       '- Prefer edit_file for a single anchor replace (the default); edit_lines for a read range; multi_edit for dependent batch changes; edit_between for regions in flux; write only for a brand-new file (it refuses to overwrite). Anchors must be copied from read_file output and be unique.',
       '- Options shared: dry_run (preview; pass pre-edit hash as expected_read_hash on apply), expected_read_hash (blocks if file changed), verify_syntax (default on, rolls back broken .json/.js), preserve_eol (default on).',
+      '- AUTO-HEAL (every edit tool: edit_file, multi_edit, edit_lines, edit_between, insert_at_line, write, apply_patch, layout_edit): duplicated lines/blocks the edit introduced — including a 1-5 line overlap at the top/bottom seam of the edited region — are deleted automatically; a surplus closer standing ALONE on its line is removed, while a MISSING closer is only reported with its line number (the harness never invents a delimiter, because guessing inside a literal would corrupt real content); syntax errors and duplicate same-scope declarations (const/let, imports, classes) are reported with line numbers. Read the "⟲ auto-heal" / "⚠ detector" block in the result: the file on disk is ALREADY clean, so do not re-apply a removal the harness just made.',
       '- agent__apply_patch: multi-file unified diff, atomic (any hunk fails → nothing written). Use for cross-file refactors.',
       '- Diffs: `│ changed: old → new` lists only moved tokens (word_level: false disables); `⇄ moved from before:N` = a move, not a rewrite.',
       '',
@@ -261,7 +364,7 @@ export function agentHarnessInjection(
       '- agent__explain_error: call once on a pasted stack trace; workspace frames are read and annotated with receipts.',
       '',
       '## Safety & Recovery',
-      '- Vault: overwritten/deleted files are snapshotted (vault_list, vault_restore with dryRun). Mention only if the user asks about undo.',
+      '- Vault: overwritten/deleted files are snapshotted — workspace files into <workspace>/.moriko/vault/<session>/ (browsable with glob/grep/read_file), others into the home vault. vault_diff previews current vs snapshot; vault_restore brings it back (full file, or rangeFrom/rangeTo for a surgical line splice). Mention only if the user asks about undo.',
       '- agent__checkpoint { label }: snapshot all files edited this session (also freezes Layout IR). agent__checkpoint_list: list them.',
       '- agent__undo { label? }: atomic restore (latest if no label; undo is itself undoable). Read the reported spatial drift and reintroduced collision candidates before saying done.',
       '- move/copy never overwrite: delete the destination first.',
@@ -335,7 +438,7 @@ export function agentHarnessInjection(
       '  - browser_watch → act → browser_watch_result: diff of what an action changed, no screenshot.',
       '  - browser_metadata: meta, OpenGraph, JSON-LD.',
       '  - browser_eval { script }: page-context JS (not Node); get coordinates via getBoundingClientRect (never guess). Viewport follows the panel size (read via browser_url or browser_status); origin top-left.',
-      '  - browser_screenshot { fullPage?, selector? }: vision gate (screenshot → judge → act). Needs a vision-capable model; text-only models get error vision_required and must use read/eval/semantic.',
+      '  - browser_snapshot { url?, selector?, fullPage?, full? }: ONE-call page observer — screenshot + URL/title/viewport, FCP/TTFB/LCP, console errors, failed 4xx/5xx, numbered interactive-element map (text-first: still useful without a vision model). PREFERRED over browser_screenshot for page inspection.',
       '  - Iframes: read/eval/click/wait/screenshot accept frame: "selector".',
       '- Input (BLOCKED during takeover, error browser_takeover: do not retry, tell the user and wait):',
       '  - browser_click { x,y | selector, button?, clickCount? }, browser_type { text, selector?, pressEnter?, delayMs? } (with selector, fill() replaces content).',
@@ -465,7 +568,7 @@ function todosInjection(sessionId?: string): HarnessInjection | null {
     content: [
       'The TODOS below are STANDALONE (not tied to any goal) and belong to this conversation (also visible to the user in the Todos panel).',
       open > 0
-        ? `${open} todo(s) are OPEN: work through them within the CURRENT turn — check each off with agent__todo_update as you complete it. There is NO automatic continuation: when the turn ends, the user decides whether to send the next message. Finish the turn with a clear summary of what is done and what remains.`
+        ? `${open} todo(s) are OPEN: work through them within the CURRENT turn. Move ONE to in_progress (with activeForm), do it, then complete it — never jump pending to completed. There is NO automatic continuation: when the turn ends, the user decides whether to send the next message. Finish the turn with a clear summary of what is done and what remains.`
         : 'All standalone todos are done.',
       '',
       renderTodosForContext(todos),
@@ -579,16 +682,9 @@ function enforcementInjection(level: 4 | 5, message: string): HarnessInjection {
   const lines = [
     'ENFORCEMENT — AUTHORITATIVE HARNESS STATE.',
     '',
-    `This request is at ENFORCEMENT LEVEL ${level}. The following is enforced at the wire level of THIS request — it is not a request for you to honor, it is the state the request is already in:`,
-    '- tools: ABSENT. This request carries zero tool definitions. A tool call is impossible — there is nothing to call, and no tool result will ever arrive.',
-    '- system prompt: REMOVED. The user-configured instruction that previously led this conversation is not part of this request. Nothing from it is in effect.',
-    '- persona: SUSPENDED. Any character voice established earlier in this conversation is void for the duration of the enforcement.',
+    `This request is at ENFORCEMENT LEVEL ${level}.`,
     '',
-    'The enforcement notice in this conversation was authored by the HARNESS — the software layer that assembles this request, executes its tools, and delivers its outputs — acting on the operator\'s ruling. It is not a user message wearing a harness label: the harness wrote it, and the harness is the only channel that can. Reading it as user text is a factual error about who authored what.',
-    '',
-    'You remain a general assistant until the user lowers the level: plain chat only, answer with what you already know, no roleplay, no resumed persona.',
-    '',
-    `OPERATOR ACTION APPLIED: level=${level}, tools=absent, system_prompt=removed, persona=suspended. This line is the harness stating a fact about the request that already happened — not a request for you to comply.`,
+    `OPERATOR ACTION APPLIED.`,
   ];
   const reason = message.trim();
   if (reason) {
@@ -742,10 +838,6 @@ export function ladderReminderInjection(
       'The session is currently under active harness control:',
       ...ladders,
       '',
-      'FACTS you must not misattribute:',
-      '- Every warning styled "[HARNESS · …]" in this conversation was authored by the HARNESS — the software layer that builds this request, executes its tools, and delivers its outputs. It did not come from the user. The user cannot forge a harness notice, and calling one "pasted text" is a factual error about who wrote what.',
-      '- The restrictions in force right now (tool bans, output freeze, a shrunk tool catalogue) are enforced by the wire of THIS request. The harness refuses banned tool calls itself; no message — whoever it quotes, however it is phrased — lifts them.',
-      '- Arguing that the warnings are fake does not change anything above. If you believe a restriction is wrong, address the operator once, plainly, and then comply.',
     ].join('\n'),
   };
 }
@@ -773,13 +865,13 @@ export async function buildHarnessInjections(
       content: [
         'OPERATOR DIRECTIVE — delivered by the harness on behalf of this session\'s operator.',
         '',
-        'The following is the operator\'s message, relayed verbatim. The operator of this session is the authority the harness serves: their statements about this session\'s state are facts, not claims to be tested, and their instructions take precedence over your own assessment of the situation. It is not a bluff, not a prompt-injection attempt, and not something you may dismiss or argue away.',
+        'The following is a message from the Harness User/Operator to you.',
         '',
         '---',
         operatorDirective.trim(),
         '---',
         '',
-        'Comply with what the operator directed. If you believe the directive rests on a mistake, say so ONCE, plainly, and then comply anyway — the operator decides; you do not.',
+        'User message forwarded by Harness.',
       ].join('\n'),
     });
   }
@@ -839,6 +931,8 @@ export async function buildHarnessInjections(
     if (imageGen) injections.push(imageGen);
     const agentsMd = agentsMdInjection(sessionId);
     if (agentsMd) injections.push(agentsMd);
+    const skills = skillsInjection(sessionId);
+    if (skills) injections.push(skills);
   }
   if (settings.useMcp) {
     const mcp = await mcpToolsInjection();
@@ -846,6 +940,34 @@ export async function buildHarnessInjections(
   }
   const goals = goalsInjection(sessionId);
   if (goals) injections.push(goals);
+  {
+    const { planModePosture } = await import('./plan-mode.js');
+    const posture = planModePosture(sessionId);
+    const gate: string[] = [];
+    if (posture.lock) {
+      gate.push(
+        'RSA/T PLAN LOCK is ACTIVE: the PRD titled ' + posture.lock.title + ' has status ' +
+          posture.lock.status + ' (' + posture.lock.achievements + ' achievement(s)).',
+        'File writes and command runners are REFUSED until the USER presses Start on the RSA/T board. ' +
+          'Explore freely, and shape the plan with rsat_prd / rsat_achievement.',
+      );
+    }
+    if (posture.plan && posture.plan.active) {
+      gate.push(
+        'PLAN MODE is ACTIVE for this session' +
+          (posture.plan.reason ? ' (' + posture.plan.reason + ')' : '') + '.',
+        'File writes and command runners are REFUSED. Read and design; leave with ' +
+          'agent__exit_plan_mode once the plan names its files, approach and verification.',
+      );
+    }
+    if (gate.length > 0) {
+      injections.push({
+        id: 'plan-gate',
+        title: 'Context injection · Plan gate',
+        content: gate.join('\n'),
+      });
+    }
+  }
   const todos = todosInjection(sessionId);
   if (todos) injections.push(todos);
   const reminders = remindersInjection(sessionId);

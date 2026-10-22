@@ -186,7 +186,6 @@ export const MAX_MATCH_FILES = 50;
 export const MAX_LIST_ENTRIES = 1000;
 export const MAX_READ_BYTES = 5_000_000;
 export const MAX_EDIT_BYTES = 5_000_000;
-export const MAX_OUTPUT_CHARS = 48_000;
 export const MAX_LINE_CHARS = 240;
 
 /** Cap for reading a whole image to attach inline (matches vision's 20 MB upload cap). */
@@ -362,9 +361,14 @@ export function globToRegExp(glob: string): RegExp {
   return new RegExp(`^${re}$`, 'i');
 }
 
-export function truncateOutput(text: string): string {
-  if (text.length <= MAX_OUTPUT_CHARS) return text;
-  return `${text.slice(0, MAX_OUTPUT_CHARS)}\n…(output truncated at ${MAX_OUTPUT_CHARS} chars)`;
+/**
+ * No hardcoded output ceiling exists (owner directive 2026-10-22): the harness
+ * must never silently cut a tool result. Callers that genuinely need a ceiling
+ * pass maxChars EXPLICITLY; without it the text passes through untouched.
+ */
+export function truncateOutput(text: string, maxChars?: number): string {
+  if (maxChars === undefined || text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n…(output truncated at ${maxChars} chars)`;
 }
 
 export function formatSize(bytes: number): string {

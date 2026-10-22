@@ -90,7 +90,7 @@ export async function setBrief(api, sessionId, councilId: string, brief: string)
   if (!councilId) throw new Error('No active council.');
   const doc = read(api, sessionId);
   doc.councils = doc.councils ?? {};
-  const clean = String(brief).slice(0, 4000);
+  const clean = String(brief);
   if (clean) doc.councils[councilId] = { brief: clean, updatedAt: Date.now() };
   else delete doc.councils[councilId];
   await write(api, sessionId, doc);
@@ -161,7 +161,7 @@ export async function setDirective(api, sessionId, councilId: string, text: stri
   if (!sessionId || !councilId || !text) throw new Error('setDirective requires sessionId, councilId, text.');
   const doc = read(api, sessionId);
   doc.directives = doc.directives ?? {};
-  doc.directives[sessionId] = { councilId, text: String(text).slice(0, 800), at: Date.now() };
+  doc.directives[sessionId] = { councilId, text: String(text), at: Date.now() };
   await write(api, sessionId, doc);
 }
 

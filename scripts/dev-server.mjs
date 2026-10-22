@@ -44,7 +44,13 @@ let lastStartAt = 0;
 
 function start() {
   lastStartAt = Date.now();
-  child = spawn(process.execPath, [tsxCli, 'server/index.ts'], {
+  // 2 GB was NOT headroom: one full LanguageService Program build approaches
+  // it on its own. 4 GB keeps the default limit from being the crash site.
+  // Override with MORIKO_MAX_OLD_SPACE (in MB) if a smaller box needs it.
+  const heapMb = Number(process.env.MORIKO_MAX_OLD_SPACE ?? 4096);
+  const heapArg = Number.isFinite(heapMb) && heapMb > 0 ? `--max-old-space-size=${Math.round(heapMb)}` : null;
+  const nodeArgs = heapArg ? [heapArg, tsxCli, 'server/index.ts'] : [tsxCli, 'server/index.ts'];
+  child = spawn(process.execPath, nodeArgs, {
     cwd: root,
     env: process.env,
     stdio: 'inherit',

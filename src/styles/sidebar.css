@@ -707,9 +707,6 @@
     min-width: 44px;
     min-height: 44px;
   }
-  .rfoot button[aria-label='Keyboard shortcuts'] {
-    display: none;
-  }
   .livechip {
     padding: 0 4px;
   }

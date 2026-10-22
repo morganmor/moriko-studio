@@ -31,6 +31,16 @@
  * the "empty = unlimited" convention the rest of the settings follow.
  */
 
+/**
+ * Silence budget for provider streaming: if NO chunk arrives for this many
+ * milliseconds, the stream is considered stalled (not slow) and is aborted
+ * with a machine-readable LivenessTimeout("STREAM_IDLE"). 120s is well above
+ * the bursty-stall window typical of overloaded providers (30-60s) yet below
+ * the 180s subscriber-grace and 240s stall-sweeper in streamRegistry, so the
+ * idle bound reports honestly before the blunt sweepers fire.
+ */
+export const STREAM_IDLE_MS = 120_000;
+
 /** Node clamps timers above 2^31-1 ms to 1 ms — refuse the value instead. */
 const MAX_TIMER_MS = 2_147_483_647;
 

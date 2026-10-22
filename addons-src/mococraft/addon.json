@@ -1,0 +1,43 @@
+{
+  "apiVersion": "2",
+  "id": "mococraft",
+  "name": "Mococraft — Anti-Slop Design Craft",
+  "shortName": "Mococraft",
+  "version": "0.1.0",
+  "kind": "mod",
+  "author": "Moriko",
+  "description": "Anti-AI-slop craft layer: deterministic slop gate on UI writes, Design DNA genre lock (OKLCH palettes), Slop Radar auditor, asymmetry macrostructure library, and copy cleanser for AI-corporate clichés.",
+  "main": "server/main.ts",
+  "client": "client/panel.tsx",
+  "icon": "resources/icon.svg",
+  "permissions": [
+    "tools.register",
+    "commands",
+    "settings",
+    "store",
+    "bus",
+    "ui.view",
+    "ui.notify",
+    "session.observe",
+    "prompt.inject",
+    "tools.intercept",
+    "workspace.read",
+    "workspace.write:.moriko/mococraft/**"
+  ],
+  "activation": ["onStartup"],
+  "contributes": {
+    "views": [
+      { "id": "panel", "title": "Mococraft", "icon": "spark", "location": "sidebar", "component": "./client/panel.tsx" }
+    ],
+    "settings": {
+      "title": "Mococraft",
+      "properties": {
+        "gateMode": { "type": "string", "enum": ["off", "advisory", "strict"], "default": "advisory", "title": "Slop gate mode", "description": "advisory notes the slop; strict denies the write until the slop is fixed.", "scope": "workspace" },
+        "radarSensitivity": { "type": "number", "default": 2, "minimum": 1, "maximum": 5, "title": "Radar sensitivity", "description": "Minimum tells in one file before the radar raises a SLOP verdict.", "scope": "workspace" },
+        "copyCleaner": { "type": "boolean", "default": true, "title": "Copy cleanser", "description": "Flag AI-corporate clichés (Supercharge, Seamless, Unleash…) in written UI files.", "scope": "workspace" }
+      }
+    },
+    "statusItems": [{ "id": "mococraft" }],
+    "resources": {}
+  }
+}

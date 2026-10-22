@@ -8,7 +8,6 @@ import { listGoals } from '../goals/store.js';
 import { listTodos } from '../todos/store.js';
 import { INLINE_DATA_URL_LIMIT, putBytes } from '../attachmentStore.js';
 import { callWireTool, listWireTools, type McpWireTool } from './manager.js';
-import { MAX_OUTPUT_CHARS } from '../agents/tools/shared.js';
 import { toWireSchema } from '../agents/tools/casing.js';
 
 /**
@@ -72,7 +71,7 @@ function decodeStoredDataUrl(dataUrl: string): { mime: string; bytes: Buffer } |
  */
 export const CONTEXT_HEADROOM_RATIO = 0.95;
 /** Consecutive rounds with the EXACT same call signature set = spinning. */
-export const STALL_REPEATS = 3;
+export const STALL_REPEATS = 12;
 
 /**
  * The harness ends the tool loop short of the model's own natural end ONLY
@@ -108,12 +107,13 @@ export function estimateTokensFromChars(chars: number): number {
 
 
 /**
- * ONE BUDGET: the prune layer is synced with the tool layer's MAX_OUTPUT_CHARS
- * (imported, single source of truth). It is a SAFETY NET for runaway output
- * (a tool that ignored its own cap), never the daily cutter of read_file
- * windows — 8_192 used to prune read_file results in half mid-task.
+ * Prune is a SAFETY NET for runaway output, never a cutter of legitimate tool
+ * results. batch_read is exempt by contract (owner directive 2026-10-22): the
+ * harness must not cut a batch read at all, so its full text always passes.
  */
-export const PRUNE_THRESHOLD_CHARS = MAX_OUTPUT_CHARS;
+export const PRUNE_THRESHOLD_CHARS = 48_000;
+/** Tools whose output is never pruned, whatever its size. */
+const PRUNE_EXEMPT_TOOLS = new Set(['batch_read', 'agent__batch_read']);
 /** Leading span kept verbatim. */
 export const PRUNE_HEAD_CHARS = 4_096;
 /** Trailing span kept verbatim (where errors and exit lines live). */
@@ -122,7 +122,8 @@ export const PRUNE_TAIL_CHARS = 1_024;
 export const PRUNE_MARKER = '\n\n[... tool result middle pruned ...]\n\n';
 
 /** Head + marker + tail rewrite for oversized tool output. */
-export function pruneToolResult(text: string): string {
+export function pruneToolResult(text: string, toolName?: string): string {
+  if (toolName && PRUNE_EXEMPT_TOOLS.has(toolName)) return text;
   if (text.length <= PRUNE_THRESHOLD_CHARS) return text;
   const head = text.slice(0, PRUNE_HEAD_CHARS);
   const tail = text.slice(-PRUNE_TAIL_CHARS);
@@ -618,6 +619,7 @@ const READ_ONLY_TOOLS = new Set([
   'agent__deps',
   'agent__hash',
   'agent__vault_list',
+  'agent__vault_diff',
   'agent__goal_list',
   'agent__checkpoint_list',
   'agent__vision_status',
@@ -816,7 +818,7 @@ export async function executeCalls(
 
   const emitResult = (entry: NonNullable<typeof settled[number]>): void => {
     if (!entry.replayed) {
-      entry.text = pruneToolResult(entry.text);
+      entry.text = pruneToolResult(entry.text, entry.toolName);
     }
     const clientImages = entry.images?.length
       ? entry.images.map((image) => {
@@ -1053,7 +1055,7 @@ export async function executeCalls(
         __streamed: true,
       });
       if (!entry.replayed) {
-        entry.text = pruneToolResult(entry.text);
+        entry.text = pruneToolResult(entry.text, entry.toolName);
       }
       const clientImages = entry.images?.length
         ? entry.images.map((image) => {

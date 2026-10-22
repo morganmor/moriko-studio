@@ -65,7 +65,8 @@ export function listAgentToolDefs(): AgentToolDef[] {
           ranges: { type: 'array', items: { type: 'array', items: { type: 'number' } }, description: 'Disjoint regions [[from,to],...] (max 6, 2000 lines).' },
           mode: { type: 'string', enum: ['window', 'outline', 'fold'], description: '"window" (default) / "outline" / "fold".' },
           showWhitespace: { type: 'boolean', description: 'Expose tabs/trailing spaces.' },
-          lastHash: { type: 'string', description: 'Previous sha; "unchanged" short-circuit.' },
+          lastHash: { type: 'string', description: 'Previous sha; "unchanged" short-circuit (now automatic — this is optional).' },
+          refresh: { type: 'boolean', description: 'Force a full re-render, skipping the automatic unchanged stub.' },
           continueFrom: { type: 'string', description: 'Footer token next:"r:…".' },
         },
         required: ['path'],
@@ -295,13 +296,15 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__todo_update',
-      description: 'Update a standalone todo: check/uncheck, change text/priority, add notes.',
+      description: 'Move a standalone todo through pending/in_progress/completed, or change text/priority/notes.',
       inputSchema: {
         type: 'object',
         properties: {
           todoId: { type: 'string', description: 'Todo id.' },
+          state: { type: 'string', enum: ['pending', 'in_progress', 'completed'], description: 'Explicit state. pending to completed is refused — pass through in_progress.' },
+          activeForm: { type: 'string', description: 'REQUIRED for in_progress: present-continuous description of the work happening now.' },
           text: { type: 'string', description: 'New text.' },
-          done: { type: 'boolean', description: 'Check (true) or uncheck (false).' },
+          done: { type: 'boolean', description: 'Legacy shorthand: true = completed, false = pending (same invariants apply).' },
           priority: { type: 'string', enum: ['low', 'medium', 'high'], description: 'New priority.' },
           notes: { type: 'string', description: 'Notes (empty string clears).' },
         },
@@ -321,6 +324,37 @@ export function listAgentToolDefs(): AgentToolDef[] {
         properties: { todoId: { type: 'string', description: 'Todo id.' } },
         required: ['todoId'],
       },
+    },
+    {
+      wireName: 'agent__enter_plan_mode',
+      description: 'Enter PLAN MODE: exploration only — every file write and command runner is refused until exit_plan_mode.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          reason: { type: 'string', description: 'Why this session is planning (echoed in every refusal).' },
+        },
+      },
+    },
+    {
+      wireName: 'agent__exit_plan_mode',
+      description: 'Leave PLAN MODE with a structured plan. The only way to lift the gate.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          summary: { type: 'string', description: 'One paragraph: what changes and why.' },
+          files: { type: 'array', items: { type: 'string' }, description: 'Workspace paths you will touch.' },
+          approach: { type: 'string', description: 'The approach chosen, and the alternative rejected.' },
+          verification: { type: 'array', items: { type: 'string' }, description: 'Concrete checks that will prove it works.' },
+          risks: { type: 'array', items: { type: 'string' }, description: 'Known risks (optional).' },
+          dryRun: { type: 'boolean', description: 'Validate the plan without lifting the gate.' },
+        },
+        required: ['summary', 'files', 'approach', 'verification'],
+      },
+    },
+    {
+      wireName: 'agent__plan_status',
+      description: 'Read-only: whether plan mode or an RSA/T plan lock is currently blocking mutations.',
+      inputSchema: { type: 'object', properties: {} },
     },
     {
       wireName: 'agent__fetch',
@@ -357,14 +391,28 @@ export function listAgentToolDefs(): AgentToolDef[] {
       },
     },
     {
+      wireName: 'agent__vault_diff',
+      description: 'Diff a vault snapshot against the current file (no changes written).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          snapshotId: { type: 'string', description: 'Snapshot id.' },
+          to: { type: 'string', description: 'Compare against this path instead of the original.' },
+        },
+        required: ['snapshotId'],
+      },
+    },
+    {
       wireName: 'agent__vault_restore',
-      description: 'Restore a vault snapshot (pre-restore snapshot taken if target exists).',
+      description: 'Restore a vault snapshot — full file (default) or a line range (rangeFrom/rangeTo). Pre-restore snapshot taken if target exists.',
       inputSchema: {
         type: 'object',
         properties: {
           snapshotId: { type: 'string', description: 'Snapshot id.' },
           to: { type: 'string', description: 'Alternative destination.' },
           dryRun: { type: 'boolean', description: 'Preview only.' },
+          rangeFrom: { type: 'number', description: 'Range restore: first line (1-based).' },
+          rangeTo: { type: 'number', description: 'Range restore: last line (inclusive).' },
         },
         required: ['snapshotId'],
       },
@@ -486,14 +534,25 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__batch_read',
-      description: 'Read up to 6 files in one call, each with sha + receipt.',
+      description:
+        'Read ANY number of files in one call. Every entry MUST carry its own maxLines limit (same per-file cap as read_file) — there is no default, no clamp, no file-count cap and no output truncation. Each file returns its numbered window, sha footer and read receipt.',
       inputSchema: {
         type: 'object',
         properties: {
-          paths: { type: 'array', items: { type: 'string' }, description: 'File paths (max 6).' },
-          maxLines: { type: 'number', description: 'Default 400, max 1000.' },
+          files: {
+            type: 'array',
+            description: 'Files to read — unlimited count. One maxLines per file (required).',
+            items: {
+              type: 'object',
+              properties: {
+                path: { type: 'string', description: 'File path.' },
+                maxLines: { type: 'number', description: 'REQUIRED per-file line limit — caller-chosen, no default or cap.' },
+              },
+              required: ['path', 'maxLines'],
+            },
+          },
         },
-        required: ['paths'],
+        required: ['files'],
       },
     },
     {
@@ -561,6 +620,20 @@ export function listAgentToolDefs(): AgentToolDef[] {
         properties: {
           command: { type: 'string', description: 'Override (default "pnpm typecheck").' },
           cwd: { type: 'string', description: 'Working dir.' },
+        },
+      },
+    },
+    {
+      wireName: 'agent__screenshot',
+      description:
+        'Standalone headless screenshot of ANY http/https page (localhost or web) — INDEPENDENT of the Web Access toggle and of the built-in browser. Returns an inline JPEG + a text report: final URL/title/viewport, FCP/TTFB/LCP, and a numbered interactive-element map (n, role, text, box, selector hint) usable for click targeting and by text-only models. Ephemeral: no profile, no cookies, writes nothing to disk.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'Page to capture (http/https; localhost fine).' },
+          fullPage: { type: 'boolean', description: 'Capture beyond the viewport.' },
+          selector: { type: 'string', description: 'Photograph ONE element instead of the viewport.' },
+          full: { type: 'boolean', description: 'Widen the interactive map (40 vs 20 elements).' },
         },
       },
     },
@@ -801,6 +874,20 @@ export function listAgentToolDefs(): AgentToolDef[] {
           fullPage: { type: 'boolean', description: 'Capture beyond the viewport.' },
           selector: { type: 'string', description: 'Clip to this element.' },
           frame: { type: 'string', description: 'Capture inside this iframe.' },
+        },
+      },
+    },
+    {
+      wireName: 'agent__browser_snapshot',
+      description:
+        'ONE-call page observer (replaces chromedev screenshot): navigate (url?), capture, and return page context + inline JPEG. Text-first: URL/title/viewport/scroll, FCP/TTFB/LCP, console errors + warnings, failed 4xx/5xx requests, and a numbered interactive-element map (n, role, text, box, selector hint) for precise click targeting. Works for text-only models (metadata without the image).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'Navigate first (http/https). Optional — defaults to the active tab.' },
+          selector: { type: 'string', description: 'Photograph ONE element instead of the viewport.' },
+          fullPage: { type: 'boolean', description: 'Capture beyond the viewport.' },
+          full: { type: 'boolean', description: 'Widen the interactive map (40 vs 20 elements).' },
         },
       },
     },

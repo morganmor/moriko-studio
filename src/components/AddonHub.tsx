@@ -8,13 +8,34 @@
  * only — no native alert/confirm (deletes confirm through Modal).
  */
 
-import { memo, useCallback, useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 
-import { Modal, RightDockCloseButton, RightDockSlot, cx } from './ui';
+import { Modal, RightDockCloseButton, RightDockSlot, Toggle, cx } from './ui';
 import { useStore } from '../store/useStore';
 import type { AddonClientEntry } from '../types/addon';
 
 type HubTab = 'installed' | 'permissions' | 'logs';
+
+/** One line in the terminal Logs tab (server addon-log entry). */
+interface TerminalEntry {
+  at: number;
+  level: string;
+  text: string;
+  source?: 'system' | 'addon';
+  durationMs?: number;
+}
+
+/** HH:MM:SS — compact console timestamp. */
+function fmtTime(at: number): string {
+  const d = new Date(at);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+/** Load duration chip — "123ms" / "1.2s". */
+function fmtDur(ms: number): string {
+  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
 
 function statusTone(status?: string): string {
   switch (status) {
@@ -169,11 +190,114 @@ function AddonCard({ addon, onChanged, onOpenLogs }: {
   );
 }
 
+/**
+ * AddonTerminal — the Logs tab as a CMD/UNIX-style console. One selector for
+ * the addon (or ALL), a live tail (2s poll), monospace lines with UTC-typed
+ * timestamps, level + source coloring, and count/status chips in a title bar.
+ * `initialId` comes from the "Logs" button on an addon card.
+ */
+function AddonTerminal({ addons, initialId }: { addons: AddonClientEntry[]; initialId: string | null }) {
+  const [target, setTarget] = useState<string>(initialId ?? 'all');
+  const [entries, setEntries] = useState<TerminalEntry[]>([]);
+  const [auto, setAuto] = useState(true);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottom = useRef(true);
+
+  const load = useCallback(async (id: string) => {
+    try {
+      const resp = id === 'all' ? await fetch('/api/addons/logs') : await fetch(`/api/addons/${id}/logs`);
+      if (!resp.ok) return;
+      const payload = await resp.json() as { logs: TerminalEntry[] };
+      setEntries(payload.logs);
+    } catch { /* transient */ }
+  }, []);
+
+  useEffect(() => { void load(target); }, [target, load]);
+  useEffect(() => {
+    if (!auto) return;
+    const timer = window.setInterval(() => void load(target), 2000);
+    return () => window.clearInterval(timer);
+  }, [auto, target, load]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
+  }, [entries]);
+
+  const onErrorScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  };
+
+  const errCount = entries.filter((entry) => entry.level === 'error').length;
+  const warnCount = entries.filter((entry) => entry.level === 'warn').length;
+  const shown = entries.length;
+  const total = addons.length;
+
+  return (
+    <div className="aterm">
+      <div className="aterm-bar">
+        <span className="aterm-dots" aria-hidden="true"><i /><i /><i /></span>
+        <span className="aterm-title">
+          {target === 'all' ? 'addon-logs — all' : `addon-logs — ${target}`}
+        </span>
+        <span className="aterm-chips">
+          {errCount > 0 ? <span className="aterm-chip err">{errCount} err</span> : null}
+          {warnCount > 0 ? <span className="aterm-chip warn">{warnCount} warn</span> : null}
+          <span className="aterm-chip">{shown} lines</span>
+        </span>
+        <button
+          type="button"
+          className={cx('aterm-btn', auto && 'on')}
+          onClick={() => setAuto((value) => !value)}
+        >
+          {auto ? '● live' : '○ paused'}
+        </button>
+        <button type="button" className="aterm-btn" onClick={() => void load(target)}>↻</button>
+      </div>
+      <div className="aterm-pick">
+        <select
+          value={target}
+          onChange={(event) => setTarget(event.target.value)}
+          aria-label="Addon log stream"
+          className="aterm-select"
+        >
+          <option value="all">all addons ({total})</option>
+          {addons.map((addon) => (
+            <option key={addon.id} value={addon.id}>{addon.id}</option>
+          ))}
+        </select>
+      </div>
+      <div
+        ref={scrollRef}
+        onScroll={onErrorScroll}
+        className="aterm-body"
+        role="log"
+        aria-live="polite"
+      >
+        {shown === 0 ? (
+          <div className="aterm-line muted">— no log output yet —</div>
+        ) : (
+          entries.map((entry, index) => (
+            <div key={index} className={cx('aterm-line', entry.level, entry.source)}>
+              <span className="aterm-time">{fmtTime(entry.at)}</span>
+              <span className="aterm-lvl">{entry.level.toUpperCase().padEnd(5)}</span>
+              {entry.source === 'system' ? <span className="aterm-src">SYS</span> : null}
+              {entry.durationMs !== undefined ? <span className="aterm-dur">{fmtDur(entry.durationMs)}</span> : null}
+              <span className="aterm-text">{entry.text}</span>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 export const AddonHub = memo(function AddonHub() {
   const [addons, setAddons] = useState<AddonClientEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<HubTab>('installed');
-  const [logs, setLogs] = useState<Array<{ addonId: string; at: number; level: string; text: string }>>([]);
   const [logsFor, setLogsFor] = useState<string | null>(null);
   const setView = useStore((state) => state.setView);
 
@@ -196,16 +320,10 @@ export const AddonHub = memo(function AddonHub() {
     return () => window.removeEventListener('moriko:addons-reloaded', onReload);
   }, [refresh]);
 
-  const openLogs = useCallback(async (id: string) => {
+  /** Terminal takes over fetching — the card button just selects the stream. */
+  const openLogs = useCallback((id: string) => {
     setLogsFor(id);
     setTab('logs');
-    try {
-      const resp = await fetch(`/api/addons/${id}/logs`);
-      if (resp.ok) {
-        const payload = await resp.json() as { logs: Array<{ at: number; level: string; text: string }> };
-        setLogs(payload.logs.map((entry) => ({ addonId: id, ...entry })));
-      }
-    } catch {  }
   }, []);
 
   const tabs: Array<{ id: HubTab; label: string }> = [
@@ -300,27 +418,7 @@ export const AddonHub = memo(function AddonHub() {
           )}
         </div>
       ) : (
-        <div className="addon-hub-list">
-          {logsFor ? (
-            <>
-              <p style={{ fontSize: 12, color: 'var(--muted)' }}>Latest {logs.length} log lines from <code>{logsFor}</code>.</p>
-              <div className="card addon-hub-logcard">
-                {logs.length === 0 ? (
-                  <p style={{ fontSize: 12, color: 'var(--muted)' }}>No log output.</p>
-                ) : (
-                  logs.map((entry, index) => (
-                    <div key={index} className={cx('addon-log-line', `lvl-${entry.level}`)}>
-                      <span className="addon-log-time">{new Date(entry.at).toLocaleTimeString()}</span>
-                      <span>{entry.text}</span>
-                    </div>
-                  ))
-                )}
-              </div>
-            </>
-          ) : (
-            <p className="addon-hub-empty">Open Logs from an addon card.</p>
-          )}
-        </div>
+        <AddonTerminal addons={addons} initialId={logsFor} />
       )}
     </div>
   );
@@ -344,3 +442,110 @@ export const AddonDockShortcut = memo(function AddonDockShortcut({ width: _width
     </div>
   );
 });
+
+/**
+ * AddonHubModal — the compact Hub as a themed popup list (opened from the
+ * sidebar footer's addon-brick button). One row per addon: name — description
+ * + version, an ON/OFF switch, and ONE global reload button for all addons.
+ * The full manager (details, permissions table, logs, remove) stays on the
+ * Hub page (ViewId 'addons').
+ */
+export function AddonHubModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [addons, setAddons] = useState<AddonClientEntry[]>([]);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [reloading, setReloading] = useState(false);
+  const setView = useStore((state) => state.setView);
+
+  const refresh = useCallback(async () => {
+    try {
+      const resp = await fetch('/api/addons');
+      if (resp.ok) {
+        const payload = await resp.json() as { addons: AddonClientEntry[] };
+        setAddons(payload.addons);
+      }
+    } catch { /* keep last known list */ }
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    void refresh();
+    const onReload = () => void refresh();
+    window.addEventListener('moriko:addons-reloaded', onReload);
+    return () => window.removeEventListener('moriko:addons-reloaded', onReload);
+  }, [open, refresh]);
+
+  const toggle = async (id: string) => {
+    setBusyId(id);
+    try {
+      const resp = await fetch(`/api/addons/${id}/toggle`, { method: 'POST' });
+      if (resp.ok) {
+        const { reseeded } = await resp.json() as { reseeded?: boolean };
+        if (reseeded) useStore.getState().showNotice('addon.reseeded', { detail: id });
+      }
+      await refresh();
+    } finally { setBusyId(null); }
+  };
+
+  /** ONE button for everything: reseed every builtin from addons-src, then
+   *  reload the registry — new addons are picked up without a restart. */
+  const reloadAll = async () => {
+    setReloading(true);
+    try {
+      const resp = await fetch('/api/addons/reload', { method: 'POST' });
+      window.dispatchEvent(new CustomEvent('moriko:addons-reloaded'));
+      useStore.getState().showNotice(resp.ok ? 'addon.reloaded' : 'addon.reloadFailed', { detail: 'all' });
+      await refresh();
+    } finally { setReloading(false); }
+  };
+
+  const openHub = () => {
+    onClose();
+    setView('addons');
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title="Addon Hub" description="Enable, disable, or reload installed addons." size="sm">
+      <div className="addon-hub-list" style={{ maxHeight: '52vh', overflowY: 'auto', display: 'grid', gap: 8 }}>
+        {addons.length === 0 ? (
+          <p className="addon-hub-empty">No addons installed.</p>
+        ) : (
+          addons.map((addon) => (
+            <div key={addon.id} className="card addon-hub-card" style={{ padding: '10px 12px' }}>
+              <div className="addon-hub-head" style={{ margin: 0, gap: 10 }}>
+                <div className="addon-hub-id" style={{ minWidth: 0, flex: 1 }}>
+                  <strong>{addon.name}</strong>
+                  <span className="addon-hub-ver">
+                    {addon.description ? ` — ${addon.description} ` : ''}v{addon.version}
+                  </span>
+                  {addon.status === 'needs-consent' ? (
+                    <span className={cx('addon-hub-status', 'tone-warn')}>needs approval</span>
+                  ) : addon.loadError || addon.status === 'error' ? (
+                    <span className={cx('addon-hub-status', 'tone-danger')}>error</span>
+                  ) : null}
+                </div>
+                <Toggle
+                  checked={addon.enabled}
+                  hideLabel
+                  disabled={busyId === addon.id}
+                  onChange={() => void toggle(addon.id)}
+                  label={`${addon.enabled ? 'Disable' : 'Enable'} ${addon.name}`}
+                />
+              </div>
+              {addon.status === 'needs-consent' ? (
+                <p style={{ margin: '6px 0 0', fontSize: 11.5, color: 'var(--muted)' }}>
+                  Approve it on the Hub page before it can run.
+                </p>
+              ) : null}
+            </div>
+          ))
+        )}
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+        <button type="button" className="btn xs ghost" disabled={reloading} onClick={() => void reloadAll()}>
+          {reloading ? 'Reloading…' : '⟳ Reload all'}
+        </button>
+        <button type="button" className="btn xs" onClick={openHub}>Open full Addon Hub</button>
+      </div>
+    </Modal>
+  );
+}

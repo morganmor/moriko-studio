@@ -20,8 +20,9 @@ import { writeTool } from './write.js';
 import { renameTool, moveTool, copyTool, deleteTool } from './transfer.js';
 import { goalCreateTool, goalUpdateTool, goalListTool } from './goals.js';
 import { todoCreateTool, todoUpdateTool, todoListTool, todoDeleteTool } from './todos.js';
+import { enterPlanModeTool, exitPlanModeTool, planStatusTool } from './plan.js';
 import { fetchTool, downloadTool } from './net.js';
-import { vaultListTool, vaultRestoreTool } from './vault.js';
+import { vaultListTool, vaultRestoreTool, vaultDiffTool } from './vault.js';
 import { runTool, gitTool } from './terminal.js';
 import { askUserTool } from './ask.js';
 import { addonManageTool } from './addonManage.js';
@@ -45,6 +46,8 @@ import { treeOutlineTool, treeRefreshTool } from './tree.js';
 import { renderVisualTool } from './visual.js';
 import { execTool } from './exec.js';
 import { browserOpenTool, browserReadTool, browserScreenshotTool, browserWaitTool, browserEvalTool, browserUrlTool, browserClickTool, browserTypeTool, browserCursorMoveTool, browserScrollTool, browserHandoverTool, browserReleaseTool, browserTabsTool, browserSwitchTabTool, browserCloseTabTool, browserClearDataTool, browserDragTool, browserMouseDownTool, browserMouseUpTool, browserHoverTool, browserPressTool, browserBackTool, browserForwardTool, browserReloadTool, browserInspectTool, browserSemanticTool, browserFormTool, browserReadArticleTool, browserWatchTool, browserWatchResultTool, browserMetadataTool, browserSavePageTool, browserSaveImagesTool, browserUploadTool, browserDownloadTool, browserTableTool, browserPdfTool, browserCrawlTool, browserBlockRequestsTool, browserUnblockRequestsTool, browserAuditLogTool, browserRequestApprovalTool, browserPlanTool, browserDebugTool, browserInstallScriptTool, browserListScriptsTool, browserRemoveScriptTool, browserBaselineTool, browserVisualDiffTool, browserMergeTabsTool, browserFanOutTool, browserMarkTool, browserMarksTool, browserRecordTool, browserReplayTool, browserTouchTapTool, browserDialogTool, browserAnnotationsTool } from './browser.js';
+import { browserSnapshotTool } from './browser-snapshot.js';
+import { screenshotTool } from './screenshot.js';
 import { harnessLockdownTool, harnessChoiceTool } from './lockdown.js';
 import { isWebTool } from './web-access.js';
 import { toolByName } from './registry.js';
@@ -138,12 +141,20 @@ export async function callAgentTool(
         return await todoListTool(callArgs, callCtx);
       case 'todo_delete':
         return await todoDeleteTool(callArgs, callCtx);
+      case 'enter_plan_mode':
+        return await enterPlanModeTool(callArgs, callCtx);
+      case 'exit_plan_mode':
+        return await exitPlanModeTool(callArgs, callCtx);
+      case 'plan_status':
+        return await planStatusTool(callArgs, callCtx);
       case 'fetch':
         return await fetchTool(callArgs, callCtx);
       case 'download':
         return await downloadTool(callArgs, callCtx);
       case 'vault_list':
         return await vaultListTool(callArgs, callCtx);
+      case 'vault_diff':
+        return await vaultDiffTool(callArgs, callCtx);
       case 'vault_restore':
         return await vaultRestoreTool(callArgs, callCtx);
       case 'run':
@@ -214,6 +225,10 @@ export async function callAgentTool(
         return await browserReadTool(callArgs, callCtx);
       case 'browser_screenshot':
         return await browserScreenshotTool(callArgs, callCtx);
+      case 'browser_snapshot':
+        return await browserSnapshotTool(callArgs, callCtx);
+      case 'screenshot':
+        return await screenshotTool(callArgs, callCtx);
       case 'browser_wait':
         return await browserWaitTool(callArgs, callCtx);
       case 'browser_eval':
@@ -347,13 +362,14 @@ export async function callAgentTool(
             `Unknown agent tool "${call.wireName}". Available: agent__list, agent__grep, agent__read_file, agent__read_all, agent__edit_file, agent__write, agent__multi_edit, agent__edit_lines, agent__edit_between, agent__insert_at_line, ` +
             'agent__rename, agent__move, agent__copy, agent__delete, agent__goal_create, agent__goal_update, agent__goal_list, ' +
             'agent__todo_create, agent__todo_update, agent__todo_list, agent__todo_delete, ' +
+            'agent__enter_plan_mode, agent__exit_plan_mode, agent__plan_status, ' +
             'agent__fetch, agent__download, agent__vault_list, agent__vault_restore, agent__run, agent__git, ' +
             'agent__remind, agent__harness_reload, agent__vision, agent__vision_status, ' +
             'agent__explain_error, agent__search, agent__batch_read, agent__checkpoint, agent__undo, ' +
             'agent__checkpoint_list, agent__apply_patch, agent__deps, agent__glob, ' +
             'agent__typecheck, agent__test_run, agent__spatial, agent__layout_edit, agent__backend, agent__task_start, agent__task_output, agent__task_stop, ' +
             'agent__lsp_symbols, agent__ask_user, agent__tree_outline, agent__tree_refresh, agent__render_visual, agent__exec, ' +
-            'agent__browser_open, agent__browser_read, agent__browser_screenshot, agent__browser_wait, agent__browser_eval, agent__browser_url, ' +
+            'agent__browser_open, agent__browser_read, agent__browser_screenshot, agent__browser_snapshot, agent__screenshot, agent__browser_wait, agent__browser_eval, agent__browser_url, ' +
             'agent__browser_click, agent__browser_type, agent__browser_cursor_move, agent__browser_scroll, ' +
             'agent__browser_handover, agent__browser_release, agent__browser_tabs, agent__browser_switch_tab, agent__browser_close_tab, agent__browser_clear_data, '
             + 'agent__browser_drag, agent__browser_mouse_down, agent__browser_mouse_up, agent__browser_hover, agent__browser_press, '

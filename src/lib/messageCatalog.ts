@@ -118,6 +118,9 @@ export const MESSAGE_CATALOG = {
   'slash.imageQueued': { text: 'Image request sent — the agent composes the prompt and generates.', tone: 'info', surface: 'notice' },
   'slash.clearStarted': { text: 'Started a fresh chat.', tone: 'success', surface: 'notice' },
   'slash.helpOpened': { text: 'Keyboard shortcuts opened.', tone: 'info', surface: 'notice' },
+  'slash.planModeOn': { text: 'Plan mode ON — reading and planning only; edits and commands are refused.', tone: 'info', surface: 'notice' },
+  'slash.planModeOff': { text: 'Plan mode off — edits and commands are available again.', tone: 'success', surface: 'notice' },
+  'slash.planModeRsatLock': { text: 'Plan mode off, but the RSAT plan lock stays: PRD is {label} — the user must press Start.', tone: 'info', surface: 'notice' },
 
   'storage.saved': { text: 'Storage location saved — press Reload harness to apply.', tone: 'success', surface: 'notice' },
 

@@ -7,7 +7,7 @@
    · Milik addon (file ini): token --c-rsat-* + --c-council-* (light/dark/mocha)
      + blok .rsat + blok .council.
    · Milik harness (tetap di index.css): .council-switch* (TopBar switcher),
-     .rsat-gem-ic (ikon tombol TopBar), .addon-* kit host, token --c-notify-*.
+     .tb-addon-ic (ikon tombol TopBar), .addon-* kit host, token --c-notify-*.
    ========================================================================= */
 :root,.scope-light{
   --c-rsat-bronze:176 108 54;--c-rsat-silver:120 128 142;--c-rsat-gold:190 138 12;--c-rsat-diamond:10 150 170;

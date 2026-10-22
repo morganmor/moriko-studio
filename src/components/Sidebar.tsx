@@ -12,7 +12,7 @@ import { storage } from '../lib/storage';
 import { resolveTheme } from '../lib/appearance';
 import { Tip, cx } from './ui';
 import { MobileWatching } from './MobileWatching';
-import { AddonSidebarSection } from './AddonSidebarSection';
+import { AddonHubModal } from './AddonHub';
 import { ShortcutsDialog } from './ShortcutsDialog';
 
 interface SidebarProps {
@@ -513,6 +513,8 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, onBindWor
   const sidebarCollapsed = useStore((state) => state.sidebarCollapsed);
   /** Reference design's footer affordance: the `?` key opens the cheat-sheet. */
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  /** Addon Hub popup — enable/disable/reload addons without leaving the rail. */
+  const [addonHubOpen, setAddonHubOpen] = useState(false);
   /** /help slash command — same cheat-sheet as the footer's ? button. */
   useEffect(() => {
     const onOpenShortcuts = () => setShortcutsOpen(true);
@@ -896,8 +898,6 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, onBindWor
             ) : null}
           </div>
         </CollapseSection>
-
-        <AddonSidebarSection go={go} />
       </nav>
 
       {}
@@ -939,15 +939,15 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, onBindWor
           </button>
         </Tip>
 
-        <Tip label="Keyboard shortcuts · ?" align="start" className="sf-item">
+        <Tip label="Addon Hub" align="start" className="sf-item">
           <button
             type="button"
-            onClick={() => setShortcutsOpen(true)}
-            aria-label="Keyboard shortcuts"
+            onClick={() => setAddonHubOpen(true)}
+            aria-label="Addon Hub"
             aria-haspopup="dialog"
             className="ib"
           >
-            <DIcon name="keyboard" className="ic" aria-hidden="true" />
+            <DIcon name="addon" className="ic" aria-hidden="true" />
           </button>
         </Tip>
 
@@ -1084,6 +1084,7 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, onBindWor
       </div>
 
       <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+      <AddonHubModal open={addonHubOpen} onClose={() => setAddonHubOpen(false)} />
     </aside>
   );
 }

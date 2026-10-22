@@ -1,7 +1,7 @@
 {
   "name": "moriko-studio",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.7.0",
   "license": "MIT",
   "type": "module",
   "description": "Moriko Studio — AI chat workspace with system instructions, MCP tools, multi-provider support, and a local proxy.",

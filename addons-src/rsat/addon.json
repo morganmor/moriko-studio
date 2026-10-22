@@ -3,7 +3,7 @@
   "id": "rsat",
   "name": "RSA/T — Realtime Shared Achievement Tracker",
   "shortName": "RSA/T",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "kind": "mod",
   "author": "Moriko",
   "description": "Gamified multi-agent achievement board: shared PRD, scope guard, live sync, pixel UI (Minecraft-flavored, RSAT only).",

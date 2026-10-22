@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Download, Folder, Loader2, MessageSquare, Palette, Plug, RotateCcw, Upload } from './icons';
+import { DIcon } from './designIcons';
+import { SHORTCUT_GROUPS } from './ShortcutsDialog';
 
 import {
   fetchStorageLocation,
@@ -11,6 +13,7 @@ import {
 import { exportAll, importBundle } from '../lib/exportImport';
 import { isMotionReduced } from '../lib/appearance';
 import { McpServersCard } from './McpServersCard';
+import { McpBridgeCard } from './McpBridgeCard';
 import { isPhantomConversation, useStore } from '../store/useStore';
 import type { Accent, Density, FontFamily, ThemeMode } from '../types';
 import { Tip, Modal, Toggle } from './ui';
@@ -316,13 +319,16 @@ function StorageLocationSection() {
   );
 }
 
-type SettingsTab = 'appearance' | 'mcp' | 'storage' | 'conversations';
+type SettingsTab = 'appearance' | 'mcp' | 'storage' | 'conversations' | 'shortcuts';
 
 /** One sidebar entry. */
 const NAV_GROUPS: Array<{ label: string; items: Array<{ id: SettingsTab; label: string; icon: ReactNode }> }> = [
   {
     label: 'General',
-    items: [{ id: 'appearance', label: 'Appearance', icon: <Palette className="ic" aria-hidden="true" /> }],
+    items: [
+      { id: 'appearance', label: 'Appearance', icon: <Palette className="ic" aria-hidden="true" /> },
+      { id: 'shortcuts', label: 'Keyboard', icon: <DIcon name="keyboard" className="ic" aria-hidden="true" /> },
+    ],
   },
   {
     label: 'Integrations',
@@ -550,7 +556,32 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
                 <h3>MCP servers</h3>
                 <p>Register tool servers (local command or remote URL) the model may call when Use MCP is on. Enable the toggle in Configuration → Tools.</p>
               </div>
+              <McpBridgeCard />
               <McpServersCard />
+            </div>
+          )}
+
+          {tab === 'shortcuts' && (
+            <div className="set-panel">
+              <div className="set-head">
+                <h3>Keyboard shortcuts</h3>
+                <p>Everything reachable without leaving the keyboard.</p>
+              </div>
+              <div className="kbd-groups">
+                {SHORTCUT_GROUPS.map((group) => (
+                  <section key={group.title} className="kbd-group">
+                    <p className="sec-label">{group.title}</p>
+                    <ul className="kbd-list">
+                      {group.rows.map((row) => (
+                        <li key={row.keys} className="kbd-row">
+                          <kbd>{row.keys}</kbd>
+                          <span>{row.label}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                ))}
+              </div>
             </div>
           )}
 

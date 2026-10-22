@@ -15,12 +15,15 @@ import {
   compilePattern, globToRegExp, truncateOutput,
   requireWorkspace, resolveWithPermission,
   MAX_MATCHES, MAX_MATCH_FILES, MAX_SCAN_BYTES,
-  MAX_OUTPUT_CHARS, MAX_LINE_CHARS, MAX_MATCHES_PER_FILE,
+  MAX_LINE_CHARS, MAX_MATCHES_PER_FILE,
 } from './shared.js';
 import { walkFiles } from './list.js';
 import { recordRead } from '../read-policy.js';
 import { sha256 } from '../edit-diagnostics.js';
 import { enclosingSymbol } from '../ts-ast.js';
+
+/** Own budget for this tool — the shared constant was removed (2026-10-22). */
+const GREP_BUDGET_CHARS = 48_000;
 
 const GENERIC_KEYWORDS = new Set([
   'done', 'error', 'finish', 'end', 'start', 'stop', 'run', 'ok', 'test',
@@ -319,7 +322,7 @@ export async function grepTool(rawArgs: Record<string, unknown>, ctx: AgentToolC
   }
 
   const matches: string[] = [];
-  let budget = MAX_OUTPUT_CHARS;
+  let budget = GREP_BUDGET_CHARS;
   let budgetStopped = false;
   let receiptCount = 0;
   const receiptFooters: string[] = [];
@@ -349,7 +352,7 @@ export async function grepTool(rawArgs: Record<string, unknown>, ctx: AgentToolC
   };
 
   if (multiPattern) {
-    const perPatternBudget = Math.max(2_000, Math.floor(MAX_OUTPUT_CHARS / patterns.length));
+    const perPatternBudget = Math.max(2_000, Math.floor(GREP_BUDGET_CHARS / patterns.length));
     let usedChars = 0;
     for (let r = 0; r < patterns.length; r += 1) {
       let groupBudget = perPatternBudget;
@@ -373,7 +376,7 @@ export async function grepTool(rawArgs: Record<string, unknown>, ctx: AgentToolC
       usedChars += head.length + rows.join('\n').length + 2;
       matches.push(head, ...rows);
     }
-    if (usedChars > MAX_OUTPUT_CHARS) budgetStopped = true;
+    if (usedChars > GREP_BUDGET_CHARS) budgetStopped = true;
   } else if (!receiptMode) {
     for (const scan of scans) {
       for (const hit of scan.hits) {

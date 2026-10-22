@@ -44,6 +44,7 @@ import {
   ChevronDown,
   ChevronsDownUp,
   ChevronsUpDown,
+  Download,
   Maximize2,
   ShieldCheck,
   UnfoldVertical,
@@ -378,6 +379,30 @@ function VariantFrame({
  *    an edit-in-place (same id) keeps the user's size; a NEW visual id
  *    starts fresh at auto-fit.
  */
+/**
+ * DOWNLOAD — the payload is a COMPLETE standalone HTML document (vendor libs
+ * already inlined), so saving it as a .html file gives the user a portable,
+ * offline artifact of exactly what the card renders. Blob URL, no network.
+ */
+function useVisualDownload() {
+  const [downloaded, setDownloaded] = useState(false);
+  const download = (visual: VisualSpec, html: string | null) => {
+    if (!html) return;
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${(visual.title || 'moriko-visual').replace(/[\\/:*?"<>|]+/g, '-').slice(0, 80)}.html`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    setDownloaded(true);
+    window.setTimeout(() => setDownloaded(false), 1600);
+  };
+  return { download, downloaded };
+}
+
 export function VisualCard({
   visual,
   onFullscreen,
@@ -391,6 +416,7 @@ export function VisualCard({
   const liveToken = useVisualLiveToken(visual.id);
   const [activeVariantId, setActiveVariantId] = useState<string | null>(null);
   const [pickedVariantId, setPickedVariantId] = useState<string | null>(null);
+  const { download, downloaded } = useVisualDownload();
 
   const rootRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -667,6 +693,16 @@ export function VisualCard({
             <ChevronsUpDown className="ic" aria-hidden="true" />
           </button>
         </Tip>
+        <Tip label={downloaded ? 'Saved' : 'Download as standalone .html'}>
+          <button
+            type="button"
+            className="ib xs"
+            onClick={() => download(visual, resolvedHtml ?? null)}
+            aria-label="Download visual"
+          >
+            {downloaded ? <Check className="ic" aria-hidden="true" /> : <Download className="ic" aria-hidden="true" />}
+          </button>
+        </Tip>
         <Tip label="Open fullscreen">
           <button
             type="button"
@@ -743,6 +779,8 @@ export function VisualFullscreen({ visual, onClose }: { visual: VisualSpec; onCl
     return () => observer.disconnect();
   }, []);
 
+  const { download, downloaded } = useVisualDownload();
+
   const [srcDoc, setSrcDoc] = useState<string | null>(visual.html !== undefined ? injectVisualRuntime(enforceCsp(visual.html), visual.id) : null);
   useEffect(() => {
     let cancelled = false;
@@ -793,6 +831,14 @@ export function VisualFullscreen({ visual, onClose }: { visual: VisualSpec; onCl
           ))}
         </div>
         <span className="show-sm" style={{ fontSize: 11, color: 'rgb(var(--c-paper) / 0.5)' }}>sandboxed · no network</span>
+        <button
+          type="button"
+          style={{ display: 'grid', placeItems: 'center', borderRadius: 'var(--r-md)', padding: 6, color: 'rgb(var(--c-paper) / 0.7)' }}
+          onClick={() => download(visual, srcDoc)}
+          aria-label={downloaded ? 'Visual saved' : 'Download visual as .html'}
+        >
+          {downloaded ? <Check className="ic" aria-hidden="true" /> : <Download className="ic" aria-hidden="true" />}
+        </button>
         <button
           type="button"
           style={{ display: 'grid', placeItems: 'center', borderRadius: 'var(--r-md)', padding: 6, color: 'rgb(var(--c-paper) / 0.7)' }}

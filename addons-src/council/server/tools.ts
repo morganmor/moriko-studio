@@ -83,7 +83,7 @@ const toolDefs = [
     async execute(args, ctx) {
       const api = ctx.api;
       const me = ctx.sessionId;
-      const text = String(args?.text ?? '').trim().slice(0, 600);
+      const text = String(args?.text ?? '').trim();
       if (!text) return { type: 'text', text: 'council_broadcast requires non-empty `text`.' };
       const mem = membershipOf(api, me);
       if (!mem) return { type: 'text', text: 'You are not part of a council; nothing to broadcast to.' };
@@ -149,7 +149,7 @@ const toolDefs = [
       type: 'object',
       properties: {
         target: { type: 'string', description: 'Agent id (from council_status) of the sub-session to message.' },
-        message: { type: 'string', description: 'The instruction/message to deliver (max 4000 chars).' },
+        message: { type: 'string', description: 'The instruction/message to deliver — delivered in full, never truncated.' },
       },
       required: ['target', 'message'],
       additionalProperties: false,
@@ -159,7 +159,7 @@ const toolDefs = [
       const gate = orchestratorGate(api, ctx.sessionId);
       if (gate.error) return { type: 'text', text: gate.error };
       const agentId = String(args?.target ?? '');
-      const message = String(args?.message ?? '').trim().slice(0, 4000);
+      const message = String(args?.message ?? '').trim();
       if (!agentId || !message) return { type: 'text', text: 'council_send requires non-empty `target` and `message`.' };
       const member = gate.mem.members.find((m) => m.role === 'sub' && m.agentId === agentId);
       if (!member) {

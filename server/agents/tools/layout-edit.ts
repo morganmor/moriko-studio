@@ -15,6 +15,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, num, truncateOutput, resolveWithPermission } from './shared.js';
 import { snapshotFile } from '../vault.js';
+import { healEditedContent, formatHealNotes } from '../edit-heal.js';
 import {
   applyLayoutIntent,
   buildSpatialMap,
@@ -102,6 +103,11 @@ export async function layoutEditTool(args: Record<string, unknown>, ctx: AgentTo
       text: `The compiled old text no longer matches ${relative} — the file changed since the map was built. Re-run agent__spatial {mode:"map"} and retry.`,
     };
   }
+  // POST-EDIT HEAL — layout edits are still edits: duplicates at the seam,
+  // delimiter balance and syntax are checked before the file is written.
+  const heal = healEditedContent(src, next, absolute);
+  const healNote = formatHealNotes(heal);
+  next = heal.content;
   try {
     writeFileSync(absolute, next, 'utf-8');
   } catch (error) {
@@ -116,6 +122,7 @@ export async function layoutEditTool(args: Record<string, unknown>, ctx: AgentTo
 
   lines.push('');
   lines.push(`applied · ${vaultNote}`);
+  if (healNote) lines.push(healNote.trim());
   lines.push(truncateOutput(renderSpatialDiff(diff)));
 
   if (newCandidates > 0) {

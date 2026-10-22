@@ -10,6 +10,7 @@
 import { readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import * as ts from 'typescript';
+import { healEditedContent, formatHealNotes } from '../edit-heal.js';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { MAX_EDIT_BYTES, resolveWithPermission } from './shared.js';
 import { buildUnifiedDiff, diffStatFromOps } from '../diff.js';
@@ -230,9 +231,14 @@ export async function finishEdit(
   toolName: string,
   note = '',
 ): Promise<HarnessToolResult> {
+  // POST-EDIT HEAL — duplicate/seam removal, delimiter balance, syntax +
+  // redeclaration detection. Runs BEFORE the syntax guard so a self-repaired
+  // edit is what gets verified and written.
+  const heal = healEditedContent(originalRaw, nextEffective, absolute);
+  const healNote = formatHealNotes(heal);
   const nextContent = normalized
-    ? nextEffective.replace(/\r/g, '').replace(/\n/g, '\r\n')
-    : nextEffective;
+    ? heal.content.replace(/\r/g, '').replace(/\n/g, '\r\n')
+    : heal.content;
   const bounds = computeEditBounds(originalRaw, nextContent);
   const newHash = sha256(nextContent).toLowerCase();
   const shiftNote = buildPostEditSummary(nextContent, bounds, newHash);
@@ -247,6 +253,7 @@ export async function finishEdit(
         `read_file footer for a race-safe preview-then-apply).` +
         (normalized ? ' (matched after CRLF to LF normalization; file EOLs preserved.)' : '') +
         note +
+        healNote +
         (shiftNote ?? ''),
       diff: buildUnifiedDiff(originalRaw, nextContent, relative),
       diffstat: diffStatFromOps(originalRaw, nextContent),
@@ -278,8 +285,9 @@ export async function finishEdit(
             isError: true,
             text:
               `SYNTAX GUARD — edit rolled back: ${probe.failed} ` +
-              `The file was restored to snapshot ${snapshotId}; nothing is broken on disk. ` +
-              'Next step: re-read the file and craft an edit that keeps it parseable.',
+              `The file was restored to snapshot ${snapshotId}; nothing is broken on disk.` +
+              healNote +
+              ' Next step: re-read the file and craft an edit that keeps it parseable.',
           };
         } catch (restoreError) {
           return {
@@ -330,6 +338,7 @@ export async function finishEdit(
       `Edited ${relative}: ${replaced} replacement(s); file is now ${Buffer.byteLength(nextContent, 'utf8')} bytes.` +
       (normalized ? ' (matched after CRLF to LF normalization; file EOLs preserved.)' : '') +
       note +
+      healNote +
       (shiftNote ?? '') +
       (snap.entry ? ` Previous version snapshotted (${snap.entry.id}).` : ''),
     diff: buildUnifiedDiff(originalRaw, nextContent, relative),

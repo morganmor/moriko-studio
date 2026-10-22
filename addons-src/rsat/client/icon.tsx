@@ -46,6 +46,7 @@ const ICONS: Record<string, string> = {
   image: 'M4 5h16v14H4zM8.5 11a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM6 17l5-5 3 3 2.5-2.5L18 15',
   minus: 'M5 12h14',
   fit: 'M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5',
+  tidy: 'M3 7h10M3 12h7M3 17h10M17 5v14M17 19l3-3M17 19l-3-3',
   spark: 'M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z',
   nodes: 'M4 5h5v5H4zM15 4h5v5h-5zM15 15h5v5h-5zM9 7.5h6M9 7.5c3 0 3 10 6 10',
   eye: 'M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',

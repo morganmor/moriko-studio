@@ -105,6 +105,9 @@ function isImageMime(mime: string): boolean {
   return mime.startsWith('image/');
 }
 
+const DEFAULT_QUESTION =
+  'Describe this image in detail: what it shows, any text visible, layout, colors, and anything notable.';
+
 function buildVisionBody(config: VisionConfig, request: VisionRequest): Record<string, unknown> {
   const dataUrl = `data:${request.mime};base64,${request.buffer.toString('base64')}`;
   return {
@@ -116,10 +119,7 @@ function buildVisionBody(config: VisionConfig, request: VisionRequest): Record<s
       {
         role: 'user',
         content: [
-          {
-            type: 'text',
-            text: request.question || 'Describe this image in detail: what it shows, any text visible, layout, colors, and anything notable.',
-          },
+          { type: 'text', text: request.question || DEFAULT_QUESTION },
           { type: 'image_url', image_url: { url: dataUrl } },
         ],
       },
@@ -151,10 +151,61 @@ export async function callVisionModel(
 
   const credentials = await resolveCredentials(config.providerId, config.apiKey);
   const baseUrl = (config.baseUrl && config.baseUrl.trim()) || credentials.baseUrl;
-  const endpoint = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
+  const base = baseUrl.replace(/\/+$/, '');
 
   const bound = deadline(undefined, VISION_TIMEOUT_MS, 'VISION_TIMEOUT');
   try {
+    // Gemini's own wire: inlineData parts, candidates[].content.parts[].text.
+    if (credentials.kind === 'gemini') {
+      const endpoint = `${base}/models/${encodeURIComponent(config.model)}:generateContent`;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(credentials.apiKey ? { 'x-goog-api-key': credentials.apiKey } : {}),
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                { text: request.question || DEFAULT_QUESTION },
+                { inlineData: { mimeType: request.mime, data: request.buffer.toString('base64') } },
+              ],
+            },
+          ],
+        }),
+        signal: bound.signal,
+      });
+
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        const snippet = detail.slice(0, 400).replace(/\s+/g, ' ').trim();
+        throw new Error(
+          `Vision model ${config.model} answered HTTP ${response.status} at ${endpoint}` +
+            (snippet ? `: ${snippet}` : '. Check the model id and key.'),
+        );
+      }
+
+      const payload = (await response.json()) as {
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      };
+      const text = (payload.candidates?.[0]?.content?.parts ?? [])
+        .map((part) => part.text ?? '')
+        .join('\n')
+        .trim();
+
+      if (!text) throw new Error(`Vision model ${config.model} returned an empty answer.`);
+
+      return {
+        ok: true,
+        by: `${config.providerId}/${config.model}`,
+        text: text.length > MAX_ANSWER_CHARS ? `${text.slice(0, MAX_ANSWER_CHARS)}\n\n…(description capped at ${MAX_ANSWER_CHARS} chars)` : text,
+      };
+    }
+
+    const endpoint = `${base}/chat/completions`;
+
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
@@ -177,6 +228,7 @@ export async function callVisionModel(
     const payload = (await response.json()) as {
       choices?: Array<{ message?: { content?: unknown } }>;
     };
+
     const answer = payload.choices?.[0]?.message?.content;
     const text = typeof answer === 'string'
       ? answer

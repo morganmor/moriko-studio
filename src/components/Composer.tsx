@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   ArrowUp,
@@ -207,11 +207,21 @@ export function Composer({
         case '/compact':
           onSend(args ? `/compact ${args}` : '/compact');
           return;
+        case '/plan':
+          // Toggle: /plan turns it on, /plan again turns it off.
+          await togglePlanMode();
+          return;
         default:
           return;
       }
     }
     try {
+      // SKILLS — /skill-name goes to the agent AS TEXT; the harness detects it
+      // server-side and injects the skill body for this turn (no local run).
+      if (command.skill) {
+        onSend(args ? `${command.c} ${args}` : command.c);
+        return;
+      }
       const resp = await fetch('/api/addons/commands/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -228,7 +238,7 @@ export function Composer({
     }
   };
 
-  /** The built-in command list (design SLASH minus /plan — skipped by request). */
+  /** The built-in command list. `/plan` toggles the harness plan-mode gate. */
   const slashBuiltins = useMemo<SlashCommand[]>(
     () => [
       { c: '/compact', h: 'Summarize older turns', builtin: true, argumentHint: '[focus]' },
@@ -236,6 +246,7 @@ export function Composer({
       { c: '/image', h: 'Generate an image — agent, or open Image Studio', builtin: true, argumentHint: '[prompt]' },
       { c: '/clear', h: 'Start a fresh chat', builtin: true },
       { c: '/theme', h: 'Toggle light / dark', builtin: true },
+      { c: '/plan', h: 'Plan mode — explore without editing (toggle)', builtin: true },
       { c: '/help', h: 'Keyboard shortcuts', builtin: true },
     ],
     [],
@@ -266,6 +277,13 @@ export function Composer({
   const plusButtonRef = useRef<HTMLButtonElement>(null);
   const settings = useEffectiveSettings();
   const terminalMode = settings.terminalMode ?? 'auto';
+  /**
+   * PLAN MODE (6A) — the UI side of the same flag the pipeline gate reads.
+   * The state lives on the server (per session, in-memory); this mirrors it so
+   * the "+" row, the slash command and the indicator never disagree.
+   */
+  const [planMode, setPlanMode] = useState(false);
+  const [planModeLock, setPlanModeLock] = useState<{ status: string; title: string } | null>(null);
   const bannerFull = settings.agentMode ? 'AGENT MODE ACTIVE' : 'CHAT MODE ONLY';
   const { text: bannerText, done: bannerDone } = useTypewriterStatus(bannerFull, 10_000);
   const updateSettings = useStore((state) => state.updateSettings);
@@ -283,6 +301,87 @@ export function Composer({
     state.agentWorkspaces.find((workspace) => workspace.id === state.activeAgentWorkspaceId),
   );
   const activeChatId = useStore((state) => state.activeId);
+
+  /** Reads the server posture (plan mode + RSA/T lock) for this chat. */
+  const refreshPlanMode = useCallback(async () => {
+    if (!activeChatId) {
+      setPlanMode(false);
+      setPlanModeLock(null);
+      return;
+    }
+    try {
+      const resp = await fetch(`/api/plan-mode?sessionId=${encodeURIComponent(activeChatId)}`);
+      if (!resp.ok) return;
+      const payload = (await resp.json()) as {
+        active?: boolean;
+        rsatLock?: { status?: string; title?: string } | null;
+      };
+      setPlanMode(payload.active === true);
+      setPlanModeLock(
+        payload.rsatLock && payload.rsatLock.status
+          ? { status: payload.rsatLock.status, title: payload.rsatLock.title ?? '(untitled)' }
+          : null,
+      );
+    } catch {
+    }
+  }, [activeChatId]);
+
+  useEffect(() => {
+    void refreshPlanMode();
+  }, [refreshPlanMode]);
+
+  /**
+   * The AGENT can enter or leave plan mode through its own tools. Re-reading
+   * the posture when a run finishes is what keeps the indicator honest —
+   * otherwise the chip would keep claiming "off" after the model engaged the
+   * gate.
+   */
+  const wasStreaming = useRef(streaming);
+  useEffect(() => {
+    if (wasStreaming.current && !streaming) void refreshPlanMode();
+    wasStreaming.current = streaming;
+  }, [streaming, refreshPlanMode]);
+
+  /**
+   * Toggles plan mode and reports the outcome honestly: an RSA/T lock is a
+   * separate gate that a toggle cannot lift, so the notice says so instead of
+   * letting the next edit fail with a surprise.
+   */
+  const togglePlanMode = useCallback(
+    async (next?: boolean): Promise<void> => {
+      if (!activeChatId) return;
+      const target = next ?? !planMode;
+      try {
+        const resp = await fetch('/api/plan-mode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: activeChatId, active: target }),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const payload = (await resp.json()) as {
+          active?: boolean;
+          rsatLock?: { status?: string; title?: string } | null;
+        };
+        const active = payload.active === true;
+        setPlanMode(active);
+        setPlanModeLock(
+          payload.rsatLock && payload.rsatLock.status
+            ? { status: payload.rsatLock.status, title: payload.rsatLock.title ?? '(untitled)' }
+            : null,
+        );
+        if (active) {
+          showNotice('slash.planModeOn');
+        } else if (payload.rsatLock && payload.rsatLock.status) {
+          showNotice('slash.planModeRsatLock', { label: payload.rsatLock.status });
+        } else {
+          showNotice('slash.planModeOff');
+        }
+      } catch (error) {
+        showNotice('slash.runFailed', { detail: error instanceof Error ? error.message : String(error) });
+      }
+    },
+    [activeChatId, planMode, showNotice],
+  );
   const goalRunning = useStore((state) =>
     (state.activeConversation()?.goals ?? []).some((goal) => goal.status === 'running'),
   );
@@ -315,10 +414,9 @@ export function Composer({
       }}
       onPlanMode={() => {
         closePlus();
-        const trimmed = draft.trimStart();
-        if (!trimmed.startsWith('/plan')) onDraftChange(`/plan ${trimmed}`);
-        textareaRef.current?.focus();
+        void togglePlanMode();
       }}
+      planModeActive={planMode}
       onGoals={() => {
         closePlus();
         onToggleGoals?.();
@@ -526,8 +624,18 @@ export function Composer({
           >
             <span>{bannerText}</span>
             <span className="cat-eye-cursor" />
-          </div>
-        )}
+            </div>
+            )}
+
+            {}
+            {planModeLock ? (
+            <div
+              className="mode-banner on"
+              style={{ borderColor: 'rgb(var(--c-accent) / .35)' }}
+            >
+            <span>RSAT PLAN LOCK · PRD {planModeLock.status.toUpperCase()} — press Start on the board</span>
+            </div>
+            ) : null}
 
         {}
         <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -706,8 +814,8 @@ export function Composer({
               <button
                 ref={plusButtonRef}
                 type="button"
-                className={cx('ib', goalRunning && 'on')}
-                aria-label="Add files, plans and workspace"
+                className={cx('ib', (goalRunning || planMode) && 'on')}
+                aria-label={planMode ? 'Add — plan mode is ACTIVE' : 'Add files, plans and workspace'}
                 aria-expanded={plusOpen}
                 aria-haspopup="menu"
                 onClick={() => setPlusOpen((value) => !value)}
@@ -727,6 +835,23 @@ export function Composer({
               />
               {dragActive ? (
                 <span style={{ flexShrink: 0, fontSize: 11, fontWeight: 500, color: 'rgb(var(--c-accent))' }}>Drop to attach</span>
+              ) : null}
+
+              {/* PLAN MODE INDICATOR — the gate is invisible until a tool is
+                  refused, so the composer states it up front. */}
+              {planMode ? (
+                <Tip label="Plan mode: edits and commands are refused. Click to leave.">
+                  <button
+                    type="button"
+                    className="pill plan"
+                    onClick={() => void togglePlanMode(false)}
+                    aria-pressed={true}
+                    aria-label="Leave plan mode"
+                  >
+                    <Waypoints className="ic" aria-hidden="true" />
+                    <span>Plan</span>
+                  </button>
+                </Tip>
               ) : null}
 
               <Popover
@@ -1185,6 +1310,8 @@ function ToolRow({
 interface PlusMenuBodyProps {
   onUpload: () => void;
   onPlanMode: () => void;
+  /** True while the session's plan-mode gate is engaged. */
+  planModeActive: boolean;
   onGoals: () => void;
   onTodos: () => void;
   onSlash: () => void;
@@ -1199,6 +1326,7 @@ interface PlusMenuBodyProps {
 function PlusMenuBody({
   onUpload,
   onPlanMode,
+  planModeActive,
   onGoals,
   onTodos,
   onSlash,
@@ -1212,7 +1340,14 @@ function PlusMenuBody({
   return (
     <>
       <PlusMenuRow icon={Paperclip} label="Upload files" hint="Images, code, text · or drop / paste" onClick={onUpload} />
-      <PlusMenuRow icon={Waypoints} label="Plan mode" hint="Insert /plan" onClick={onPlanMode} />
+      <PlusMenuRow
+        icon={Waypoints}
+        label="Plan mode"
+        hint={planModeActive ? 'Active — click to leave plan mode' : 'Explore without editing · /plan'}
+        onClick={onPlanMode}
+        active={planModeActive}
+        dot={planModeActive}
+      />
       <PlusMenuRow
         icon={Target}
         label="Goals & plans"

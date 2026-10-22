@@ -183,6 +183,11 @@ import FlaskConical__raw from 'lucide-react/dist/esm/icons/flask-conical.js';
 const FlaskConical = FlaskConical__raw as unknown as LucideIcon;
 export { FlaskConical };
 
+import Figma__raw from 'lucide-react/dist/esm/icons/figma.js';
+/** Figma — used in src\components\McpServersCard.tsx */
+const Figma = Figma__raw as unknown as LucideIcon;
+export { Figma };
+
 import FlipHorizontal__raw from 'lucide-react/dist/esm/icons/flip-horizontal.js';
 /** FlipHorizontal — used in src\components\ImageEditorModal.tsx */
 const FlipHorizontal = FlipHorizontal__raw as unknown as LucideIcon;

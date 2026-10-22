@@ -24,6 +24,9 @@ const CONFIG_FILE = mcpFile;
 
 export type McpTransport = 'stdio' | 'http';
 
+/** Named auth profiles for remote servers — currently only Figma OAuth. */
+export type McpAuthProfile = 'figma';
+
 export interface McpServerConfig {
   id: string;
   name: string;
@@ -38,6 +41,8 @@ export interface McpServerConfig {
   url?: string;
   /** http only: static auth headers (may contain secrets). */
   headers?: Record<string, string>;
+  /** http only: named OAuth profile — headers are resolved per request. */
+  auth?: McpAuthProfile;
   /**
    * Tool names the user switched OFF for this server — they are filtered out
    * of the catalogue offered to the model entirely.
@@ -122,6 +127,7 @@ export function upsertServer(
       input.transport === 'http'
         ? mergeSecrets(input.headers ?? existing?.headers, existing?.headers)
         : undefined,
+    auth: input.transport === 'http' ? input.auth ?? existing?.auth : undefined,
     disabledTools: Array.isArray(input.disabledTools)
       ? input.disabledTools.map(String)
       : existing?.disabledTools,

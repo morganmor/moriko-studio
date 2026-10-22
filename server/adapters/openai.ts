@@ -1,6 +1,7 @@
 import { ALL_THINK_TAGS, applyReasoningEffort, createThinkingScrubState, flushThinkingScrub, scrubInlineThinkingFragment, type ThinkingScrubState } from '../reasoning.js';
 import { coerceText } from '../textUtil.js';
 import { assertOk, iterateSse, type StreamHandler, type StreamParams } from '../sse.js';
+import { idle, STREAM_IDLE_MS } from '../liveness.js';
 import { resolveSteerPartRefs } from '../attachmentStore.js';
 import { drainSteers, steerTextOf, steersToUserParts } from '../steer.js';
 import { drainInjections, injectionText } from '../addons/inject.js';
@@ -24,10 +25,30 @@ import { gateToolImages, imageCapableFor, separateImageParts, IMAGE_OMITTED_NOTE
  * also streamed to the UI, so what the model sees is exactly inspectable.
  */
 export function buildSystemInstruction(params: StreamParams): string {
-  const base = params.settings.systemInstruction?.trim() ?? '';
-  const extras = params.harnessInjections.map((injection) => injection.content);
-  if (extras.length === 0) return base;
-  return [base, ...extras].filter(Boolean).join('\n\n');
+  const { stable, volatile } = buildSystemSegments(params);
+  return [stable, volatile].filter(Boolean).join('\n\n');
+}
+
+/**
+ * The STATIC/DYNAMIC boundary of the system message.
+ *
+ * `stable` is the user's own system prompt — byte-identical on every turn, so
+ * a provider can cache it (and the tool schemas that precede it) once and
+ * reuse it for the rest of the conversation.
+ *
+ * `volatile` is everything the harness injects: the skills catalogue, the env
+ * block, live todos, attachments. It changes between turns, so it must sit
+ * AFTER the cache breakpoint or every request would miss.
+ *
+ * buildSystemInstruction() is derived from this so the two can never diverge.
+ */
+export function buildSystemSegments(params: StreamParams): { stable: string; volatile: string } {
+  const stable = params.settings.systemInstruction?.trim() ?? '';
+  const volatile = params.harnessInjections
+    .map((injection) => injection.content)
+    .filter(Boolean)
+    .join('\n\n');
+  return { stable, volatile };
 }
 
 interface PendingOpenAiCall {
@@ -137,6 +158,8 @@ export async function streamOpenAiCompatible(
   let choiceMade = false;
 
   for (let iteration = 0; ; iteration += 1) {
+    const streamIdle = idle(signal, STREAM_IDLE_MS, 'STREAM_IDLE');
+    try {
     const useTools = prepared.count > 0 && !forcedStop;
     const body: Record<string, unknown> = {
       model,
@@ -163,7 +186,7 @@ export async function streamOpenAiCompatible(
 
     const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/chat/completions`, {
       method: 'POST',
-      signal,
+      signal: streamIdle.signal,
       headers: {
         'Content-Type': 'application/json',
         'HTTP-Referer': 'http://localhost',
@@ -183,7 +206,7 @@ export async function streamOpenAiCompatible(
     let finishReason: string | undefined;
     const callsByIndex = new Map<number, PendingOpenAiCall>();
 
-    for await (const payload of iterateSse(response.body)) {
+    for await (const payload of iterateSse(response.body, () => streamIdle.reset())) {
       if (payload === '[DONE]') break;
 
       let chunk: {
@@ -442,6 +465,9 @@ export async function streamOpenAiCompatible(
 
     if (forcedStop) {
       convo.push({ role: 'user', content: wrapUpInstruction(forcedStop) });
+    }
+    } finally {
+      streamIdle.clear();
     }
   }
 }

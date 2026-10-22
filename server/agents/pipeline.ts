@@ -18,9 +18,13 @@ import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { buildSpatialMap, evaluateSpatialGate, invalidateSpatialMapCache } from './spatial.js';
 import { snakeToCamel, camelizeSchemaNode } from './tools/casing.js';
-import { getLanguageService } from './lsp-service.js';
 import { markTouched } from './tools/diagnostics.js';
+import * as ts from 'typescript';
 import { getActiveWorkspace } from './workspace.js';
+import { planGateDenial } from './plan-mode.js';
+import {
+  diagnosticSignature, ledgerFiles, recordFileDiagnostics, type UnresolvedDiagnostic,
+} from './diagnostics-ledger.js';
 
 /**
  * Error shape used by a hook that wants to deny a call. Hooks may also just
@@ -52,6 +56,13 @@ export interface PipelineCall {
    * the handler wrote. Undefined for non-gated tools.
    */
   gateBefore?: Map<string, string | null>;
+  /**
+   * DIAGNOSTICS BASELINE (6B) — each touched file's syntactic-diagnostic
+   * signatures captured BEFORE the handler ran. The after-diff only counts
+   * errors this call INTRODUCED, so a file that was already broken never
+   * blocks a todo from completing.
+   */
+  diagBefore?: Map<string, Set<string>>;
 }
 
 /** A hook that runs BEFORE the handler and may veto the call. */
@@ -364,6 +375,58 @@ const spatialGateHook: ToolHook = {
   },
 };
 
+const TS_FILE_RE = /\.(ts|tsx|mts|cts)$/;
+
+/**
+ * LIGHT single-file parse — `ts.createSourceFile` + parseDiagnostics only.
+ *
+ * Deliberately NOT `getLanguageService().getSyntacticDiagnostics()`: that call
+ * builds a full Program (module resolution over the whole repo, including
+ * node_modules type trees) per project, and the MAX_SERVICES=3 LRU thrashes
+ * whenever a session touches files across more than three tsconfig projects —
+ * rebuilding a hundreds-of-MB Program on every edit until the heap dies.
+ *
+ * Parsing ONE file in memory costs ~1ms, allocates only that file's AST, and
+ * reaches the same syntactic errors the invariant needs.
+ */
+function readSyntactic(abs: string): UnresolvedDiagnostic[] {
+  const out: UnresolvedDiagnostic[] = [];
+  let content: string;
+  try {
+    content = readFileSync(abs, 'utf8');
+  } catch {
+    return out; // gone or unreadable — nothing to block a todo on
+  }
+  const ext = path.extname(abs).toLowerCase();
+  const kind = ext === '.tsx'
+    ? ts.ScriptKind.TSX
+    : ext === '.jsx'
+      ? ts.ScriptKind.JSX
+      : ext === '.ts' || ext === '.mts' || ext === '.cts'
+        ? ts.ScriptKind.TS
+        : ts.ScriptKind.JS;
+  let sourceFile: ts.SourceFile;
+  try {
+    sourceFile = ts.createSourceFile(abs, content, ts.ScriptTarget.ES2022, true, kind);
+  } catch {
+    return out;
+  }
+  const diagnostics =
+    (sourceFile as unknown as { parseDiagnostics?: ts.Diagnostic[] }).parseDiagnostics ?? [];
+  for (const d of diagnostics) {
+    if (d.category !== ts.DiagnosticCategory.Error) continue;
+    let line = 1;
+    let column = 1;
+    if (d.start !== undefined) {
+      const lc = sourceFile.getLineAndCharacterOfPosition(d.start);
+      line = lc.line + 1;
+      column = lc.character + 1;
+    }
+    out.push({ line, column, code: d.code, message: ts.flattenDiagnosticMessageText(d.messageText, ' ') });
+  }
+  return out;
+}
+
 const hooks: ToolHook[] = [
   {
     name: 'schemaValidator',
@@ -380,6 +443,16 @@ const hooks: ToolHook[] = [
           );
         }
       }
+      return null;
+    },
+    postExecute() {
+    },
+  },
+  {
+    name: 'planGate',
+    async preExecute(call) {
+      const denial = planGateDenial(call.name, call.args, call.ctx.sessionId);
+      if (denial) return new ToolPipelineError(denial, 'plan_mode_blocked');
       return null;
     },
     postExecute() {
@@ -417,35 +490,51 @@ const hooks: ToolHook[] = [
   },
   {
     name: 'diagnosticsHook',
-    async preExecute() {
+    async preExecute(call) {
+      // BASELINE: what the file looked like BEFORE this call touched it.
+      const gateFiles = collectGateFiles(call);
+      if (!gateFiles) return null;
+      const tsFiles = gateFiles.filter((f) => TS_FILE_RE.test(f));
+      if (tsFiles.length === 0) return null;
+      try {
+        const ws = getActiveWorkspace(call.ctx.sessionId);
+        if (!ws) return null;
+        const before = new Map<string, Set<string>>();
+        for (const rel of tsFiles) {
+          const found = readSyntactic(path.join(ws.path, rel));
+          before.set(rel, new Set(found.map(diagnosticSignature)));
+        }
+        call.diagBefore = before;
+      } catch {
+      }
       return null;
     },
     transform(call, result) {
       if (!result.ok || result.isError) return result;
       const gateFiles = collectGateFiles(call);
       if (!gateFiles) return result;
-      const tsFiles = gateFiles.filter((f) => /\.(ts|tsx|mts|cts)$/.test(f));
+      const tsFiles = gateFiles.filter((f) => TS_FILE_RE.test(f));
       if (tsFiles.length === 0) return result;
       try {
         const ws = getActiveWorkspace(call.ctx.sessionId);
         if (!ws) return result;
         const notes: string[] = [];
         const deadline = Date.now() + 1_500;
-        for (const rel of tsFiles) {
+        // Re-check every file already in the ledger too: fixing file A may
+        // clear a stale entry, and a ledger nobody prunes blocks forever.
+        const candidates = [...new Set([...tsFiles, ...ledgerFiles(call.ctx.sessionId)])];
+        for (const rel of candidates) {
           if (Date.now() > deadline) break;
           const abs = path.join(ws.path, rel);
           markTouched(abs);
-          const service = getLanguageService(abs, ws.path);
-          const diags = (service.getSyntacticDiagnostics(abs) ?? []).slice(0, 5);
-          if (diags.length > 0) {
-            notes.push(`⚠ ${diags.length} new diagnostic(s) in ${rel}:`);
-            for (const d of diags) {
-              if (d.file && d.start !== undefined) {
-                const lc = d.file.getLineAndCharacterOfPosition(d.start);
-                notes.push(`  ${lc.line + 1}:${lc.character + 1}  TS${d.code}: ${d.messageText}`);
-              } else {
-                notes.push(`  TS${d.code}: ${d.messageText}`);
-              }
+          const found = readSyntactic(abs);
+          const baseline = call.diagBefore?.get(rel) ?? new Set<string>();
+          const introduced = found.filter((d) => !baseline.has(diagnosticSignature(d)));
+          recordFileDiagnostics(call.ctx.sessionId, rel, introduced);
+          if (tsFiles.includes(rel) && introduced.length > 0) {
+            notes.push(`⚠ ${introduced.length} new diagnostic(s) in ${rel}:`);
+            for (const d of introduced.slice(0, 5)) {
+              notes.push(`  ${d.line}:${d.column}  TS${d.code}: ${d.message}`);
             }
           }
         }

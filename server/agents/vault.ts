@@ -3,22 +3,31 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import { buildUnifiedDiff, diffStatFromOps } from './diff.js';
-import { vaultDir } from '../paths.js';
+import { morikoHome } from '../paths.js';
+import { getActiveWorkspace, listWorkspaces } from './workspace.js';
 
 /**
  * FILE VAULT — the safety net under destructive harness operations.
  *
  * Every overwrite (edit_file) and every delete snapshots the affected FILE
- * into `~/.moriko/vault/<sessionId>/` before the destructive step runs, with
- * a metadata index per session. Restores copy the snapshot back to the
- * original path (or anywhere else, through the normal permission gate).
+ * into the OWNING WORKSPACE's `<workspace>/.moriko/vault/<sessionId>/` before
+ * the destructive step runs, with a metadata index per session. Restores copy
+ * the snapshot back to the original path (or anywhere else, through the normal
+ * permission gate). Because the vault lives INSIDE the workspace, the agent
+ * can inspect it with the regular file tools (glob/grep/read_file on
+ * `.moriko/vault/…`) — no special read tool needed.
+ *
+ * Files OUTSIDE any registered workspace (addon installs, harness home) still
+ * snapshot to the legacy home vault `~/.moriko-studio/vault/` so nothing loses
+ * its safety net; those snapshots remain listable/restorable.
  *
  * Retention keeps vault growth bounded: at most MAX_PER_FILE snapshots per
  * original file and nothing older than MAX_AGE_DAYS; the sweep runs at boot
  * and after each snapshot.
  */
 
-const VAULT_ROOT = vaultDir;
+/** Pre-per-workspace vault — read fallback for snapshots taken before the move. */
+const LEGACY_ROOT = path.join(morikoHome, 'vault');
 const MAX_PER_FILE = 20;
 const MAX_AGE_DAYS = 7;
 const MAX_SNAPSHOT_BYTES = 100_000_000;
@@ -35,30 +44,87 @@ export interface VaultEntryMeta {
   createdAt: number;
 }
 
-
-function sessionDir(sessionId: string): string {
-  const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) || 'default';
-  return path.join(VAULT_ROOT, safe);
-}
-
-function indexPath(sessionId: string): string {
-  return path.join(sessionDir(sessionId), 'index.json');
-}
-
-function readIndex(sessionId: string): VaultEntryMeta[] {
+function normalizedRoot(candidate: string): string | null {
   try {
-    const parsed = JSON.parse(readFileSync(indexPath(sessionId), 'utf8'));
+    return path.resolve(candidate);
+  } catch {
+    return null;
+  }
+}
+
+/** The workspace root that owns a path (longest prefix match), or null. */
+function owningWorkspaceRoot(absolutePath: string): string | null {
+  const target = normalizedRoot(absolutePath);
+  if (!target) return null;
+  const targetKey = target.toLowerCase();
+  let best: string | null = null;
+  for (const workspace of listWorkspaces()) {
+    const root = normalizedRoot(workspace.path);
+    if (!root) continue;
+    const rootKey = root.toLowerCase();
+    if (targetKey === rootKey || targetKey.startsWith(rootKey.endsWith(path.sep) ? rootKey : rootKey + path.sep)) {
+      if (!best || root.length > best.length) best = root;
+    }
+  }
+  return best;
+}
+
+/** Vault root for a file's snapshot: its workspace's .moriko/vault, or the legacy home vault. */
+function vaultRootFor(absolutePath: string): string {
+  const owner = owningWorkspaceRoot(absolutePath);
+  return owner ? path.join(owner, '.moriko', 'vault') : LEGACY_ROOT;
+}
+
+function safeSession(sessionId: string | undefined): string {
+  return (sessionId ?? 'default').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) || 'default';
+}
+
+function sessionDir(vaultRoot: string, sessionId: string | undefined): string {
+  return path.join(vaultRoot, safeSession(sessionId));
+}
+
+function indexPath(vaultRoot: string, sessionId: string | undefined): string {
+  return path.join(sessionDir(vaultRoot, sessionId), 'index.json');
+}
+
+function readIndex(vaultRoot: string, sessionId: string | undefined): VaultEntryMeta[] {
+  try {
+    const parsed = JSON.parse(readFileSync(indexPath(vaultRoot, sessionId), 'utf8'));
     return Array.isArray(parsed) ? (parsed as VaultEntryMeta[]) : [];
   } catch {
     return [];
   }
 }
 
-function writeIndex(sessionId: string, entries: VaultEntryMeta[]): void {
-  mkdirSync(sessionDir(sessionId), { recursive: true });
-  writeFileSync(indexPath(sessionId), JSON.stringify(entries, null, 2), 'utf8');
+function writeIndex(vaultRoot: string, sessionId: string | undefined, entries: VaultEntryMeta[]): void {
+  mkdirSync(sessionDir(vaultRoot, sessionId), { recursive: true });
+  writeFileSync(indexPath(vaultRoot, sessionId), JSON.stringify(entries, null, 2), 'utf8');
 }
 
+/**
+ * Every vault root that may hold this session's snapshots: the active
+ * workspace first, then every other registered workspace, then the legacy
+ * home vault. Lookup/list merge across them so switching workspaces never
+ * hides a snapshot.
+ */
+function vaultRoots(sessionId: string | undefined): string[] {
+  const roots: string[] = [];
+  const push = (candidate: string | null | undefined) => {
+    if (!candidate) return;
+    const resolved = normalizedRoot(candidate);
+    if (resolved && !roots.includes(resolved)) roots.push(resolved);
+  };
+  push(getActiveWorkspace(sessionId)?.path);
+  for (const workspace of listWorkspaces()) push(workspace.path);
+  push(LEGACY_ROOT);
+  return roots;
+}
+
+/** Never vault the vault itself (a vault file edit would nest snapshots). */
+function insideAVault(absolutePath: string): boolean {
+  const key = (normalizedRoot(absolutePath) ?? '').toLowerCase();
+  return key.includes(`${path.sep}.moriko${path.sep}vault${path.sep}`);
+}
 
 export interface SnapshotOutcome {
   entry: VaultEntryMeta | null;
@@ -66,9 +132,13 @@ export interface SnapshotOutcome {
   skipped?: string;
 }
 
-/** Looks up ONE snapshot by id (no side effects) — powers vault_restore dryRun. */
+/** Looks up ONE snapshot by id across this session's vault roots (no side effects). */
 export function findSnapshot(sessionId: string | undefined, snapshotId: string): VaultEntryMeta | undefined {
-  return readIndex((sessionId ?? 'default').slice(0, 80)).find((candidate) => candidate.id === snapshotId);
+  for (const root of vaultRoots(sessionId)) {
+    const hit = readIndex(root, sessionId).find((candidate) => candidate.id === snapshotId);
+    if (hit) return hit;
+  }
+  return undefined;
 }
 
 /**
@@ -81,7 +151,8 @@ export function snapshotFile(
   absolutePath: string,
   operation: string,
 ): SnapshotOutcome {
-  const session = (sessionId ?? 'default').slice(0, 80);
+  if (insideAVault(absolutePath)) return { entry: null, skipped: 'path is inside a vault (not nested)' };
+  const session = safeSession(sessionId);
   let stats;
   try {
     stats = statSync(absolutePath);
@@ -95,7 +166,7 @@ export function snapshotFile(
 
   const id = `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
   const base = path.basename(absolutePath).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
-  const dir = sessionDir(session);
+  const dir = sessionDir(vaultRootFor(absolutePath), sessionId);
   mkdirSync(dir, { recursive: true });
   const storedPath = path.join(dir, `${id}__${base}`);
   try {
@@ -113,9 +184,10 @@ export function snapshotFile(
     size: stats.size,
     createdAt: Date.now(),
   };
-  const entries = readIndex(session);
+  const root = path.dirname(dir);
+  const entries = readIndex(root, sessionId);
   entries.push(entry);
-  writeIndex(session, entries);
+  writeIndex(root, sessionId, entries);
   sweepVault(session);
   return { entry };
 }
@@ -184,13 +256,21 @@ function readdirSafe(dir: string): string[] {
 }
 
 export function listSnapshots(sessionId: string | undefined, query?: string): VaultEntryMeta[] {
-  const session = (sessionId ?? 'default').slice(0, 80);
-  const entries = readIndex(session);
+  const merged: VaultEntryMeta[] = [];
+  for (const root of vaultRoots(sessionId)) {
+    for (const entry of readIndex(root, sessionId)) merged.push(entry);
+  }
   const filter = query?.trim().toLowerCase();
   const filtered = filter
-    ? entries.filter((entry) => entry.originalPath.toLowerCase().includes(filter))
-    : entries;
+    ? merged.filter((entry) => entry.originalPath.toLowerCase().includes(filter))
+    : merged;
   return [...filtered].sort((a, b) => b.createdAt - a.createdAt);
+}
+
+/** Line range (1-based, inclusive) for a surgical range restore. */
+export interface RestoreRange {
+  from: number;
+  to: number;
 }
 
 export interface RestoreOutcome {
@@ -202,21 +282,31 @@ export interface RestoreOutcome {
   diffstat?: { added: number; removed: number };
   /** Content of the file that was overwritten by the restore (already snapshotted). */
   previousEntryId?: string;
+  /** Present when only a line range was spliced back in. */
+  range?: RestoreRange;
+}
+
+function splitLines(text: string): string[] {
+  return text.split(/\r\n|\n|\r/);
 }
 
 /**
  * Restores a snapshot to its original path (or an explicit target). When a
  * file already exists at the target it is snapshotted FIRST ("pre-restore"),
  * so a restore can itself be undone.
+ *
+ * With `range`, only the snapshot's lines [from..to] are spliced into the
+ * target at the SAME line positions — a surgical repair that leaves the rest
+ * of the live file untouched. Full-file restore stays the default.
  */
 export function restoreSnapshot(
   sessionId: string | undefined,
   snapshotId: string,
   toPath?: string,
+  range?: RestoreRange,
 ): RestoreOutcome {
-  const session = (sessionId ?? 'default').slice(0, 80);
-  const entries = readIndex(session);
-  const entry = entries.find((candidate) => candidate.id === snapshotId);
+  const session = safeSession(sessionId);
+  const entry = findSnapshot(sessionId, snapshotId);
   if (!entry) {
     throw new Error(`No vault snapshot with id "${snapshotId}" in this session (try vault_list).`);
   }
@@ -231,6 +321,35 @@ export function restoreSnapshot(
   if (existsSync(target)) {
     const pre = snapshotFile(session, target, 'pre-restore');
     previousEntryId = pre.entry?.id;
+  } else if (range) {
+    throw new Error('Range restore needs an existing target file (a full restore would create it).');
+  }
+
+  if (range) {
+    // Surgical splice: replace target[from..to] with snapshot[from..to].
+    const before = readFileSync(target, 'utf8');
+    const snapshotText = readFileSync(entry.storedPath, 'utf8');
+    const cur = splitLines(before);
+    const snap = splitLines(snapshotText);
+    const from = Math.max(1, Math.floor(range.from));
+    const to = Math.min(cur.length, Math.floor(range.to));
+    if (from > to) throw new Error(`Invalid range ${from}..${to} (target has ${cur.length} lines).`);
+    if (to > snap.length) {
+      throw new Error(`Range ${from}..${to} exceeds the snapshot (${snap.length} lines) — pick a range inside it.`);
+    }
+    const merged = [...cur.slice(0, from - 1), ...snap.slice(from - 1, to), ...cur.slice(to)];
+    const after = merged.join('\n');
+    writeFileSync(target, after, 'utf8');
+    try {
+      diff = buildUnifiedDiff(before, after, target);
+      diffstat = diffStatFromOps(before, after);
+    } catch {
+      diff = undefined;
+    }
+    return { target, entry, diff, diffstat, previousEntryId, range: { from, to } };
+  }
+
+  if (existsSync(target)) {
     try {
       const before = readFileSync(target, 'utf8');
       const after = readFileSync(entry.storedPath, 'utf8');
@@ -249,46 +368,50 @@ export function restoreSnapshot(
   return { target, entry, diff, diffstat, previousEntryId };
 }
 
-/** Permanently removes one snapshot (its file + index entry). */
+/** Permanently removes one snapshot (its file + index entry, wherever it lives). */
 export function purgeSnapshot(sessionId: string | undefined, snapshotId: string): boolean {
-  const session = (sessionId ?? 'default').slice(0, 80);
-  const entries = readIndex(session);
-  const entry = entries.find((candidate) => candidate.id === snapshotId);
-  if (!entry) return false;
-  try {
-    rmSync(entry.storedPath, { force: true });
-  } catch {
-  }
-  writeIndex(session, entries.filter((candidate) => candidate.id !== snapshotId));
-  return true;
-}
-
-/** Retention: drop snapshots older than MAX_AGE_DAYS and beyond MAX_PER_FILE. */
-export function sweepVault(sessionId: string): void {
-  const session = sessionId.slice(0, 80);
-  const cutoff = Date.now() - MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
-  const entries = readIndex(session);
-  const perFile = new Map<string, VaultEntryMeta[]>();
-  for (const entry of entries) {
-    const list = perFile.get(entry.originalPath) ?? [];
-    list.push(entry);
-    perFile.set(entry.originalPath, list);
-  }
-  const keep: VaultEntryMeta[] = [];
-  const removed: VaultEntryMeta[] = [];
-  for (const list of perFile.values()) {
-    list.sort((a, b) => b.createdAt - a.createdAt);
-    list.forEach((entry, index) => {
-      if (entry.createdAt < cutoff || index >= MAX_PER_FILE) removed.push(entry);
-      else keep.push(entry);
-    });
-  }
-  if (removed.length === 0) return;
-  for (const entry of removed) {
+  for (const root of vaultRoots(sessionId)) {
+    const entries = readIndex(root, sessionId);
+    const entry = entries.find((candidate) => candidate.id === snapshotId);
+    if (!entry) continue;
     try {
       rmSync(entry.storedPath, { force: true });
     } catch {
     }
+    writeIndex(root, sessionId, entries.filter((candidate) => candidate.id !== snapshotId));
+    return true;
   }
-  writeIndex(session, keep);
+  return false;
+}
+
+/** Retention: drop snapshots older than MAX_AGE_DAYS and beyond MAX_PER_FILE. */
+export function sweepVault(sessionId: string): void {
+  const cutoff = Date.now() - MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+  for (const root of vaultRoots(sessionId)) {
+    const entries = readIndex(root, sessionId);
+    if (entries.length === 0) continue;
+    const perFile = new Map<string, VaultEntryMeta[]>();
+    for (const entry of entries) {
+      const list = perFile.get(entry.originalPath) ?? [];
+      list.push(entry);
+      perFile.set(entry.originalPath, list);
+    }
+    const keep: VaultEntryMeta[] = [];
+    const removed: VaultEntryMeta[] = [];
+    for (const list of perFile.values()) {
+      list.sort((a, b) => b.createdAt - a.createdAt);
+      list.forEach((entry, index) => {
+        if (entry.createdAt < cutoff || index >= MAX_PER_FILE) removed.push(entry);
+        else keep.push(entry);
+      });
+    }
+    if (removed.length === 0) continue;
+    for (const entry of removed) {
+      try {
+        rmSync(entry.storedPath, { force: true });
+      } catch {
+      }
+    }
+    writeIndex(root, sessionId, keep);
+  }
 }

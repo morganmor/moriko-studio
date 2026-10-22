@@ -37,6 +37,7 @@ const PERMISSIONS: Record<string, PermissionSpec> = {
   'prompt.inject': { level: 'sensitive', description: 'Inject prompt fragments per session' },
   'session.inject': { level: 'sensitive', description: 'Inject messages into running sessions' },
   'net.fetch': { level: 'sensitive', description: 'Outbound HTTP requests' },
+  'harness.render': { level: 'sensitive', description: 'Render HTML in the harness headless browser for measurement (setContent only — no navigation, no network)' },
   'process.spawn': { level: 'dangerous', description: 'Run child processes' },
   'prompt.rewrite': { level: 'dangerous', description: 'Rewrite the whole system prompt' },
   'tools.catalogue.mutate': { level: 'dangerous', description: 'Hide or alter the tool catalogue' },

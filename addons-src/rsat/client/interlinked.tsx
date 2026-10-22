@@ -241,6 +241,7 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
   const [selWireId, setSelWireId] = useState<string | null>(null);
   const [hoverNodeId, setHoverNodeId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [tidying, setTidying] = useState(false);
 
   const loadLiveGraph = useCallback(async (force = false) => {
     setScanning(true);
@@ -424,6 +425,31 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
     }
   };
 
+  /** Auto-arrange: clear every saved position server-side, then refetch — the
+   *  deterministic default grid (per-module columns) becomes the live layout. */
+  const autoArrange = useCallback(async () => {
+    if (tidying) return;
+    setTidying(true);
+    try {
+      await rpc('clearNodePositions', {});
+      setPositions({});
+      await loadLiveGraph(true);
+    } catch {
+      // keep local reset even if the RPC fails — view still tidies up
+      setPositions({});
+    } finally {
+      setTidying(false);
+    }
+  }, [loadLiveGraph, tidying]);
+
+  /** Reset = same tidy grid, but also recenters the camera on the canvas. */
+  const resetLayout = useCallback(() => {
+    setPositions({});
+    void rpc('clearNodePositions', {}).catch(() => {});
+    camRef.current = { x: 18, y: 14, z: 0.78 };
+    applyCam();
+  }, [applyCam]);
+
   const activeFocusNode = hoverNodeId ?? selNodeId;
 
   const visibleWires = useMemo(() => {
@@ -509,7 +535,6 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
             type="button"
             className="btn sm"
             aria-pressed={showInspect}
-            title={t('ilToggleInsp')}
             onClick={() => setShowInspect((v) => !v)}
           >
             <Ic name="eye" sm /> {t('ilInspector')}
@@ -926,7 +951,7 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
                 type="button"
                 className="btn sm"
                 aria-label={t('ilResetPos')}
-                onClick={() => setPositions({})}
+                onClick={resetLayout}
               >
                 <Ic name="fit" sm /> {t('ilReset')}
               </button>
@@ -969,6 +994,15 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
                   </div>
                 </div>
               ) : null}
+              <button
+                type="button"
+                className="btn sm"
+                aria-label={t('ilTidy')}
+                disabled={tidying}
+                onClick={() => void autoArrange()}
+              >
+                <Ic name="tidy" sm /> {tidying ? t('ilTidying') : t('ilTidy')}
+              </button>
               <button
                 type="button"
                 className="btn sm"

@@ -10,9 +10,10 @@ import { addSseClient, publishBusEvent, replaySince } from './bus.js';
 import { grantPermissions, revokePermission, getPermRecord } from './permissions.js';
 import { reseedBuiltin, reseedAllBuiltins, builtinAddonIds } from './seed.js';
 import { listViews, listStatusItems } from './contributions.js';
+import { listTopbarAddons, setTopbarAddons } from './topbarButtons.js';
 import { getAllSettings, setSetting, getSettingsSchema } from './settings.js';
 import { getRpcHandler } from './rpc.js';
-import { tailAddonLogs } from './logbuffer.js';
+import { tailAddonLogs, addonLifecycleLog, addonSessionMark } from './logbuffer.js';
 import { serveClientModule, serveClientAsset } from './clientBundle.js';
 import { getActiveWorkspace } from '../agents/workspace.js';
 import type { AddonClientEntry, RenderSite } from './types.js';
@@ -133,6 +134,16 @@ export const addonRouter = () => {
     res.json({ status: listStatusItems() });
   });
 
+  /** Which addons get a TopBar launch button — a user/agent-editable
+   *  whitelist persisted in ~/.moriko-studio/topbar-addons.json. */
+  router.get('/topbar-buttons', (_req, res) => {
+    res.json({ addons: listTopbarAddons() });
+  });
+
+  router.post('/topbar-buttons', (req, res) => {
+    res.json({ addons: setTopbarAddons((req.body as { addons?: unknown } | undefined)?.addons) });
+  });
+
   /** v2 (A4): settings — read all (defaults filled) or set one. */
   router.get('/:id/settings', (req, res) => {
     const addon = getAddon(req.params.id);
@@ -167,7 +178,8 @@ export const addonRouter = () => {
       const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
         ? req.body as Record<string, unknown>
         : {};
-      const result = await handler(body, { actor: { kind: 'user' } });
+      const sessionId = typeof body.sessionId === 'string' ? body.sessionId : undefined;
+      const result = await handler(body, { actor: { kind: 'user' }, sessionId });
       res.json({ ok: true, result: result === undefined ? null : result });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'RPC failed' });
@@ -323,6 +335,7 @@ export const addonRouter = () => {
     if (!addon) return res.status(404).json({ error: 'Addon not found' });
     const next = !addon.enabled;
     const reseeded = !next && reseedBuiltin(addon.manifest.id) !== null;
+    if (reseeded) addonLifecycleLog(addon.manifest.id, 'reseeded from addons-src (user edits replaced by shipped source)');
     try {
       const manifestPath = path.join(ADDONS_ROOT(), addon.manifest.id, 'addon.json');
       const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
@@ -337,6 +350,7 @@ export const addonRouter = () => {
   });
 
   router.post('/reload', async (_req, res) => {
+    addonSessionMark('system', 'reload all — reseeding builtins');
     reseedAllBuiltins();
     await loadAllAddons();
     void publishBusEvent('addons.registry', { reason: 'reload-all' }, 'moriko-host');
@@ -345,6 +359,7 @@ export const addonRouter = () => {
 
   router.post('/:id/reload', async (req, res) => {
     const reseeded = reseedBuiltin(req.params.id) !== null;
+    if (reseeded) addonLifecycleLog(req.params.id, 'reseeded from addons-src');
     const ok = await reloadAddon(req.params.id);
     if (!ok) return res.status(404).json({ error: 'Addon not found' });
     void publishBusEvent('addons.registry', { reason: 'reload', addonId: req.params.id }, 'moriko-host');

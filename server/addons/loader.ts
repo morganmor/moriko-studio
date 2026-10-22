@@ -38,6 +38,7 @@ import { consentSatisfied } from './permissions.js';
 import { resolveGraph } from './graph.js';
 import { registerContributions, unregisterContributions } from './contributions.js';
 import { registerSettingsSchema } from './settings.js';
+import { addonLifecycleLog, addonSessionMark } from './logbuffer.js';
 import { morikoHome } from '../paths.js';
 
 const ADDONS_DIR = () => path.join(morikoHome, 'addons');
@@ -113,10 +114,15 @@ export async function deactivateAddonModule(id: string): Promise<void> {
 }
 
 async function loadOneAddon(dir: string): Promise<LoadedAddon | null> {
+  const t0 = Date.now();
   const rawManifest = parseManifest(dir);
   if (!rawManifest) return null;
   const validation = validateManifest(rawManifest);
   const manifest: AddonManifest = rawManifest;
+  const id = manifest.id;
+
+  addonLifecycleLog(id, `load ${dir}`);
+
   const loaded: LoadedAddon = {
     manifest,
     dir,
@@ -127,10 +133,12 @@ async function loadOneAddon(dir: string): Promise<LoadedAddon | null> {
   };
   if (!validation.ok) {
     loaded.status = 'invalid';
+    addonLifecycleLog(id, `invalid manifest: ${loaded.loadError}`, undefined, 'error');
     return loaded;
   }
   if (!loaded.enabled) {
     loaded.status = 'disabled';
+    addonLifecycleLog(id, 'skipped — disabled', undefined);
     return loaded;
   }
 
@@ -139,6 +147,7 @@ async function loadOneAddon(dir: string): Promise<LoadedAddon | null> {
     const perms = Array.isArray(extra.permissions) ? extra.permissions as string[] : [];
     if (!consentSatisfied(manifest.id, perms)) {
       loaded.status = 'needs-consent';
+      addonLifecycleLog(id, `waiting for consent: ${perms.join(', ') || 'declared permissions'}`, undefined, 'warn');
       return loaded;
     }
   }
@@ -186,9 +195,11 @@ async function loadOneAddon(dir: string): Promise<LoadedAddon | null> {
         registerContributions(manifest.id, m2.contributes);
         registerSettingsSchema(manifest.id, m2.contributes?.settings);
       }
+      addonLifecycleLog(id, `ready v${manifest.version} (api v${validation.apiVersion})`, Date.now() - t0);
     } catch (error) {
       loaded.loadError = error instanceof Error ? error.message : 'Failed to load addon entry';
       loaded.status = 'error';
+      addonLifecycleLog(id, `FAILED to activate: ${loaded.loadError}`, undefined, 'error');
     }
   }
   return loaded;
@@ -226,9 +237,11 @@ export async function loadAllAddons(): Promise<void> {
     })),
   );
   for (const addon of staged) {
+    addonSessionMark(addon.manifest.id, 'session start');
     const blockedReason = graph.blocked[addon.manifest.id];
     if (blockedReason) {
       registerAddon(addon.manifest.id, { ...addon, status: 'blocked', loadError: blockedReason });
+      addonLifecycleLog(addon.manifest.id, `blocked: ${blockedReason}`, undefined, 'error');
       continue;
     }
     const loaded = await loadOneAddon(addon.dir);
@@ -243,12 +256,15 @@ export async function reloadAddon(id: string, enabledOverride?: boolean): Promis
   if (id.startsWith('.') || id.includes('.bak')) return false;
   const dir = path.join(ADDONS_DIR(), id);
   if (!existsSync(dir)) return false;
+  const t0 = Date.now();
   unregisterAddon(id);
   unregisterContributions(id);
+  addonLifecycleLog(id, 'reload — unregistered, reloading from disk…');
   const addon = await loadOneAddon(dir);
   if (!addon) return false;
   if (enabledOverride !== undefined) addon.enabled = enabledOverride;
   registerAddon(addon.manifest.id, addon);
+  addonLifecycleLog(id, `reloaded (${enabledOverride === false ? 'disabled by user' : addon.status})`, Date.now() - t0);
   return true;
 }
 

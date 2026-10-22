@@ -4,8 +4,10 @@
  *
  * agent__read_file — read a numbered slice of a file. Lines render WHOLE (no
  * silent truncation). Three modes: window (default), outline, fold. Supports
- * ranges, single-line, read-if-changed (lastHash), showWhitespace, and
- * continuation tokens (continueFrom). Binary/image files are detected by
+ * ranges, single-line, showWhitespace, and continuation tokens (continueFrom).
+ * A repeated request on an unchanged file answers with an "unchanged" stub
+ * automatically (no lastHash needed); `refresh: true` forces a re-render.
+ * Binary/image files are detected by
  * magic bytes and returned inline as image parts for multimodal models.
  */
 import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
@@ -17,16 +19,52 @@ import {
   sniffImageMime,
   resolveWithPermission,
   IMAGE_EXTENSIONS, MAX_IMAGE_READ_BYTES, SNIFF_HEADER_BYTES,
-  MAX_READ_BYTES, MAX_OUTPUT_CHARS, OUTLINE_SYMBOL_CAP,
+  MAX_READ_BYTES, OUTLINE_SYMBOL_CAP,
 } from './shared.js';
 import { foldContent, FOLD_BLOCK_CAP, type FoldBlock } from '../fold.js';
 import {
-  getReadEntry, hasStructuralRead, markStructuralRead, recordRead,
+  getReadEntry, getRenderedScope, hasCurrentRead, hasStructuralRead,
+  markRenderedScope, markStructuralRead, recordRead,
 } from '../read-policy.js';
 import { sha256 } from '../edit-diagnostics.js';
 import { fuzzyHint } from '../fuzzy.js';
 import { normalizeHashInput } from './edit-core.js';
 import { noteImageRead } from './vision-policy.js';
+
+/** Own budget for this tool — the shared constant was removed (2026-10-22). */
+const READ_BUDGET_CHARS = 48_000;
+
+/**
+ * Deterministic signature of a read_file request. Two calls share a scope only
+ * when they ask for the SAME window with the SAME options — the redundant
+ * re-read the automatic stub exists to kill. Any difference (mode, offset,
+ * ranges, continuation token, whitespace view) is a DIFFERENT request and must
+ * render.
+ */
+function readScopeKey(args: Record<string, unknown>): string {
+  return [
+    str(args, 'mode').trim().toLowerCase() || 'window',
+    num(args, 'line') ?? '',
+    num(args, 'offsetLine') ?? '',
+    num(args, 'maxLines') ?? '',
+    num(args, 'maxDepth') ?? '',
+    str(args, 'continueFrom').trim(),
+    bool(args, 'showWhitespace') ? 'ws' : '',
+    Array.isArray(args.ranges) ? JSON.stringify(args.ranges) : '',
+  ].join('|');
+}
+
+/** Human label for the stub message — what exactly was already rendered. */
+function readScopeLabel(args: Record<string, unknown>): string {
+  const mode = str(args, 'mode').trim().toLowerCase();
+  if (mode === 'outline' || mode === 'fold') return `mode "${mode}"`;
+  const single = num(args, 'line');
+  if (single !== undefined) return `line ${single}`;
+  if (Array.isArray(args.ranges)) return 'the same ranges';
+  const offset = num(args, 'offsetLine') ?? 1;
+  const max = num(args, 'maxLines') ?? 400;
+  return `lines ${offset}–${offset + max - 1}`;
+}
 
 /**
  * Shared fold renderer for agent__read_all AND read_file { mode: "fold" } —
@@ -55,7 +93,7 @@ export function foldModeResult(content: string, relative: string, maxDepthRaw: u
   const totalBlocks = countBlocks(result.blocks);
   const rows: string[] = [];
   let shown = 0;
-  let budgetLeft = MAX_OUTPUT_CHARS - 400;
+  let budgetLeft = READ_BUDGET_CHARS - 400;
   let capStopped = false;
   const render = (block: FoldBlock, depth: number): void => {
     if (shown >= FOLD_BLOCK_CAP) { capStopped = true; return; }
@@ -131,7 +169,7 @@ function markdownHeadingFold(content: string, relative: string, maxDepth: number
     };
   }
   const rows: string[] = [];
-  let budgetLeft = MAX_OUTPUT_CHARS - 400;
+  let budgetLeft = READ_BUDGET_CHARS - 400;
   for (let h = 0; h < headings.length; h += 1) {
     if (budgetLeft <= 0) { rows.push('  … (stopped at the output budget)'); break; }
     const head = headings[h];
@@ -333,8 +371,18 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
     };
   }
 
+  // refresh: true is the ONLY way to force a render once a scope was seen.
+  const refresh = bool(args, 'refresh');
+  const scopeKey = readScopeKey(args);
+  const markScope = (): void => {
+    markRenderedScope(
+      ctx.sessionId, absolute, scopeKey, contentHash,
+      getReadEntry(ctx.sessionId, absolute)?.rev ?? 1,
+    );
+  };
+
   const lastHash = normalizeHashInput(str(args, 'lastHash'));
-  if (lastHash) {
+  if (lastHash && !refresh) {
     if (lastHash.length < 8) {
       return {
         ok: false, isError: true,
@@ -343,15 +391,41 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
     }
     if (contentHash.startsWith(lastHash)) {
       const existing = getReadEntry(ctx.sessionId, absolute);
+      // Re-affirm the span the model already holds: recordRead merges it into
+      // the existing union, so this only bumps the revision (a fresh receipt).
       const refreshed = existing
-        ? recordRead(ctx.sessionId, absolute, content, stats.mtimeMs, existing.fromLine, existing.fromLine)
+        ? recordRead(ctx.sessionId, absolute, content, stats.mtimeMs, existing.fromLine, existing.toLine)
         : undefined;
+      markScope();
       return {
         ok: true,
         isError: false,
         text:
           `unchanged — ${relative} still matches sha256:${contentHash.slice(0, 12)} (receipt read#${refreshed?.rev ?? existing?.rev ?? 1} preserved); ` +
-          'the window you already hold stays authoritative. Pass lastHash again to re-check, or drop it to re-render.',
+          'the window you already hold stays authoritative. Pass refresh: true to render it again.',
+      };
+    }
+  }
+
+  // AUTOMATIC unchanged stub — no lastHash required. Fires only when the model
+  // repeats the EXACT same request on a file whose receipt is still current, so
+  // the content it would receive is already in its context. A rebuilt context
+  // (post-compaction) clears the receipt and the read renders again.
+  if (!refresh) {
+    const previous = getRenderedScope(ctx.sessionId, absolute);
+    if (
+      previous &&
+      previous.key === scopeKey &&
+      previous.hash === contentHash &&
+      hasCurrentRead(ctx.sessionId, absolute, content, stats.mtimeMs)
+    ) {
+      return {
+        ok: true,
+        isError: false,
+        text:
+          `unchanged — ${relative} already rendered ${readScopeLabel(args)} at sha256:${contentHash.slice(0, 12)} ` +
+          `(receipt read#${previous.rev} still current); the output you already hold stays authoritative. ` +
+          'Pass refresh: true to render it again.',
       };
     }
   }
@@ -399,12 +473,14 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
       }
     }
     if (symbols.length === 0) {
+      markScope();
       return {
         ok: true,
         isError: false,
         text: `# outline ${relative} — no symbols matched (outline knows common function/class/def/type declarations).`,
       };
     }
+    markScope();
     return {
       ok: true,
       isError: false,
@@ -418,13 +494,16 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
 
   if (mode === 'fold') {
     markStructuralRead(ctx.sessionId, absolute);
-    return foldModeResult(content, relative, args.maxDepth);
+    const folded = foldModeResult(content, relative, args.maxDepth);
+    markScope();
+    return folded;
   }
 
   const singleLine = num(args, 'line');
   if (singleLine !== undefined) {
     const n = Math.min(Math.max(Math.trunc(singleLine), 1), Math.max(view.length, 1));
     const entry = recordRead(ctx.sessionId, absolute, content, stats.mtimeMs, n, n);
+    markScope();
     return {
       ok: true,
       isError: false,
@@ -467,7 +546,7 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
     }
     const header = `# ${relative} — multi-range read of ${view.length}-line file`;
     const slices: string[] = [header];
-    let budgetLeft = MAX_OUTPUT_CHARS - header.length - 300;
+    let budgetLeft = READ_BUDGET_CHARS - header.length - 300;
     const recordedRanges: Array<{ from: number; to: number }> = [];
     let lastRev = 1;
     for (const range of parsed) {
@@ -500,6 +579,7 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
       `[${relative} | ranges ${rangesLabel} of ${view.length} | ${eol} | utf-8 | ` +
         `sha256:${contentHash.slice(0, 12)} | read#${lastRev} receipt retained per range]`,
     );
+    markScope();
     return { ok: true, isError: false, text: truncateOutput(slices.join('\n')) };
   }
 
@@ -531,7 +611,7 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
 
   const rendered: string[] = [];
   let endLine = startLine - 1;
-  let budgetLeft = MAX_OUTPUT_CHARS - headerEstimate.length - 400;
+  let budgetLeft = READ_BUDGET_CHARS - headerEstimate.length - 400;
   let budgetStopped = false;
   for (let index = startLine - 1; index < plannedEnd; index += 1) {
     const numbered = `${String(index + 1).padStart(5)}| ${view[index]}${showWhitespace ? whitespaceAnnotation(view[index]) : ''}`;
@@ -572,5 +652,6 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
   slices.push(footer);
   if (notes.length > 0) slices.push(notes.join(' · '));
 
+  markScope();
   return { ok: true, isError: false, text: truncateOutput(slices.join('\n')) };
 }

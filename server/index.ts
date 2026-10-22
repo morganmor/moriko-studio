@@ -21,6 +21,8 @@ import { goalsRouter } from './goals/routes.js';
 import { todosRouter } from './todos/routes.js';
 import { remindersRouter } from './reminders/routes.js';
 import { workflowsRouter } from './workflows/routes.js';
+import { skillsRouter } from './skills/routes.js';
+import { planModeRouter } from './agents/planModeRoutes.js';
 import { addonRouter } from './addons/routes.js';
 import { watchRouter } from './watch/routes.js';
 import { uiExportRouter } from './uiExport.js';
@@ -31,7 +33,7 @@ import { listReminders, renderReminder, takeDueReminders } from './reminders/sto
 import { asyncRoute, HttpError } from './http.js';
 import { guardedJsonParser } from './bodyParsers.js';
 import { subscribeTree } from './agents/treeIndex.js';
-import { buildHarnessInjections, ladderReminderInjection, operatorDirectiveInjection, agentHarnessInjection, agentsMdInjection } from './agents/systemPrompt.js';
+import { buildHarnessInjections, ladderReminderInjection, operatorDirectiveInjection, agentHarnessInjection, agentsMdInjection, skillCommandFromText } from './agents/systemPrompt.js';
 import { attachmentsInjection } from './agents/systemPrompt.js';
 import { jobStore, withRun } from './agents/journal.js';
 import {
@@ -102,6 +104,9 @@ import {
   removeServer,
   upsertServer,
 } from './mcp/config.js';
+import { bridgeRouter } from './mcp/bridgeRoutes.js';
+import { bridgeToken, resolveMainSessionId } from './mcp/bridge.js';
+import { figmaAuthReset, figmaAuthStatus, figmaSignIn } from './mcp/figmaAuth.js';
 import {
   BUILT_IN_PROVIDERS,
   findBuiltIn,
@@ -109,6 +114,7 @@ import {
 } from './providers.js';
 import { allModelMetadata, lookupModelMetadata, minLimit } from './modelMetadata.js';
 import { UpstreamError, type StreamHandler, type StreamParams } from './sse.js';
+import { isLivenessTimeout, isAbortLike, STREAM_IDLE_MS } from './liveness.js';
 import { isSteerable, pushSteer, registerSteerSession, unregisterSteerSession, type SteerEntry, type SteerPart } from './steer.js';
 import { markSessionOpen, markSessionClose } from './agents/sessionRegistry.js';
 import { SYSTEM_RULES_PRESETS } from './agents/writingRules.js';
@@ -843,6 +849,20 @@ app.post(
         send({ type: 'harness_injection', id: directive.id, title: directive.title, content: directive.content });
         harnessInjections = [...harnessInjections, directive];
       }
+
+      // SKILLS — a user message that IS "/skill-name args" activates the
+      // skill's full body for this turn (level-2 expansion, Claude-Code style).
+      {
+        const firstUser = [...messages].reverse().find((message: { role?: string }) => message?.role === 'user');
+        const userText = typeof (firstUser as { content?: unknown } | undefined)?.content === 'string'
+          ? (firstUser as { content: string }).content
+          : '';
+        const skillCommand = settings.agentMode && userText ? skillCommandFromText(userText, harnessSessionId) : null;
+        if (skillCommand && !harnessInjections.some((entry) => entry.id === 'skill-command')) {
+          send({ type: 'harness_injection', id: skillCommand.id, title: skillCommand.title, content: skillCommand.content });
+          harnessInjections = [...harnessInjections, skillCommand];
+        }
+      }
     }
 
     if (enforcementLevel > 0 || (body.trust && body.trust.level > 1 && settings.probation?.enabled)) {
@@ -909,6 +929,22 @@ app.post(
         } else {
           send({ type: 'error', message: error.message, detail: error.detail });
         }
+      } else if (isLivenessTimeout(error, 'STREAM_IDLE')) {
+        failed = true;
+        send({
+          type: 'error',
+          message:
+            `Stream stalled — no data received from the provider for ${STREAM_IDLE_MS / 1000}s. ` +
+            'This is a transient provider issue (bursty token generation); the run can be continued.',
+        });
+      } else if (isAbortLike(error)) {
+        failed = true;
+        send({
+          type: 'error',
+          message:
+            'Stream connection was interrupted by the provider or network. ' +
+            'This is a transient issue; the run can be continued.',
+        });
       } else {
         failed = true;
         send({
@@ -1037,7 +1073,7 @@ app.post(
         if (!raw || typeof raw !== 'object') continue;
         const part = raw as { type?: unknown; text?: unknown; image_url?: { url?: unknown }; file?: { filename?: unknown; file_data?: unknown } };
         if (part.type === 'text' && typeof part.text === 'string' && part.text.trim()) {
-          parts.push({ type: 'text', text: part.text.slice(0, 4000) });
+          parts.push({ type: 'text', text: part.text });
         } else if (part.type === 'image_url' && typeof part.image_url?.url === 'string' && part.image_url.url) {
           parts.push({ type: 'image_url', image_url: { url: part.image_url.url } });
         } else if (
@@ -1403,6 +1439,26 @@ app.get('/api/mcp/servers', (_req, res) => {
   res.json({ servers: listServersMasked() });
 });
 
+/** Figma MCP OAuth status. */
+app.get('/api/mcp/figma/auth', asyncRoute(async (_req, res) => {
+  res.json(figmaAuthStatus());
+}));
+
+/** Starts the Figma OAuth browser flow (discovery → DCR → PKCE → consent). */
+app.post('/api/mcp/figma/auth', asyncRoute(async (_req, res) => {
+  try {
+    res.json(await figmaSignIn());
+  } catch (error) {
+    throw new HttpError(502, error instanceof Error ? error.message : 'Figma sign-in failed.');
+  }
+}));
+
+/** Drops stored Figma tokens. */
+app.delete('/api/mcp/figma/auth', asyncRoute(async (_req, res) => {
+  figmaAuthReset();
+  res.json({ ok: true });
+}));
+
 app.post(
   '/api/mcp/servers',
   asyncRoute(async (req, res) => {
@@ -1414,6 +1470,7 @@ app.post(
       env?: Record<string, string>;
       url?: string;
       headers?: Record<string, string>;
+      auth?: 'figma';
       enabled?: boolean;
     };
     if (!body?.name?.trim()) throw new HttpError(400, 'MCP server name is required.');
@@ -1434,6 +1491,7 @@ app.post(
       env: body.env,
       url: body.url,
       headers: body.headers,
+      auth: body.auth,
       enabled: body.enabled ?? true,
     });
     res.json({ ok: true, server: getServerMasked(server.id) });
@@ -1453,6 +1511,7 @@ app.put(
       env?: Record<string, string>;
       url?: string;
       headers?: Record<string, string>;
+      auth?: 'figma';
       enabled?: boolean;
       /** Full replacement list of tool names switched OFF for this server. */
       disabledTools?: string[];
@@ -1469,6 +1528,7 @@ app.put(
       env: body?.env ?? existing.env,
       url: body?.url ?? existing.url,
       headers: body?.headers ?? existing.headers,
+      auth: body?.auth ?? existing.auth,
       enabled: body?.enabled ?? existing.enabled,
       disabledTools: Array.isArray(body?.disabledTools) ? body.disabledTools : existing.disabledTools,
     });
@@ -1538,9 +1598,15 @@ app.use('/api/goals', goalsRouter());
 app.use('/api/todos', todosRouter());
 app.use('/api/reminders', remindersRouter());
 app.use('/api/workflows', workflowsRouter());
+app.use('/api/skills', skillsRouter());
+app.use('/api/plan-mode', planModeRouter());
 app.use('/api/addons', addonRouter());
 app.use('/api/watch', watchRouter());
 app.use('/api/ui', uiExportRouter());
+
+// MCP Bridge — external MCP clients (claude.ai / Gemini web) call Council +
+// RSAT addon tools and read-only workspace tools, acting as the Main Session.
+app.use('/', bridgeRouter());
 
 app.get('/api/usage', (req, res) => {
   const windowKey = typeof req.query.window === 'string' ? req.query.window : '30d';
@@ -2030,6 +2096,9 @@ const httpServer = app.listen(PORT, () => {
       const { emitPoint } = await import('./addons/points.js');
       await emitPoint('harness.start', { at: Date.now() });
     } catch {  }
+    // MCP bridge notice — the URL users paste into claude.ai / Gemini web
+    // (after pointing their tunnel at this port).
+    console.log(`  [mcp-bridge] POST /mcp/${bridgeToken()} (actor: council Main Session ${resolveMainSessionId() ?? 'pending'})`);
   })();
 
   const configured = BUILT_IN_PROVIDERS.filter(

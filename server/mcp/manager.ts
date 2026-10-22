@@ -1,6 +1,7 @@
 import type { McpServerConfig } from './config.js';
 import { getServer, listServers } from './config.js';
 import { McpHttpClient, McpStdioClient, type McpClient, type McpToolDef, type McpToolResult } from './client.js';
+import { figmaAuthorizationHeader } from './figmaAuth.js';
 
 export { listServersMasked } from './config.js';
 
@@ -33,6 +34,10 @@ function sanitizeName(name: string): string {
 function createClient(config: McpServerConfig): McpClient {
   if (config.transport === 'http') {
     if (!config.url) throw new Error('Remote MCP server has no URL.');
+    if (config.auth === 'figma') {
+      // OAuth headers re-resolve per request so refreshed tokens are picked up.
+      return new McpHttpClient(config.url, figmaAuthorizationHeader, config.name);
+    }
     return new McpHttpClient(config.url, config.headers ?? {}, config.name);
   }
   if (!config.command) throw new Error('Local MCP server has no command.');
@@ -44,7 +49,8 @@ export async function ensureConnection(config: McpServerConfig): Promise<McpConn
   const existing = connections.get(config.id);
   if (existing && existing.status === 'connected') return existing;
 
-  await connections.get(config.id)?.client.close().catch(() => undefined);
+  const previous = connections.get(config.id);
+  if (previous?.client) await previous.client.close().catch(() => undefined);
   connections.delete(config.id);
 
   if (!config.enabled) {
@@ -174,15 +180,21 @@ export async function callWireTool(wireName: string, args: Record<string, unknow
   }
 }
 
-export async function dropConnection(id: string): Promise<void> {
-  await connections.get(id)?.client.close().catch(() => undefined);
+/** Closes a connection safely: failed/off connections hold a null client. */
+async function closeEntry(id: string): Promise<void> {
+  const connection = connections.get(id);
+  if (connection?.client) await connection.client.close().catch(() => undefined);
   connections.delete(id);
+}
+
+export async function dropConnection(id: string): Promise<void> {
+  await closeEntry(id);
 }
 
 /** Server shutdown: kill every spawned stdio child. */
 export async function shutdownAll(): Promise<void> {
-  for (const connection of connections.values()) {
-    await connection.client.close().catch(() => undefined);
+  for (const id of connections.keys()) {
+    await closeEntry(id);
   }
   connections.clear();
 }

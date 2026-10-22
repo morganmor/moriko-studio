@@ -160,7 +160,7 @@ export function createPromptFragment(api) {
   return {
     id: 'council-board',
     order: 38,
-    budgetChars: 2200,
+    budgetChars: 1000000,
     build(ctx) {
       const mem = membershipOf(api, ctx.sessionId);
       if (!mem) return [];

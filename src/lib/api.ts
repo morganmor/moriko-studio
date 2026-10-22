@@ -582,6 +582,8 @@ export interface McpServerConfig {
   env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
+  /** Named OAuth profile — currently only Figma. */
+  auth?: 'figma';
   /** Tool names the user switched OFF for this server. */
   disabledTools?: string[];
   createdAt: string;
@@ -609,6 +611,7 @@ export async function addMcpServer(input: {
   env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
+  auth?: 'figma';
   enabled?: boolean;
 }): Promise<void> {
   const response = await fetch('/api/mcp/servers', {
@@ -650,6 +653,30 @@ export async function testMcpServer(
   const response = await fetch(`/api/mcp/servers/${encodeURIComponent(id)}/test`, { method: 'POST' });
   if (!response.ok) await parseError(response);
   return (await response.json()) as { ok: boolean; toolCount: number; error?: string };
+}
+
+/** Figma MCP OAuth connection state. */
+export interface FigmaAuthStatus {
+  connected: boolean;
+  scope?: string;
+  obtainedAt?: string;
+}
+
+export async function getFigmaAuth(): Promise<FigmaAuthStatus> {
+  const response = await fetch('/api/mcp/figma/auth');
+  if (!response.ok) await parseError(response);
+  return (await response.json()) as FigmaAuthStatus;
+}
+
+/** Opens the Figma consent page; resolves once tokens are stored. */
+export async function connectFigma(): Promise<void> {
+  const response = await fetch('/api/mcp/figma/auth', { method: 'POST' });
+  if (!response.ok) await parseError(response);
+}
+
+export async function disconnectFigma(): Promise<void> {
+  const response = await fetch('/api/mcp/figma/auth', { method: 'DELETE' });
+  if (!response.ok) await parseError(response);
 }
 
 /** Error carrying a user-facing message, so the UI never renders a raw stack. */

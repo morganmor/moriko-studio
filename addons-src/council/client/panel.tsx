@@ -11,7 +11,7 @@
  * App.tsx handles; it never touches the store directly.
  */
 import { useEffect, useState } from 'react';
-import { useCouncil, openConversation, createCouncil, createSubSession, deleteSubSession, useAddonBus, invoke, notify } from '@moriko/host';
+import { useCouncil, openConversation, createCouncil, createSubSession, deleteSubSession, useAddonBus, invoke, notify, navigate } from '@moriko/host';
 
 type Member = { id: string; title: string; agentId?: string };
 type RsatAgent = { id: string; name: string; providerId: string; model: string; thinkingLevel?: string };
@@ -117,7 +117,12 @@ export default function Panel() {
   return (
     <div className="council">
       <div className="page">
-        <h2>Council Agent</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <button type="button" className="btn ghost sm" onClick={() => navigate('playground')} aria-label="Back to chat">
+            ← Back
+          </button>
+          <h2 style={{ margin: 0 }}>Council Agent</h2>
+        </div>
         <p className="sub">
           {councilId
             ? `Council "${council.main?.title ?? 'untitled'}" — ${subCount} sub session${subCount === 1 ? '' : 's'}. Switch members from the dropdown below the chat title.`

@@ -6,10 +6,8 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { loadPlaywright, assertAllowedTarget } from './spatial-runtime.js';
+import { loadPlaywright, assertAllowedTarget, getReusableBrowser, killProbeBrowser } from './spatial-runtime.js';
 import { getActiveWorkspace } from './workspace.js';
-
-const LAUNCH_ARGS = ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
 
 /** Probe data dir: <workspace>/.moriko-dat/probe/ — User decision: probe
  *  screenshots live INSIDE the workspace (agent can read them back).
@@ -122,6 +120,9 @@ const CANVAS_INSPECT_SCRIPT = `
 })();
 `;
 
+const LOAD_TIMEOUT_MS = 8_000;
+const PROBE_DEADLINE_MS = 90_000;
+
 export async function runGameProbe(
   rawUrl: string,
   opts: {
@@ -144,16 +145,13 @@ export async function runGameProbe(
   const screenshotCount = Math.min(Math.max(opts.screenshots ?? 3, 0), 6);
   const actions = opts.actions ?? [];
 
-  let browser;
-  try {
-    try {
-      browser = await pw.chromium.launch({ headless: true, channel: 'msedge', args: LAUNCH_ARGS });
-    } catch {
-      browser = await pw.chromium.launch({ headless: true, args: LAUNCH_ARGS });
-    }
-  } catch (error) {
-    throw new Error(`Could not launch headless browser: ${error instanceof Error ? error.message : String(error)}`);
-  }
+  // Hard deadline: a hung page must not wedge the whole tool band — the
+  // watchdog force-closes the SHARED browser (cache reset) so all pending
+  // page promises reject at once.
+  const deadline = setTimeout(() => { void killProbeBrowser(); }, PROBE_DEADLINE_MS);
+  deadline.unref?.();
+
+  const browser = await getReusableBrowser();
 
   const result: GameProbeResult = {
     url: url.toString(),
@@ -170,8 +168,9 @@ export async function runGameProbe(
   };
   const consoleSeen = new Set<string>();
 
+  let page: import('playwright-core').Page | null = null;
   try {
-    const page = await browser.newPage({ viewport });
+    page = await browser.newPage({ viewport });
     await page.addInitScript(FPS_INIT_SCRIPT);
 
     page.on('console', (msg) => {
@@ -199,10 +198,10 @@ export async function runGameProbe(
 
     const memoryStart = (await page.evaluate('performance.memory ? Math.round(performance.memory.usedJSHeapSize/1048576) : null').catch(() => null)) as number | null;
 
-    await page.goto(url.toString(), { waitUntil: 'commit', timeout: 20_000 });
-    await page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => undefined);
+    await page.goto(url.toString(), { waitUntil: 'commit', timeout: LOAD_TIMEOUT_MS });
+    await page.waitForLoadState('domcontentloaded', { timeout: LOAD_TIMEOUT_MS }).catch(() => undefined);
     try {
-      await page.waitForLoadState('networkidle', { timeout: 3_000 });
+      await page.waitForLoadState('networkidle', { timeout: 2_000 });
     } catch {  }
 
     const actionTasks: Array<Promise<void>> = [];
@@ -218,7 +217,30 @@ export async function runGameProbe(
       })());
     }
     await Promise.all(actionTasks);
-    await page.waitForTimeout(durationMs);
+    // SAMPLING WINDOW — screenshots are spread ACROSS it (first shot fires
+    // immediately, the rest every interval), then the window is topped up to
+    // its full durationMs. The old code slept the full duration first and
+    // THEN stacked another count × interval of sleeps for the shots.
+    const dir = screenshotCount > 0 ? probeDataDir() : null;
+    if (screenshotCount > 0 && !dir) {
+      result.notes.push('no workspace bound — screenshots not persisted (probe data lives in <workspace>/.moriko-dat/probe)');
+    }
+    if (dir) fs.mkdirSync(dir, { recursive: true });
+    const slug = url.host.replace(/[^a-z0-9]/gi, '_') + '-' + Date.now().toString(36);
+    const interval = durationMs / Math.max(screenshotCount, 1);
+    const windowStart = Date.now();
+    for (let i = 0; i < screenshotCount && dir; i += 1) {
+      if (i > 0) await page.waitForTimeout(interval);
+      const p = path.join(dir, `${slug}-${i}.png`);
+      try {
+        await page.screenshot({ path: p });
+        result.screenshots.push(p);
+      } catch (error) {
+        result.notes.push(`screenshot ${i} failed: ${error instanceof Error ? error.message : 'error'}`);
+      }
+    }
+    const remaining = durationMs - (Date.now() - windowStart);
+    if (remaining > 0) await page.waitForTimeout(remaining);
 
     const inspected = (await page.evaluate(CANVAS_INSPECT_SCRIPT).catch(() => null)) as {
       canvases: GameProbeResult['canvases'];
@@ -248,27 +270,9 @@ export async function runGameProbe(
       };
     }
 
-    if (screenshotCount > 0) {
-      const dir = probeDataDir();
-      if (!dir) {
-        result.notes.push('no workspace bound — screenshots not persisted (probe data lives in <workspace>/.moriko-dat/probe)');
-      } else {
-        fs.mkdirSync(dir, { recursive: true });
-        const slug = url.host.replace(/[^a-z0-9]/gi, '_') + '-' + Date.now().toString(36);
-        for (let i = 0; i < screenshotCount; i += 1) {
-          await page.waitForTimeout(Math.max(durationMs / screenshotCount, 200));
-          const p = path.join(dir, `${slug}-${i}.png`);
-          try {
-            await page.screenshot({ path: p });
-            result.screenshots.push(p);
-          } catch (error) {
-            result.notes.push(`screenshot ${i} failed: ${error instanceof Error ? error.message : 'error'}`);
-          }
-        }
-      }
-    }
   } finally {
-    await browser.close().catch(() => undefined);
+    clearTimeout(deadline);
+    await page?.close().catch(() => undefined);
   }
 
   return result;

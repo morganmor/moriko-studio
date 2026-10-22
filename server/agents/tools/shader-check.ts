@@ -8,10 +8,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AgentToolContext, HarnessToolResult } from './shared.js';
 import { str, truncateOutput, resolveWithPermission } from './shared.js';
-import { loadPlaywright } from '../spatial-runtime.js';
+import { getReusableBrowser } from '../spatial-runtime.js';
 import { defineTool } from './registry.js';
-
-const LAUNCH_ARGS = ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
 
 /** Browser-side GLSL compile check (runs as a string inside the page). */
 const GLSL_CHECK_FN = `function (src, isVertex) {
@@ -70,31 +68,8 @@ uniform mat4 viewMatrix; uniform vec3 cameraPosition;
 uniform bool isOrthographic;
 `;
 
-/** Cache: one browser kept alive ~60 s between shader checks. */
-let cachedBrowser: import('playwright-core').Browser | null = null;
-let cachedAt = 0;
-const BROWSER_TTL_MS = 60_000;
-
-async function getBrowser() {
-  const pw = await loadPlaywright();
-  if (!pw) throw new Error('playwright-core is not installed. Run: pnpm add -D playwright-core.');
-  if (cachedBrowser && cachedBrowser.isConnected() && Date.now() - cachedAt < BROWSER_TTL_MS) {
-    cachedAt = Date.now();
-    return cachedBrowser;
-  }
-  if (cachedBrowser) await cachedBrowser.close().catch(() => undefined);
-  try {
-    cachedBrowser = await pw.chromium.launch({ headless: true, channel: 'msedge', args: LAUNCH_ARGS });
-  } catch {
-    cachedBrowser = await pw.chromium.launch({ headless: true, args: LAUNCH_ARGS });
-  }
-  cachedAt = Date.now();
-  setTimeout(() => {
-    void cachedBrowser?.close().catch(() => undefined);
-    cachedBrowser = null;
-  }, BROWSER_TTL_MS).unref?.();
-  return cachedBrowser;
-}
+/** Shared probe-browser cache lives in spatial-runtime.ts (sliding 60 s TTL) —
+ *  game_probe and shader_check reuse the SAME instance, one cold launch. */
 
 /** Extract shader source from a .ts/.js template literal via exportName. */
 function extractInlineShader(content: string, exportName: string): string | null {
@@ -117,7 +92,7 @@ export async function checkGlsl(
   defines: Record<string, string | number>,
   prelude: string | null,
 ): Promise<ShaderCheckResult> {
-  const browser = await getBrowser();
+  const browser = await getReusableBrowser();
   const page = await browser.newPage();
   try {
     const defineLines = Object.entries(defines).map(([k, v]) => `#define ${k} ${v}\n`).join('');
@@ -139,7 +114,7 @@ export async function checkGlsl(
 }
 
 export async function checkWgsl(source: string): Promise<ShaderCheckResult> {
-  const browser = await getBrowser();
+  const browser = await getReusableBrowser();
   const page = await browser.newPage();
   try {
     const outcome = JSON.parse(await page.evaluate(

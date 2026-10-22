@@ -5,7 +5,8 @@ interface ShortcutRow {
   label: string;
 }
 
-const GROUPS: { title: string; rows: ShortcutRow[] }[] = [
+/** Shared with the Settings dialog's Keyboard tab — single source of truth. */
+export const SHORTCUT_GROUPS: { title: string; rows: ShortcutRow[] }[] = [
   {
     title: 'Global',
     rows: [
@@ -43,7 +44,7 @@ export function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () 
       size="sm"
     >
       <div className="kbd-groups">
-        {GROUPS.map((group) => (
+        {SHORTCUT_GROUPS.map((group) => (
           <section key={group.title} className="kbd-group">
             <p className="sec-label">{group.title}</p>
             <ul className="kbd-list">

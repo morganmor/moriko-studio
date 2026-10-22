@@ -48,6 +48,7 @@ const EMPTY_DRAFT: ProviderDraft = {
 const IMAGE_ADAPTER_OPTIONS = [
   { value: '', label: 'Auto-detect' },
   { value: 'openai-sync', label: 'OpenAI-compatible (sync)' },
+  { value: 'gemini-native', label: 'Google Gemini (Nano Banana)' },
   { value: 'modelscope-async', label: 'ModelScope (async tasks)' },
   { value: 'declarative', label: 'Custom / declarative (JSON config)' },
 ];
@@ -63,6 +64,15 @@ const QUICK_TEMPLATES: Array<{ label: string; draft: Partial<ProviderDraft> }> =
   {
     label: 'OpenAI-compatible',
     draft: { label: 'My provider', kind: 'openai', baseUrl: 'https://api.example.com/v1' },
+  },
+  {
+    label: 'Google Gemini',
+    draft: {
+      label: 'Google Gemini',
+      kind: 'gemini',
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+      imageAdapter: 'gemini-native',
+    },
   },
 ];
 
@@ -1052,7 +1062,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
                 <div className="card" style={{ padding: 12 }}>
                   <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                     <p className="field-label" style={{ margin: 0 }}>Model ids</p>
-                    {selected.kind === 'openai' ? (
+                    {selected.kind === 'openai' || selected.kind === 'gemini' ? (
                       <button
                         type="button"
                         disabled={saving || fetchingModels}

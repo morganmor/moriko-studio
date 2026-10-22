@@ -66,6 +66,18 @@ export async function saveNodePositions(api, sessionId, positions) {
   return { saved: true, count: Object.keys(merged).length };
 }
 
+/** Hapus SEMUA posisi tersimpan — graph kembali ke grid default yang rapi. */
+export async function clearNodePositions(api, sessionId) {
+  const ws = workspaceOf(api, sessionId);
+  if (!ws?.root()) return { cleared: false };
+  if (ws.exists(POSITIONS_FILE)) {
+    if (!ws.exists('.moriko')) await ws.write(`${DIR}/.gitignore`, '*\n');
+    await ws.write(POSITIONS_FILE, JSON.stringify({}, null, 2));
+  }
+  invalidateInterlinkCache(ws.root());
+  return { cleared: true };
+}
+
 /** Walk direktori workspace secara deterministik. */
 function walkWorkspaceFiles(rootDir, maxFiles = MAX_SCAN_FILES, includeAddons = false) {
   const out = [];

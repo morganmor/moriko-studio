@@ -17,6 +17,7 @@ import {
 import { NoticeCenter, cx } from './ui';
 import { DIcon } from './designIcons';
 import { Popover } from './Popover';
+import { AddonTopbarButtons } from './AddonTopbarButtons';
 import { useStore } from '../store/useStore';
 import { isSubSession } from '../store/useStore';
 interface TopBarProps {
@@ -256,7 +257,6 @@ export function TopBar({ title, onShare, onOpenNav, onPickWorkspace, workspaceLa
   const agentWorkspaces = useStore((state) => state.agentWorkspaces);
   const patchConversation = useStore((state) => state.patchConversation);
   const deleteConversation = useStore((state) => state.deleteConversation);
-  const setView = useStore((state) => state.setView);
   const [wsMenuOpen, setWsMenuOpen] = useState(false);
   const wsMenuRef = useRef<HTMLDivElement>(null);
 
@@ -372,21 +372,10 @@ export function TopBar({ title, onShare, onOpenNav, onPickWorkspace, workspaceLa
         </div>
       )}
 
+      {/* Addon launch buttons — whitelist-driven (topbar-addons.json). */}
+      <AddonTopbarButtons />
+
       {}
-      {hasActiveChat ? (
-        <button
-          type="button"
-          className="ib"
-          onClick={() => setView('addon:rsat/overview' as never)}
-          aria-label="Open RSA/T board"
-        >
-          <span
-            className="rsat-gem-ic"
-            aria-hidden="true"
-            style={{ maskImage: 'url("/api/addons/rsat/client/resources/icon.svg")', WebkitMaskImage: 'url("/api/addons/rsat/client/resources/icon.svg")' }}
-          />
-        </button>
-      ) : null}
 
       {}
       <div ref={wsMenuRef} style={{ position: 'relative', marginLeft: 4, maxWidth: 220, flexShrink: 0 }}>

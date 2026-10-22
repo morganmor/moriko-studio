@@ -1,0 +1,31 @@
+{
+  "apiVersion": "2",
+  "id": "moco-canvas",
+  "name": "Moco Canvas — 2D canvas engine for 1D models",
+  "shortName": "Moco Canvas",
+  "version": "0.3.0",
+  "kind": "mod",
+  "author": "Moriko",
+  "description": "A Canva-like canvas for LLMs: a scene graph in grid addresses, a transactional op engine, a deterministic HTML/CSS compiler, and a layered readout (char-map + relational facts) so a token model never guesses pixels.",
+  "main": "server/main.ts",
+  "client": "client/canvas.tsx",
+  "icon": "resources/icon.svg",
+  "permissions": [
+    "tools.register",
+    "commands",
+    "bus",
+    "ui.view",
+    "prompt.inject",
+    "workspace.read",
+    "workspace.write:.moriko/moco-canvas/**",
+    "harness.render"
+  ],
+  "activation": ["onStartup"],
+  "contributes": {
+    "views": [
+      { "id": "canvas", "title": "Moco Canvas", "icon": "grid", "location": "sidebar", "component": "./client/canvas.tsx" }
+    ],
+    "statusItems": [{ "id": "canvas" }],
+    "resources": {}
+  }
+}

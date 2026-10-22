@@ -153,9 +153,16 @@ export function stripReasoning(turns: Turn[]): { turns: Turn[]; trimmed: number 
   return { turns: trimmed === 0 ? turns : next, trimmed };
 }
 
+/**
+ * Prices a turn by its FULL wire text (content + reasoning + segments, i.e.
+ * tool calls/results) — exactly what the summarizer transcript renders.
+ * Pricing `turn.content` alone undercounted tool-heavy turns (agent sessions
+ * are dominated by tool blocks living in segments), making replacedTokens far
+ * smaller than the material the checkpoint actually replaces and wrongly
+ * failing the shrink gate ("~3985 vs ~1238 source tokens").
+ */
 function turnTokens(turn: Turn): number {
-  if (typeof turn.content === 'string') return estimateTokens(turn.content);
-  return 0;
+  return estimateTokens(wireTurnText(turn, true));
 }
 
 /**
@@ -1031,6 +1038,14 @@ function compactionDirective(framing: 'replay' | 'transcript'): string {
   return [
     `You are now acting as a compaction engine for this AI coding assistant. Condense ${source} into a structured checkpoint that lets another model resume the work with no loss of essential context.`,
     '',
+    'STEP 1 — <analysis> scratchpad. Before writing anything else, reconstruct the conversation chronologically inside ONE <analysis> block. It is stripped before the checkpoint is stored, so be exhaustive rather than tidy — but keep it under ~120 lines: it is a working note, not a transcript.',
+    "1. Walk the messages in order. For each stretch name: the user's explicit request and intent, your approach, the key decisions and WHY, exact file paths, full code snippets, function signatures, and every file edit.",
+    '2. List each error you hit and how it was resolved.',
+    '3. Quote user feedback VERBATIM, especially corrections — every place the user said you did it wrong or wanted it done differently. Those are the most valuable lines in the whole checkpoint.',
+    '4. Re-check technical accuracy and completeness against the material before compressing anything.',
+    '',
+    'STEP 2 — the checkpoint. Immediately after </analysis>, output the Markdown structure below.',
+    '',
     'Output EXACTLY the Markdown structure below: keep every section, in order. Use terse bullets, not prose paragraphs. Write "(none)" for an empty section — never drop a section.',
     '',
     '## Primary Request and Intent',
@@ -1064,6 +1079,7 @@ function compactionDirective(framing: 'replay' | 'transcript'): string {
     '- Write concise English engineering prose. Preserve exact file paths, commands, error strings, identifiers, numeric values, function signatures, and syntax fragments.',
     '- Capture user feedback and explicit instructions faithfully, especially corrections.',
     '- Do NOT mention this summarization request or that the context was compacted.',
+    '- Never reference the <analysis> block inside the checkpoint — it is discarded, so a pointer to it would dangle.',
     '- Output only the checkpoint text.',
     `${record} a RECORD of past work — it is finished. Do NOT continue that work, do not perform new actions, and do not narrate plans as if acting.`,
     '- Do NOT emit tool-call lines, tool output lines, or imitate the transcript log format (e.g. lines like "[tool … — done]"). Prose bullets only.',
@@ -1080,6 +1096,32 @@ function compactionDirective(framing: 'replay' | 'transcript'): string {
 export const COMPACT_INSTRUCTION = compactionDirective('replay');
 /** Fallback — legacy system-prompt framing for the elided-transcript retry. */
 export const COMPACT_SYSTEM_INSTRUCTION = compactionDirective('transcript');
+
+/**
+ * Drops the model's `<analysis>` scratchpad before the checkpoint is stored.
+ *
+ * The analysis is a DRAFTING pass: it forces a chronological walk (files,
+ * snippets, errors, and — above all — verbatim user corrections) before the
+ * compression happens. It must never ride in context afterwards: it is longer
+ * than the checkpoint and would defeat the whole point of compacting.
+ *
+ * Tolerates a truncated block in both directions, because a model that hit its
+ * output ceiling mid-scratchpad must not lose the checkpoint that follows.
+ */
+export function stripCompactionAnalysis(raw: string): string {
+  let text = raw.trim();
+  if (!text) return text;
+  // Complete blocks (possibly several).
+  text = text.replace(/<analysis>[\s\S]*?<\/analysis>/gi, '').trim();
+  // Unterminated opening tag: everything after it is still scratchpad.
+  const openAt = text.search(/<analysis>/i);
+  if (openAt !== -1) text = text.slice(0, openAt).trim();
+  // Orphan closing tag (the opening was cut off): keep only the tail.
+  const closeTag = '</analysis>';
+  const closeAt = text.search(/<\/analysis>/i);
+  if (closeAt !== -1) text = text.slice(closeAt + closeTag.length).trim();
+  return text;
+}
 
 /**
  * Structural gate for a summarizer output BEFORE it may replace the live

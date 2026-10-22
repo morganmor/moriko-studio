@@ -24,8 +24,6 @@ import { listLiveStreams, abortStream } from '../../streamRegistry.js';
 import { getStoredConversation } from '../../conversationStore.js';
 import { startServerRun } from '../../serverRun.js';
 
-const MAX_TEXT = 8000;
-
 /** Resolve a target id (harness session id ≡ conversationId for chat runs). */
 function resolveTarget(raw: string): { conversationId: string; label: string; model?: string; providerId?: string } | { error: string } {
   const target = raw.trim();
@@ -63,7 +61,7 @@ async function callSubAgent(args: Record<string, unknown>, _ctx: AgentToolContex
   const resolved = resolveTarget(str(args, 'sessionId'));
   if ('error' in resolved) return { ok: false, isError: true, errorCode: 'schema_error', text: resolved.error };
 
-  const text = str(args, 'text').trim().slice(0, MAX_TEXT);
+  const text = str(args, 'text').trim();
   if (!text) return { ok: false, isError: true, errorCode: 'schema_error', text: 'A non-empty "text" is required — it is delivered as the sub-agent\'s next user turn.' };
 
   const report = await startServerRun(resolved.conversationId, text, {

@@ -3,7 +3,7 @@
   "id": "council",
   "name": "Council Agent — Sub-Session Councils",
   "shortName": "Council",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "kind": "mod",
   "author": "Moriko",
   "description": "One conversation, many agent sessions: turns a chat into a council with a Main Session plus N Sub Sessions (one per RSA/T agent) — switchable from the TopBar dropdown, never cluttering the sidebar.",

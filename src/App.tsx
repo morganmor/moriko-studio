@@ -60,7 +60,7 @@ const LazyAddonHub = lazy(() =>
   import('./components/AddonHub').then((m) => ({ default: m.AddonHub })),
 );
 const LazyAddonDockShortcut = lazy(() =>
-  import('./components/AddonHub').then((m) => ({ default: m.AddonDockShortcut })),
+  import('./components/AddonDockPanel').then((m) => ({ default: m.AddonDockPanel })),
 );
 
 /**
@@ -1274,7 +1274,7 @@ export default function App() {
                 {rightPanelMode === 'tree' ? (
                   <LazyProjectTreePanel width={dockWidth} />
                 ) : rightPanelMode === 'addons' ? (
-                  <LazyAddonDockShortcut width={dockWidth} />
+                  <LazyAddonDockShortcut />
                 ) : rightPanelMode === 'diff' ? (
                   <LazyDiffPanel width={dockWidth} />
                 ) : (
