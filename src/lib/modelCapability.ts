@@ -1,0 +1,228 @@
+/**
+ * BROWSER MIRROR of `server/modelCapability.ts` — the same 3-layer cascade, so
+ * the UI can never claim something the server would not do.
+ *
+ * The two files must agree on the ORDER (user → provider → models.dev →
+ * default) and on the no-Math.min rule for the context window. The client tree
+ * cannot import the server tree, so the duplication is deliberate and
+ * documented, exactly like `contracts.ts` ↔ `types.ts`.
+ */
+
+import type {
+  ModelCapabilityFlags,
+  ModelCapabilitySource,
+  ModelMeta,
+  ProviderModelConfig,
+  ProviderModelHint,
+} from '../types';
+import { MODEL_CAPABILITY_FLAGS } from '../types';
+
+export interface ResolvedModelCapability extends ModelCapabilityFlags {
+  id: string;
+  context: number | null;
+  maxOut: number | null;
+  sources: Record<keyof ModelCapabilityFlags | 'context', ModelCapabilitySource>;
+  source: ModelCapabilitySource;
+  hint: ModelMeta | undefined;
+}
+
+/** Same documented defaults as the server — see UNKNOWN_MODEL_DEFAULTS there. */
+const UNKNOWN_MODEL_DEFAULTS: ModelCapabilityFlags = {
+  imageIn: false,
+  audioIn: false,
+  videoIn: false,
+  pdfIn: false,
+  tools: true,
+  reasoning: false,
+  imageOut: false,
+};
+
+const SOURCE_RANK: Record<ModelCapabilitySource, number> = {
+  user: 3,
+  provider: 2,
+  'models.dev': 1,
+  default: 0,
+};
+
+/**
+ * Resolves one model. Callers pass the model's Layer-1 row, Layer-2 row and
+ * catalogue entry; `catalogLookup` is the store's `lookupModelMeta` bound to
+ * the loaded snapshot when the caller has not resolved it yet.
+ */
+export function resolveModelCapability(
+  id: string,
+  config?: ProviderModelConfig | null,
+  hint?: ProviderModelHint | null,
+  catalogEntry?: ModelMeta | undefined,
+): ResolvedModelCapability {
+  const meta = catalogEntry;
+  const pinned = new Set<string>(config?.pinned ?? []);
+  const sources = {} as Record<keyof ModelCapabilityFlags | 'context', ModelCapabilitySource>;
+  const flags = {} as ModelCapabilityFlags;
+
+  for (const key of MODEL_CAPABILITY_FLAGS) {
+    const isPinned = pinned.has(key);
+    const layer1 = config ? config[key] : undefined;
+    const layer2 = hint ? hint[key] : undefined;
+    const layer3 = meta && typeof meta[key] === 'boolean' ? (meta[key] as boolean) : undefined;
+
+    if (isPinned && typeof layer1 === 'boolean') {
+      flags[key] = layer1;
+      sources[key] = 'user';
+    } else if (typeof layer2 === 'boolean') {
+      flags[key] = layer2;
+      sources[key] = 'provider';
+    } else if (typeof layer3 === 'boolean') {
+      flags[key] = layer3;
+      sources[key] = 'models.dev';
+    } else if (typeof layer1 === 'boolean') {
+      flags[key] = layer1;
+      sources[key] = config?.source ?? 'user';
+    } else {
+      flags[key] = UNKNOWN_MODEL_DEFAULTS[key];
+      sources[key] = 'default';
+    }
+  }
+
+  let context: number | null;
+  if (pinned.has('context') && typeof config?.context === 'number' && config.context > 0) {
+    context = config.context;
+    sources.context = 'user';
+  } else if (typeof hint?.context === 'number' && hint.context > 0) {
+    context = hint.context;
+    sources.context = 'provider';
+  } else if (typeof meta?.context === 'number' && meta.context > 0) {
+    context = meta.context;
+    sources.context = 'models.dev';
+  } else if (typeof config?.context === 'number' && config.context > 0) {
+    context = config.context;
+    sources.context = config.source;
+  } else {
+    context = null;
+    sources.context = 'default';
+  }
+
+  const maxOut =
+    (typeof config?.maxOut === 'number' && config.maxOut > 0 ? config.maxOut : null) ??
+    (typeof hint?.maxOut === 'number' && hint.maxOut > 0 ? hint.maxOut : null) ??
+    (typeof meta?.maxOut === 'number' && meta.maxOut > 0 ? meta.maxOut : null);
+
+  let strongest: ModelCapabilitySource = 'default';
+  for (const value of Object.values(sources)) {
+    if (SOURCE_RANK[value] > SOURCE_RANK[strongest]) strongest = value;
+  }
+
+  return {
+    id,
+    ...flags,
+    context,
+    maxOut,
+    sources,
+    source: strongest,
+    hint: meta,
+  };
+}
+
+/**
+ * Resolves a model that is currently SELECTED in the composer, given the whole
+ * provider list. This is the function the composer, the context chip and the
+ * compaction math all call — so the number the user sees and the number the
+ * runtime enforces come from one place.
+ */
+export function resolveForProvider(
+  providers: readonly { id: string; modelConfigs?: Record<string, ProviderModelConfig>; modelHints?: Record<string, ProviderModelHint> }[],
+  providerId: string,
+  modelId: string,
+  catalogEntry?: ModelMeta | undefined,
+): ResolvedModelCapability {
+  const provider = providers.find((entry) => entry.id === providerId);
+  return resolveModelCapability(
+    modelId,
+    provider?.modelConfigs?.[modelId],
+    provider?.modelHints?.[modelId],
+    catalogEntry,
+  );
+}
+
+/** Human-friendly token size: 1_048_576 → "1M", 148_000 → "148K". */
+export function formatContextSize(tokens: number | null): string {
+  if (tokens === null || !Number.isFinite(tokens) || tokens <= 0) return '—';
+  if (tokens >= 1_000_000) {
+    const millions = tokens / 1_000_000;
+    return `${Number.isInteger(millions) ? millions : Number(millions.toFixed(2))}M`;
+  }
+  if (tokens >= 1000) {
+    const thousands = tokens / 1000;
+    return `${Number.isInteger(thousands) ? thousands : Number(thousands.toFixed(1))}K`;
+  }
+  return String(tokens);
+}
+
+/**
+ * Parses what the user typed into a context cell: `148K`, `512k`, `1M`, `2m`,
+ * `1.5M`, `1048576`, `1,048,576`, `148.000` (id-ID). Returns null when the text
+ * is not a token count, so the caller can keep the previous value instead of
+ * writing garbage.
+ */
+export function parseContextSize(raw: string): number | null {
+  const text = raw.trim().toLowerCase().replace(/\s+/g, '');
+  if (text === '') return null;
+
+  const match = text.match(/^([0-9]+(?:[.,][0-9]+)*)([km]?)$/);
+  if (!match) return null;
+
+  const [, digits, suffix] = match;
+  // A lone separator group is a decimal comma ("1,5m"); repeated separators are
+  // thousands grouping ("1,048,576"). Decide by whether a suffix follows.
+  const normalized = suffix
+    ? digits.replace(',', '.')
+    : digits.replace(/[.,](?=[0-9]{3}(?:[.,]|$))/g, '').replace(',', '.');
+
+  let amount = Number(normalized);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  if (suffix === 'k') amount *= 1000;
+  if (suffix === 'm') amount *= 1_000_000;
+
+  const tokens = Math.round(amount);
+  if (tokens < 256) return null;
+  return Math.min(100_000_000, tokens);
+}
+
+/** The exactly-one-truth badge label for a row's provenance. */
+export function sourceLabel(source: ModelCapabilitySource): string {
+  switch (source) {
+    case 'user': return 'Manual';
+    case 'provider': return 'Provider';
+    case 'models.dev': return 'models.dev';
+    default: return 'Default';
+  }
+}
+
+/**
+ * A FRESH row for one model — what "reset to hint" produces, and what a newly
+ * added model starts as.
+ *
+ * `pinned` is EMPTY on purpose: a pre-filled row is a suggestion the layers
+ * below may still refine, not a user decision. Only an explicit edit pins.
+ */
+export function buildModelConfig(
+  id: string,
+  hint: ProviderModelHint | null | undefined,
+  catalogEntry: ModelMeta | undefined,
+): ProviderModelConfig {
+  const resolved = resolveModelCapability(id, null, hint, catalogEntry);
+  return {
+    id,
+    imageIn: resolved.imageIn,
+    audioIn: resolved.audioIn,
+    videoIn: resolved.videoIn,
+    pdfIn: resolved.pdfIn,
+    tools: resolved.tools,
+    reasoning: resolved.reasoning,
+    imageOut: resolved.imageOut,
+    context: resolved.context,
+    maxOut: resolved.maxOut,
+    source: resolved.source,
+    pinned: [],
+  };
+}

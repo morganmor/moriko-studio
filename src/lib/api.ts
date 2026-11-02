@@ -12,6 +12,9 @@ import type {
   ImageSessionItem,
   ImageSettings,
   ProviderKind,
+  ProviderModelConfig,
+  ProviderModelEntry,
+  ProviderModelHint,
   ProviderPublic,
   Reminder,
   StreamEvent,
@@ -336,6 +339,30 @@ export function openBrowserPanel(panelUrl: string): Window | null {
 
 /** Module-level handle: the named target reuses the tab, this guards refocus churn. */
 let panelWindow: Window | null = null;
+
+/**
+ * LIVE COMPACTION CONFIG — pushes the compaction settings to the server the
+ * moment they change, so a RUNNING tool loop adopts them from its next round
+ * (server/mcp/loop.ts re-reads the registry per round). Throws on failure —
+ * the caller surfaces the error; the loop keeps its request snapshot until a
+ * successful push.
+ */
+export async function pushCompactionConfig(
+  conversationId: string,
+  config: {
+    autoCompact: boolean;
+    compactThresholdTokens: number | null;
+    compactThresholdRatio: number | null;
+    maxContextTokens: number | null;
+  },
+): Promise<void> {
+  const response = await fetch('/api/compaction/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ conversationId, config }),
+  });
+  if (!response.ok) await parseError(response);
+}
 
 /**
  * WEB ACCESS KILL-SWITCH — tells the server the toggle's new value. `on: false`
@@ -870,6 +897,8 @@ export async function createProvider(input: {
   baseUrl: string;
   apiKey?: string;
   models: string[];
+  /** LAYER 1: the capability matrix as saved from the Providers dialog. */
+  modelConfigs?: Record<string, ProviderModelConfig>;
   imageAdapter?: string;
   imageConfig?: Record<string, unknown>;
 }): Promise<ProviderPublic> {
@@ -895,8 +924,20 @@ export async function deleteProvider(id: string): Promise<void> {
  */
 export async function updateBuiltInProvider(
   providerId: string,
-  patch: { apiKey?: string; addModels?: string[]; removeModels?: string[]; setModels?: string[] },
-): Promise<{ hasServerKey: boolean; userSuppliedKey: boolean; models: string[] }> {
+  patch: {
+    apiKey?: string;
+    addModels?: string[];
+    removeModels?: string[];
+    setModels?: string[];
+    /** LAYER 2 hints captured by a live fetch (merged server-side). */
+    modelHints?: Record<string, ProviderModelHint>;
+  },
+): Promise<{
+  hasServerKey: boolean;
+  userSuppliedKey: boolean;
+  models: string[];
+  modelHints?: Record<string, ProviderModelHint>;
+}> {
   const response = await fetch(
     `/api/providers/builtins/${encodeURIComponent(providerId)}/key`,
     {
@@ -910,15 +951,40 @@ export async function updateBuiltInProvider(
     hasServerKey: boolean;
     userSuppliedKey: boolean;
     models: string[];
+    modelHints?: Record<string, ProviderModelHint>;
   };
 }
 
-export async function fetchRemoteModels(providerId: string, apiKey?: string): Promise<string[]> {
+/**
+ * A model-list answer from the provider, WITH the Layer-2 metadata it published.
+ *
+ * `models` remains the flat id list (every older caller keeps working), while
+ * `entries`/`hints` carry the context window and modality flags the endpoint
+ * actually stated — the whole point of fetching from the provider instead of
+ * guessing from models.dev.
+ */
+export interface RemoteModelList {
+  models: string[];
+  entries: ProviderModelEntry[];
+  hints: Record<string, ProviderModelHint>;
+  /** Which endpoint family answered (openrouter/lmstudio/vllm/…). */
+  family?: string;
+}
+
+export async function fetchRemoteModels(
+  providerId: string,
+  apiKey?: string,
+): Promise<RemoteModelList> {
   const query = apiKey ? `?apiKey=${encodeURIComponent(apiKey)}` : '';
   const response = await fetch(`/api/providers/${encodeURIComponent(providerId)}/models${query}`);
   if (!response.ok) await parseError(response);
-  const payload = (await response.json()) as { models: string[] };
-  return payload.models;
+  const payload = (await response.json()) as Partial<RemoteModelList>;
+  return {
+    models: payload.models ?? [],
+    entries: payload.entries ?? [],
+    hints: payload.hints ?? {},
+    family: payload.family,
+  };
 }
 
 /** Draft probe: lists models from an UNSAVED provider (baseUrl + apiKey in the body). */
@@ -926,7 +992,7 @@ export async function probeRemoteModels(input: {
   baseUrl: string;
   apiKey?: string;
   kind?: ProviderKind;
-}): Promise<string[]> {
+}): Promise<RemoteModelList> {
   const response = await fetch('/api/providers/probe-models', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -937,8 +1003,37 @@ export async function probeRemoteModels(input: {
     }),
   });
   if (!response.ok) await parseError(response);
-  const payload = (await response.json()) as { models: string[] };
-  return payload.models;
+  const payload = (await response.json()) as Partial<RemoteModelList>;
+  return {
+    models: payload.models ?? [],
+    entries: payload.entries ?? [],
+    hints: payload.hints ?? {},
+    family: payload.family,
+  };
+}
+
+/**
+ * Persists one provider's LAYER-1 capability table.
+ *
+ * Deliberately its own endpoint rather than part of the provider upsert: saving
+ * the grid must not require echoing the whole definition back, so a stale
+ * client copy can never overwrite a newer label or baseUrl.
+ */
+export async function saveModelConfigs(
+  providerId: string,
+  configs: Record<string, ProviderModelConfig>,
+): Promise<Record<string, ProviderModelConfig>> {
+  const response = await fetch(
+    `/api/providers/${encodeURIComponent(providerId)}/model-configs`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ configs }),
+    },
+  );
+  if (!response.ok) await parseError(response);
+  const payload = (await response.json()) as { modelConfigs?: Record<string, ProviderModelConfig> };
+  return payload.modelConfigs ?? {};
 }
 
 
@@ -1728,6 +1823,7 @@ export type SteerFailure = { id: null; reason: 'not_streaming' | 'error'; detail
 export type SteerClientPart =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string } }
+  | { type: 'video_url'; video_url: { url: string } }
   | { type: 'file'; file: { filename: string; file_data: string } };
 
 /**

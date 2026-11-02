@@ -17,6 +17,7 @@ import type {
   ImageSession,
   ImageSessionItem,
   ImageSizeMode,
+  LiveContextTelemetry,
   ModelMeta,
   ProviderPublic,
   Todo,
@@ -31,9 +32,11 @@ import type {
 } from '../types';
 import { transitionAppearance } from '../lib/appearance';
 import { clearLegacyConversations, readLegacyConversations, storage, uid } from '../lib/storage';
-import { stripReasoning } from '../lib/compaction';
+import { abortCompaction, reasoningFootprint, stripReasoning } from '../lib/compaction';
+import { lookupModelMeta } from '../lib/modelMeta';
+import { resolveForProvider, type ResolvedModelCapability } from '../lib/modelCapability';
 import { setWebAccessRemote } from '../lib/api';
-import { isGhostTurn } from '../lib/turns';
+import { isGhostTurn, withSegmentIds } from '../lib/turns';
 import {
   beaconSyncConversations,
   fetchConversationDetail,
@@ -64,7 +67,6 @@ export const DEFAULT_SETTINGS: ChatSettings = {
   summarizerEnabled: false,
   summarizerProviderId: null,
   summarizerModel: null,
-  imageOffload: true,
   enforcement: { level: 0, mode: 'manual', message: '' },
   probation: { enabled: false },
 };
@@ -170,6 +172,18 @@ interface AppState {
 
   view: ViewId;
   sidebarCollapsed: boolean;
+  /**
+   * REASONING DISCLOSURE, per `turnId:segmentId`.
+   *
+   * Deliberately NOT component state: a reasoning strip lives inside a list
+   * that grows while it streams, and local `useState` was lost on every
+   * remount — the panel snapped shut while the user was reading it. Absent
+   * means "follow the policy" (open while the block streams, open after an
+   * aborted/errored run, closed once a healthy run settles); an explicit
+   * boolean is the user's own choice and outranks the policy forever.
+   */
+  reasoningOpen: Record<string, boolean>;
+  setReasoningOpen: (key: string, open: boolean) => void;
   /** Left rail width in px (drag-resizable, device-persisted). */
   sidebarWidth: number;
   /** Right configuration panel width in px (drag-resizable, device-persisted). */
@@ -238,6 +252,17 @@ interface AppState {
    * persisted: a reload forgets it the way it forgets a live socket.
    */
   compactingId: string | null;
+  /**
+   * LIVE CONTEXT TELEMETRY per conversation — the SERVER GUARD's own numbers,
+   * streamed every tool round (`context_telemetry`). This is the figure the
+   * ContextChip shows while a run streams, so the number on screen and the
+   * number the guard acts on are literally the same value.
+   *
+   * Cleared when a run settles: after that the static estimate is the honest
+   * source again (the guard's figure described an in-flight request).
+   * Transient, never persisted.
+   */
+  liveContext: Record<string, LiveContextTelemetry>;
   /**
    * Runs the user STOPPED in this tab, until the server confirms they are
    * gone. The sidebar badge is the union of `genRunning` and the registry's
@@ -521,6 +546,31 @@ interface AppState {
   /** Marks the start/end of a compaction — see `compactingId`. */
   setCompacting: (id: string | null) => void;
   /**
+   * Records the guard's latest telemetry for a conversation.
+   *
+   * NOTE: this is only ever called with `null` when the conversation's turns
+   * are edited by the user — a run ending does NOT erase the measurement (see
+   * `settleLiveContext`). The provider's last `promptTokens + completionTokens`
+   * is the real size of the conversation, not an estimate, so it stays on
+   * screen while the model is idle.
+   */
+  setLiveContext: (conversationId: string, telemetry: LiveContextTelemetry | null) => void;
+  /**
+   * RUN SETTLED — keep the provider's real measurement, drop only the
+   * in-flight part.
+   *
+   * `addedTokens` described tool output that had not been re-sent yet; once the
+   * run ends it is no longer pending, so it is zeroed and `liveContextTokens`
+   * becomes `promptTokens + completionTokens` — the actual size of the
+   * conversation as the provider last counted it.
+   *
+   * `tokens` overrides the figure outright, which is what compaction needs:
+   * the checkpoint replaced the covered turns, so the live number must collapse
+   * to the summarised size immediately instead of waiting for a round that may
+   * never come.
+   */
+  settleLiveContext: (conversationId: string, tokens?: number) => void;
+  /**
    * Records (or clears) an interrupted agent run for a conversation — the
    * thread header shows a Resume banner while one is set.
    */
@@ -576,7 +626,7 @@ function healFrozenImageSegments(turns: Turn[]): Turn[] {
  * wins (patches/upserts carry the newest paint), order is preserved.
  */
 function dedupeTurns(turns: Turn[]): Turn[] {
-  turns = healFrozenImageSegments(turns);
+  turns = healFrozenImageSegments(turns).map(withSegmentIds);
   const seen = new Set<string>();
   let dirty = false;
   for (const turn of turns) {
@@ -1365,6 +1415,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   view: storage.loadView(),
   sidebarCollapsed: storage.loadSidebarCollapsed(),
+  reasoningOpen: {},
   sidebarWidth: storage.loadSidebarWidth(),
   settingsWidth: storage.loadSettingsWidth(),
   settingsOpen:
@@ -1395,6 +1446,7 @@ export const useStore = create<AppState>((set, get) => ({
   genRunning: storage.loadGenRunning(),
   genStartedAt: storage.loadGenStartedAt(),
   compactingId: null,
+  liveContext: {},
   stoppedRuns: {},
   pendingSteers: {},
   crashedRuns: {},
@@ -2152,6 +2204,11 @@ export const useStore = create<AppState>((set, get) => ({
     get().executeDeleteConversation(id);
   },
   executeDeleteConversation: (id) => {
+    // A compaction running for the deleted conversation dies with it.
+    if (get().compactingId === id) {
+      abortCompaction(id);
+      set({ compactingId: null });
+    }
     pendingDeletions.add(id);
     const deleted = get().conversations.find((conversation) => conversation.id === id);
     const councilId = deleted?.councilId;
@@ -2232,6 +2289,16 @@ export const useStore = create<AppState>((set, get) => ({
     const conversation = get().conversations.find((entry) => entry.id === conversationId);
     if (!conversation) return;
     const drop = new Set(turnIds);
+    // DELETING THE LIVE COMPACTION CARD — cut its summarizer stream and drop
+    // the lock instantly; the card must never commit a checkpoint over its
+    // own grave.
+    const droppingLiveCompaction =
+      get().compactingId === conversationId &&
+      conversation.turns.some((turn) => drop.has(turn.id) && turn.kind === 'compaction');
+    if (droppingLiveCompaction) {
+      abortCompaction(conversationId);
+      set({ compactingId: null });
+    }
     const turns = conversation.turns.filter((turn) => !drop.has(turn.id));
     if (turns.length === conversation.turns.length) return;
     markTurnsTombstone([...drop]);
@@ -2248,6 +2315,10 @@ export const useStore = create<AppState>((set, get) => ({
     // regenerate bug). syncedJson is cleared so the FIRST non-generating
     syncedTurnCount.set(conversationId, turns.length);
     syncedJson.delete(conversationId);
+    // The user removed turns, so the provider's last measured size no longer
+    // describes this conversation — this is the ONLY place a run's measurement
+    // is discarded (a run merely ENDING keeps it; see settleLiveContext).
+    get().setLiveContext(conversationId, null);
   },
 
   branchFromTurn: (conversationId, turnId) => {
@@ -2282,6 +2353,11 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   clearAllConversations: () => {
+    const compacting = get().compactingId;
+    if (compacting) {
+      abortCompaction(compacting);
+      set({ compactingId: null });
+    }
     for (const conversation of get().conversations) pendingDeletions.add(conversation.id);
     set({ conversations: [], activeId: null });
     persist([]);
@@ -2423,6 +2499,8 @@ export const useStore = create<AppState>((set, get) => ({
   trimReasoning: (conversationId) => {
     const conversation = get().conversations.find((entry) => entry.id === conversationId);
     if (!conversation) return 0;
+    // Measured BEFORE the strip: the reasoning tokens that leave the wire.
+    const removedTokens = reasoningFootprint(conversation).tokens;
     const { turns, trimmed } = stripReasoning(conversation.turns);
     if (trimmed === 0) return 0;
     const next = get().conversations.map((entry) =>
@@ -2430,6 +2508,41 @@ export const useStore = create<AppState>((set, get) => ({
     );
     set({ conversations: next });
     persist(next);
+    /**
+     * The provider's last measurement stays authoritative — it is simply
+     * reduced by what was just removed. Dropping the telemetry here would snap
+     * the chip back to the local estimate, which is the number the user already
+     * knows is wrong. `promptTokens` shrinks too: reasoning rode inside the
+     * prompt, so both figures describe the same subtraction.
+     */
+    const live = get().liveContext[conversationId];
+    if (live && removedTokens > 0) {
+      const nextTokens = Math.max(0, live.liveContextTokens - removedTokens);
+      // The trim is the USER's sanctioned reduction: the Reasoning bucket
+      // shrinks by exactly what left the wire, so the rows and the total
+      // describe the same subtraction.
+      const buckets = live.buckets
+        ? {
+            ...live.buckets,
+            reasoningTokens: Math.max(0, live.buckets.reasoningTokens - removedTokens),
+            totalTokens: Math.max(
+              0,
+              live.buckets.totalTokens - removedTokens,
+            ),
+          }
+        : undefined;
+      get().setLiveContext(conversationId, {
+        ...live,
+        promptTokens: Math.max(0, live.promptTokens - removedTokens),
+        liveContextTokens: nextTokens,
+        buckets,
+        ratio: live.contextLimit ? nextTokens / live.contextLimit : null,
+        // The offset belongs to the snapshot, not the content: the estimate
+        // shrinks by the trimmed reasoning, so the frozen gap stays valid.
+        gap: live.gap ?? 0,
+        at: Date.now(),
+      });
+    }
     return trimmed;
   },
 
@@ -2504,6 +2617,8 @@ export const useStore = create<AppState>((set, get) => ({
     set({ sidebarCollapsed });
     storage.saveSidebarCollapsed(sidebarCollapsed);
   },
+  setReasoningOpen: (key, open) =>
+    set((state) => ({ reasoningOpen: { ...state.reasoningOpen, [key]: open } })),
   setSidebarWidth: (width) => set({ sidebarWidth: width }),
   setSettingsWidth: (width) => set({ settingsWidth: width }),
   /** Drag-release persistence: the store set is cheap per-move; the DEVICE
@@ -2630,6 +2745,55 @@ export const useStore = create<AppState>((set, get) => ({
     set((state) => ({ noticeHistoryExpanded: !state.noticeHistoryExpanded })),
   clearNoticeHistory: () => set({ noticeHistory: [], noticeHistoryExpanded: false }),
   setCompacting: (id) => set({ compactingId: id }),
+  setLiveContext: (conversationId, telemetry) =>
+    set((state) => {
+      const next = { ...state.liveContext };
+      if (telemetry) next[conversationId] = telemetry;
+      else delete next[conversationId];
+      return { liveContext: next };
+    }),
+  settleLiveContext: (conversationId, tokens) =>
+    set((state) => {
+      const current = state.liveContext[conversationId];
+      if (!current) return {};
+      const settled =
+        typeof tokens === 'number'
+          ? tokens
+          : Math.max(0, current.promptTokens + current.completionTokens);
+      // SCALE the stored buckets proportionally so the five rows and the
+      // settled total stay one figure. Compaction (the `tokens` override) is
+      // the ONLY sanctioned reduction; a plain settle keeps the buckets as-is.
+      let buckets = current.buckets;
+      const bucketTotal = buckets?.totalTokens ?? 0;
+      if (typeof tokens === 'number' && bucketTotal > settled && buckets) {
+        const scale = settled / bucketTotal;
+        buckets = {
+          systemTokens: Math.round(buckets.systemTokens * scale),
+          toolsTokens: Math.round(buckets.toolsTokens * scale),
+          inputTokens: Math.round(buckets.inputTokens * scale),
+          outputTokens: Math.round(buckets.outputTokens * scale),
+          reasoningTokens: Math.round(buckets.reasoningTokens * scale),
+          totalTokens: settled,
+        };
+      }
+      return {
+        liveContext: {
+          ...state.liveContext,
+          [conversationId]: {
+            ...current,
+            addedTokens: 0,
+            // A tokens OVERRIDE means compaction recalibrated the figure — the
+            // frozen billing gap described a wire that no longer exists, so it
+            // resets to zero instead of inflating the settled total.
+            gap: typeof tokens === 'number' ? 0 : current.gap,
+            buckets,
+            liveContextTokens: settled,
+            ratio: current.contextLimit ? settled / current.contextLimit : null,
+            at: Date.now(),
+          },
+        },
+      };
+    }),
   setGenRunning: (id, running) => {
     const next = { ...useStore.getState().genRunning };
     if (running) {
@@ -2660,7 +2824,15 @@ export const useStore = create<AppState>((set, get) => ({
           {
             id,
             text: parts
-              .map((part) => (part.type === 'text' ? part.text : part.type === 'image_url' ? '[image attached]' : `[file attached: ${part.file.filename}]`))
+              .map((part) =>
+                part.type === 'text'
+                  ? part.text
+                  : part.type === 'image_url'
+                    ? '[image attached]'
+                    : part.type === 'video_url'
+                      ? '[video attached]'
+                      : `[file attached: ${part.file.filename}]`,
+              )
               .filter((line) => line.trim().length > 0)
               .join('\n\n'),
             parts,
@@ -2700,6 +2872,39 @@ export const useStore = create<AppState>((set, get) => ({
     return agentWorkspaces.find((workspace) => workspace.id === activeAgentWorkspaceId);
   },
 }));
+
+/**
+ * THE ONE WAY A CALLER ASKS WHAT A MODEL CAN DO — bound to this store.
+ *
+ * Every consumer (composer, context chip, compaction triggers, settings panel)
+ * calls this so no two of them can disagree about a model's context window or
+ * input modalities. It is a plain read over the already-loaded provider list
+ * and metadata map: no I/O, no cache to invalidate, and therefore no stale
+ * capability snapshot after the user saves the Providers table.
+ *
+ * `providerId` falls back to the ACTIVE provider when omitted, which is the
+ * right answer for the composer and for anything reading the live conversation.
+ * Defined AFTER `useStore` on purpose — the store must exist before this is
+ * ever called.
+ */
+export function resolveCapability(
+  providerId: string | undefined,
+  modelId: string | undefined,
+): ResolvedModelCapability | undefined {
+  if (!modelId) return undefined;
+  const state = useStore.getState();
+  const catalogEntry =
+    Object.keys(state.modelMeta).length > 0
+      ? lookupModelMeta(state.modelMeta, modelId)
+      : undefined;
+  return resolveForProvider(
+    state.providers,
+    providerId || state.providerId,
+    modelId,
+    catalogEntry,
+  );
+}
+
 
 /**
  * Settings for the composer.

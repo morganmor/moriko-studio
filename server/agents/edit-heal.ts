@@ -176,16 +176,65 @@ interface DelimScan {
 
 const CLOSER_OF: Record<string, string> = { '}': '{', ')': '(', ']': '[' };
 
+const REGEX_PREFIX_KEYWORDS = new Set([
+  'return', 'throw', 'case', 'typeof', 'void', 'delete',
+  'in', 'of', 'instanceof', 'new', 'yield', 'await', 'else', 'do',
+]);
+
+const COND_PAREN_KEYWORDS = new Set(['if', 'while', 'for', 'with', 'catch']);
+
 /**
- * Delimiter scanner — ignores strings, template literals (including their
- * `${…}` interpolations) and both comment forms.
+ * Consume `/pattern/flags` on a single line when valid; returns the index
+ * immediately past the trailing flags, or -1 when `/` is not a RegExp literal.
+ */
+function consumeRegexLiteral(text: string, slashIndex: number): number {
+  let j = slashIndex + 1;
+  if (j >= text.length || text[j] === '\n' || text[j] === '\r' || text[j] === '/' || text[j] === '*') {
+    return -1;
+  }
+  let inClass = false;
+  while (j < text.length) {
+    const c = text[j];
+    if (c === '\n' || c === '\r') return -1;
+    if (c === '\\') {
+      if (j + 1 >= text.length || text[j + 1] === '\n' || text[j + 1] === '\r') return -1;
+      j += 2;
+      continue;
+    }
+    if (c === '[') {
+      inClass = true;
+      j += 1;
+      continue;
+    }
+    if (c === ']' && inClass) {
+      inClass = false;
+      j += 1;
+      continue;
+    }
+    if (c === '/' && !inClass) {
+      j += 1;
+      while (j < text.length && /[dgimsuvy]/.test(text[j])) j += 1;
+      return j;
+    }
+    j += 1;
+  }
+  return -1;
+}
+
+/**
+ * Delimiter scanner — ignores strings, RegExp literals (including `[...]`
+ * character classes and escapes), template literals (including nested `${…}`
+ * interpolations) and both comment forms.
  */
 function scanDelimiters(text: string): DelimScan {
-  const stack: Array<{ ch: string; line: number }> = [];
+  const stack: Array<{ ch: string; line: number; afterCond?: boolean }> = [];
   const extra: Array<{ ch: string; line: number }> = [];
+  const templateStackLengths: number[] = [];
   let line = 1;
   let i = 0;
   let mode: 'code' | 'line' | 'block' | 'single' | 'double' | 'template' = 'code';
+  let canStartRegex = true;
+  let lastWord = '';
 
   while (i < text.length) {
     const ch = text[i];
@@ -212,28 +261,47 @@ function scanDelimiters(text: string): DelimScan {
     }
     if (mode === 'single' || mode === 'double') {
       if (ch === '\\') {
+        if (next === '\n') line += 1;
+        else if (next === '\r' && text[i + 2] === '\n') {
+          line += 1;
+          i += 3;
+          continue;
+        }
         i += 2;
         continue;
       }
-      if ((mode === 'single' && ch === "'") || (mode === 'double' && ch === '"')) mode = 'code';
+      if ((mode === 'single' && ch === "'") || (mode === 'double' && ch === '"')) {
+        mode = 'code';
+        canStartRegex = false;
+        lastWord = '';
+      }
       i += 1;
       continue;
     }
     if (mode === 'template') {
       if (ch === '\\') {
+        if (next === '\n') line += 1;
+        else if (next === '\r' && text[i + 2] === '\n') {
+          line += 1;
+          i += 3;
+          continue;
+        }
         i += 2;
         continue;
       }
       if (ch === '`') {
         mode = 'code';
+        canStartRegex = false;
+        lastWord = '';
         i += 1;
         continue;
       }
       if (ch === '$' && next === '{') {
-        // Push a SENTINEL. Only a `}` that finds this on top ends the
-        // interpolation, so nested braces inside ${…} stay balanced.
+        templateStackLengths.push(stack.length);
         stack.push({ ch: '${', line });
         mode = 'code';
+        canStartRegex = true;
+        lastWord = '';
         i += 2;
         continue;
       }
@@ -241,6 +309,10 @@ function scanDelimiters(text: string): DelimScan {
       continue;
     }
 
+    if (/\s/.test(ch)) {
+      i += 1;
+      continue;
+    }
     if (ch === '/' && next === '/') {
       mode = 'line';
       i += 2;
@@ -250,6 +322,15 @@ function scanDelimiters(text: string): DelimScan {
       mode = 'block';
       i += 2;
       continue;
+    }
+    if (ch === '/' && canStartRegex) {
+      const regexEnd = consumeRegexLiteral(text, i);
+      if (regexEnd !== -1) {
+        canStartRegex = false;
+        lastWord = '';
+        i = regexEnd;
+        continue;
+      }
     }
     if (ch === "'") {
       mode = 'single';
@@ -267,24 +348,62 @@ function scanDelimiters(text: string): DelimScan {
       continue;
     }
     if (ch === '{' || ch === '(' || ch === '[') {
-      stack.push({ ch, line });
+      const afterCond = ch === '(' && COND_PAREN_KEYWORDS.has(lastWord);
+      stack.push({ ch, line, afterCond });
+      canStartRegex = true;
+      lastWord = '';
       i += 1;
       continue;
     }
     if (ch === '}' || ch === ')' || ch === ']') {
       const top = stack[stack.length - 1];
-      if (ch === '}' && top && top.ch === '${') {
-        // End of a ${…} interpolation: the template body resumes.
+      const tplBase = templateStackLengths[templateStackLengths.length - 1];
+      if (ch === '}' && tplBase !== undefined && stack[tplBase]?.ch === '${' && stack.length - 1 === tplBase) {
+        templateStackLengths.pop();
         stack.pop();
         mode = 'template';
+        canStartRegex = false;
       } else if (top && top.ch === CLOSER_OF[ch]) {
-        stack.pop();
+        const popped = stack.pop();
+        canStartRegex = ch === '}' || Boolean(popped?.afterCond);
       } else {
         extra.push({ ch, line });
+        canStartRegex = false;
       }
+      lastWord = '';
       i += 1;
       continue;
     }
+    if (/[A-Za-z_$]/.test(ch)) {
+      let end = i + 1;
+      while (end < text.length && /[A-Za-z0-9_$]/.test(text[end])) end += 1;
+      const word = text.slice(i, end);
+      canStartRegex = REGEX_PREFIX_KEYWORDS.has(word);
+      lastWord = word;
+      i = end;
+      continue;
+    }
+    if (/[0-9]/.test(ch)) {
+      let end = i + 1;
+      while (end < text.length && /[A-Za-z0-9_.]/.test(text[end])) end += 1;
+      canStartRegex = false;
+      lastWord = '';
+      i = end;
+      continue;
+    }
+    if ((ch === '+' && next === '+') || (ch === '-' && next === '-')) {
+      canStartRegex = false;
+      lastWord = '';
+      i += 2;
+      continue;
+    }
+    if (ch === '!' && next !== '=') {
+      lastWord = '';
+      i += 1;
+      continue;
+    }
+    canStartRegex = ',;:?=+-*%&|^~<>'.includes(ch);
+    lastWord = '';
     i += 1;
   }
 
@@ -504,14 +623,39 @@ export function healEditedContent(before: string, after: string, absolute: strin
   }
 
   lines = healDuplicates(beforeLines, lines, repairs);
+  const ext = path.extname(absolute).toLowerCase();
+  const afterDupContent =
+    repairs.length > 0 ? lines.join(eol) + (hadTrailingNewline ? eol : '') : after;
+
+  // For TS/JS/JSX/TSX code files: if the TypeScript AST parser already parses
+  // the candidate with 0 syntax errors, the delimiters are provably balanced —
+  // NEVER mutate lines with `healDelimiters` and NEVER emit false-positive
+  // `unclosed` / `unmatched` delimiter warnings.
+  if (CODE_EXTENSIONS.has(ext)) {
+    const preAnalysis = analyzeCode(absolute, afterDupContent);
+    if (preAnalysis.syntax.length === 0) {
+      warnings.push(...preAnalysis.redecl);
+      return {
+        content: afterDupContent,
+        changed: repairs.length > 0,
+        repairs,
+        warnings,
+      };
+    }
+  }
+
+  const delimWarnings: string[] = [];
   const window = changedWindow(beforeLines, lines);
-  lines = healDelimiters(before, lines, window, repairs, warnings);
+  lines = healDelimiters(before, lines, window, repairs, delimWarnings);
 
   const content = lines.join(eol) + (hadTrailingNewline ? eol : '');
   const changed = repairs.length > 0;
   const finalContent = changed ? content : after;
 
   const analysis = analyzeCode(absolute, finalContent);
+  if (!CODE_EXTENSIONS.has(ext) || analysis.syntax.length > 0) {
+    warnings.push(...delimWarnings);
+  }
   warnings.push(...analysis.syntax, ...analysis.redecl);
 
   return { content: finalContent, changed, repairs, warnings };

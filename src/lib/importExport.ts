@@ -93,7 +93,6 @@ function sanitizeSettings(value: unknown): ChatSettings {
       typeof raw.summarizerModel === 'string' && raw.summarizerModel.trim()
         ? raw.summarizerModel.trim()
         : null,
-    imageOffload: asBoolean(raw.imageOffload, DEFAULT_SETTINGS.imageOffload),
     enforcement: {
       level:
         typeof raw.enforcement?.level === 'number' && raw.enforcement.level >= 0 && raw.enforcement.level <= 5
@@ -151,9 +150,20 @@ function sanitizeSegments(value: unknown): TurnSegment[] | undefined {
   for (const entry of value) {
     if (!entry || typeof entry !== 'object') continue;
     const raw = entry as Partial<TurnSegment>;
-    if (raw.type === 'text' || raw.type === 'reasoning') {
+    if (raw.type === 'text') {
       const text = asString((raw as { text?: unknown }).text);
-      if (text) out.push({ type: raw.type, text });
+      if (text) out.push({ id: asString((raw as { id?: unknown }).id) || `imported_text_${out.length}`, type: 'text', text });
+    } else if (raw.type === 'reasoning') {
+      const text = asString((raw as { text?: unknown }).text);
+      if (text) {
+        out.push({
+          id: asString((raw as { id?: unknown }).id) || `imported_reasoning_${out.length}`,
+          type: 'reasoning',
+          text,
+          // An imported transcript is history: nothing is still streaming.
+          status: 'done',
+        });
+      }
     } else if (raw.type === 'steer') {
       const steer = raw as Partial<Extract<TurnSegment, { type: 'steer' }>>;
       const text = asString(steer.text);
@@ -204,6 +214,7 @@ function sanitizeSegments(value: unknown): TurnSegment[] | undefined {
         typeof visual.id === 'string' &&
         (typeof visual.html === 'string' || (visual.htmlRef !== null && typeof visual.htmlRef === 'object' && typeof (visual.htmlRef as { hash?: unknown }).hash === 'string'));
       out.push({
+        id: asString((tool as { id?: unknown }).id) || `imported_tool_${out.length}`,
         type: 'tool',
         serverName: asString(tool.serverName, '?'),
         toolName: asString(tool.toolName, '?'),

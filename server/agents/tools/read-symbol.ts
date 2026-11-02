@@ -153,7 +153,7 @@ async function readSymbolTool(args: Record<string, unknown>, ctx: AgentToolConte
 export const readSymbolSpec = defineTool({
   def: {
     wireName: 'agent__read_symbol',
-    description: 'Read exactly one symbol\'s line range (AST for TS/JS, fold fallback); returns a read receipt and sha256 hash.',
+    description: 'Read exactly one named symbol\'s line range (AST for TS/JS, fold fallback) with sha256 + edit read receipt (no prior fold needed; signatureOnly omits body and does not grant an edit receipt).',
     inputSchema: {
       type: 'object',
       properties: {

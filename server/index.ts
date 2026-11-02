@@ -12,6 +12,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 
 import { streamAnthropic } from './adapters/anthropic.js';
 import { streamGemini } from './adapters/gemini.js';
+import { streamMistral } from './adapters/mistral.js';
 import { streamOpenAiCompatible } from './adapters/openai.js';
 import { agentRouter } from './agents/routes.js';
 import { attachBrowserPanelWs } from './agents/browser/ws.js';
@@ -30,6 +31,7 @@ import { loadAllAddons, startAddonWatcher } from './addons/loader.js';
 import { publishBusEvent } from './addons/bus.js';
 import { aggregateUsage, dailyUsage, USAGE_WINDOWS } from './usageLedger.js';
 import { listReminders, renderReminder, takeDueReminders } from './reminders/store.js';
+import { clearLiveCompactionConfig, setLiveCompactionConfig } from './compactionLiveConfig.js';
 import { asyncRoute, HttpError } from './http.js';
 import { guardedJsonParser } from './bodyParsers.js';
 import { subscribeTree } from './agents/treeIndex.js';
@@ -60,6 +62,7 @@ import { augmentWithWebContent } from './webFetch.js';
 import { appendDeviceContext } from './deviceContext.js';
 import { collectAttachmentInputs, persistAttachments } from './attachments.js';
 import {
+  capWireImages,
   putBytes,
   readStoredWithMime,
   resolveWireRefs,
@@ -112,7 +115,13 @@ import {
   findBuiltIn,
   isProviderKind,
 } from './providers.js';
-import { allModelMetadata, lookupModelMetadata, minLimit } from './modelMetadata.js';
+import { allModelMetadata, lookupModelMetadata } from './modelMetadata.js';
+import {
+  hintsFromListing,
+  probeProviderModels,
+} from './providerModels.js';
+import { resolveModelCapability, type ResolvedModelCapability } from './modelCapability.js';
+import { MODEL_CAPABILITY_FLAGS, PINNABLE_FIELDS, type ProviderModelConfig, type ProviderModelHint } from './contracts.js';
 import { UpstreamError, type StreamHandler, type StreamParams } from './sse.js';
 import { isLivenessTimeout, isAbortLike, STREAM_IDLE_MS } from './liveness.js';
 import { isSteerable, pushSteer, registerSteerSession, unregisterSteerSession, type SteerEntry, type SteerPart } from './steer.js';
@@ -148,7 +157,19 @@ app.use(
     origin: allowedOrigins.length > 0 ? allowedOrigins : true,
   }),
 );
-app.use(compression());
+app.use(
+  compression({
+    /** SSE MUST NOT be compressed: zlib holds small tool_call/tool_result
+     *  frames in its buffer and the client sees a batch dump after tens of
+     *  seconds of dead air instead of a live per-event feed. Every
+     *  event-stream route (chat, resume, addons bus, tree) bypasses here. */
+    filter: (req, res) => {
+      const type = res.getHeader('Content-Type');
+      if (typeof type === 'string' && type.includes('text/event-stream')) return false;
+      return compression.filter(req, res);
+    },
+  }),
+);
 app.use(guardedJsonParser());
 
 
@@ -192,6 +213,8 @@ async function listProviders(): Promise<ProviderPublic[]> {
       kind: provider.kind,
       baseUrl: provider.baseUrl,
       models: provider.models,
+      modelConfigs: provider.modelConfigs,
+      modelHints: provider.modelHints,
       hasServerKey: Boolean(await store.getKey(provider.id)),
       userSuppliedKey: Boolean(await store.getKey(provider.id)),
       builtIn: false,
@@ -213,12 +236,16 @@ async function listProviders(): Promise<ProviderPublic[]> {
         const storedKey = await store.getBuiltInKey(definition.id);
         const userModels = await store.getBuiltInModels(definition.id);
         const liveModels = await store.getBuiltInLiveModels(definition.id);
+        const modelConfigs = await store.getBuiltInModelConfigs(definition.id);
+        const modelHints = await store.getBuiltInModelHints(definition.id);
         const catalogue = liveModels.length > 0
           ? [...liveModels, ...userModels]
           : [...resolved.models, ...userModels];
         return {
           ...resolved,
           models: catalogue,
+          modelConfigs: Object.keys(modelConfigs).length > 0 ? modelConfigs : undefined,
+          modelHints: Object.keys(modelHints).length > 0 ? modelHints : undefined,
           hasServerKey: Boolean(envKey) || Boolean(storedKey) || resolved.hasServerKey,
           userSuppliedKey: !envKey && Boolean(storedKey),
           imageCapabilities: imageCapabilitiesOrNull(
@@ -231,6 +258,43 @@ async function listProviders(): Promise<ProviderPublic[]> {
     )),
     ...customPublic,
   ];
+}
+
+/**
+ * Resolves ONE model through the 3-layer cascade for this server's own paths.
+ *
+ * This is the async bridge between the pure resolver and the provider store:
+ * it looks up the model's Layer-1 row and Layer-2 hints wherever the provider
+ * lives (custom record vs built-in map) and hands them to the cascade. Called
+ * per request rather than cached — the store is already an in-memory cache, and
+ * a process-wide capability snapshot would go stale the moment the user saves
+ * the table, which is exactly the class of bug this change removes.
+ */
+async function resolveCapabilityFor(
+  providerId: string,
+  modelId: string,
+): Promise<ResolvedModelCapability> {
+  const builtIn = findBuiltIn(providerId);
+  if (builtIn) {
+    const [configs, hints] = await Promise.all([
+      store.getBuiltInModelConfigs(providerId),
+      store.getBuiltInModelHints(providerId),
+    ]);
+    return resolveModelCapability(
+      modelId,
+      configs[modelId],
+      hints[modelId],
+      lookupModelMetadata(modelId),
+    );
+  }
+
+  const custom = await store.get(providerId);
+  return resolveModelCapability(
+    modelId,
+    custom?.modelConfigs?.[modelId],
+    custom?.modelHints?.[modelId],
+    lookupModelMetadata(modelId),
+  );
 }
 
 /**
@@ -275,7 +339,7 @@ app.post(
     if (!input?.label?.trim()) throw new HttpError(400, 'A provider label is required.');
     if (!input?.baseUrl?.trim()) throw new HttpError(400, 'A base URL is required.');
     if (!isProviderKind(input.kind)) {
-      throw new HttpError(400, 'Provider kind must be "openai", "gemini", or "anthropic".');
+      throw new HttpError(400, 'Provider kind must be "openai", "gemini", "anthropic", or "mistral".');
     }
     if (input.id && findBuiltIn(input.id)) {
       throw new HttpError(400, `"${input.id}" is a built-in provider id. Choose another id.`);
@@ -288,6 +352,8 @@ app.post(
       baseUrl: input.baseUrl.trim().replace(/\/+$/, ''),
       apiKey: input.apiKey === undefined ? undefined : input.apiKey.trim(),
       models: (input.models ?? []).map((model) => model.trim()).filter(Boolean),
+      // An OMITTED table keeps the stored one — see ProviderStore.upsert.
+      modelConfigs: input.modelConfigs,
       imageAdapter: input.imageAdapter?.trim() || undefined,
       imageConfig: input.imageConfig,
     });
@@ -299,6 +365,8 @@ app.post(
         kind: saved.kind,
         baseUrl: saved.baseUrl,
         models: saved.models,
+        modelConfigs: saved.modelConfigs,
+        modelHints: saved.modelHints,
         hasServerKey: Boolean(await store.getKey(saved.id)),
         userSuppliedKey: Boolean(await store.getKey(saved.id)),
         builtIn: false,
@@ -343,6 +411,8 @@ app.put(
       removeModels?: string[];
       /** Full replacement list — a live fetch from the provider's own API. */
       setModels?: string[];
+      /** LAYER 2 hints captured by that fetch (merged, never destructive). */
+      modelHints?: Record<string, ProviderModelHint>;
     };
 
     if (typeof input?.apiKey === 'string') {
@@ -354,6 +424,9 @@ app.put(
     }
     if (Array.isArray(input?.setModels)) {
       await store.setBuiltInLiveModels(builtIn.id, input.setModels);
+    }
+    if (input?.modelHints && typeof input.modelHints === 'object') {
+      await store.mergeBuiltInModelHints(builtIn.id, input.modelHints);
     }
     let userModels = await store.getBuiltInModels(builtIn.id);
     if (Array.isArray(input?.addModels)) {
@@ -380,6 +453,7 @@ app.put(
         : [...builtIn.models, ...userModels],
       userModels,
       liveModels,
+      modelHints: await store.getBuiltInModelHints(builtIn.id),
     });
   }),
 );
@@ -417,6 +491,99 @@ async function isComfyui(baseUrl: string): Promise<boolean> {
   } catch { return false; }
 }
 
+/**
+ * A model-list answer: the bare ids older clients read, PLUS the Layer-2
+ * metadata this endpoint actually published. `models` stays first-class so
+ * every existing caller keeps working unchanged.
+ */
+function modelListPayload(probe: Awaited<ReturnType<typeof probeProviderModels>>) {
+  const textModels = probe.entries.map((entry) => entry.id);
+  return {
+    models: [...new Set([...textModels, ...probe.imageModels])],
+    entries: probe.entries,
+    hints: hintsFromListing(probe),
+    family: probe.family,
+  };
+}
+
+/**
+ * Validates one submitted Layer-1 table against the stored one.
+ *
+ * The PIN SET is what makes the table authoritative: a field the client marks
+ * as pinned is written verbatim, and a field it does not mark keeps whatever
+ * was pinned before. That way a client which only knows a few columns (or a
+ * future one which knows more) can never silently UNPIN a user's decision.
+ */
+function sanitizeConfigSubmission(
+  submitted: Record<string, unknown>,
+  existing: Record<string, ProviderModelConfig>,
+  hints: Record<string, ProviderModelHint>,
+): Record<string, ProviderModelConfig> {
+  const next: Record<string, ProviderModelConfig> = {};
+  for (const [id, raw] of Object.entries(submitted)) {
+    const row = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : null;
+    if (!row) continue;
+
+    const previous = existing[id];
+    const incomingPinned = Array.isArray(row.pinned)
+      ? row.pinned.filter((value): value is string => typeof value === 'string')
+      : [];
+    // UNION with the stored pins: dropping a pin must be an explicit act (the
+    // client sends the full pinned array it wants), never an omission.
+    const pinned = [...new Set([...(previous?.pinned ?? []), ...incomingPinned])]
+      .filter((field) => PINNABLE_FIELDS.has(field)) as ProviderModelConfig['pinned'];
+
+    const flags: Record<string, boolean> = {};
+    for (const field of MODEL_CAPABILITY_FLAGS) {
+      flags[field] = row[field] === true;
+    }
+
+    const context =
+      typeof row.context === 'number' && Number.isFinite(row.context) && row.context > 0
+        ? Math.round(row.context)
+        : null;
+
+    // Re-resolve so a stored row always agrees with its own provenance: fields
+    // the user did not pin fall back to Layer 2/3 rather than freezing a stale
+    // snapshot of an earlier fetch.
+    const resolved = resolveModelCapability(
+      id,
+      {
+        id,
+        imageIn: flags.imageIn,
+        audioIn: flags.audioIn,
+        videoIn: flags.videoIn,
+        pdfIn: flags.pdfIn,
+        tools: flags.tools,
+        reasoning: flags.reasoning,
+        imageOut: flags.imageOut,
+        context,
+        maxOut: null,
+        source: 'user',
+        pinned,
+      },
+      hints[id],
+      lookupModelMetadata(id),
+    );
+
+    next[id] = {
+      id,
+      imageIn: resolved.imageIn,
+      audioIn: resolved.audioIn,
+      videoIn: resolved.videoIn,
+      pdfIn: resolved.pdfIn,
+      tools: resolved.tools,
+      reasoning: resolved.reasoning,
+      imageOut: resolved.imageOut,
+      context: resolved.context,
+      maxOut: resolved.maxOut,
+      source: resolved.source,
+      pinned,
+    };
+  }
+  return next;
+}
+
 /** Proxies a model list so the UI can populate pickers from the provider itself. */
 app.get(
   '/api/providers/:id/models',
@@ -424,55 +591,31 @@ app.get(
     const credentials = await resolveCredentials(req.params.id);
     const base = credentials.baseUrl.replace(/\/+$/, '');
 
-    if (credentials.kind === 'gemini') {
-      const response = await fetch(`${base}/models?pageSize=200`, {
-        headers: credentials.apiKey ? { 'x-goog-api-key': credentials.apiKey } : {},
-      });
-      if (!response.ok) throw new HttpError(response.status, 'Gemini rejected the model list request.');
-      const payload = (await response.json()) as { models?: Array<{ name?: string }> };
-      res.json({
-        models: (payload.models ?? [])
-          .map((model) => model.name?.replace(/^models\//, '') ?? '')
-          .filter(Boolean),
-      });
-      return;
-    }
-
-    if (credentials.kind === 'anthropic') {
-      const response = await fetch(`${base}/models`, {
-        headers: credentials.apiKey
-          ? { 'x-api-key': credentials.apiKey, 'anthropic-version': '2023-06-01' }
-          : { 'anthropic-version': '2023-06-01' },
-      });
-      if (!response.ok) throw new HttpError(response.status, 'Anthropic rejected the model list request.');
-      const payload = (await response.json()) as { data?: Array<{ id?: string }> };
-      res.json({ models: (payload.data ?? []).map((model) => model.id ?? '').filter(Boolean) });
-      return;
-    }
-
+    // ComfyUI speaks a workflow API, not a chat API — its model ids are
+    // checkpoint filenames and carry no capability metadata at all.
     if (await isComfyui(base)) {
-      const comfyuiModels = await probeComfyuiModels(base);
-      res.json({ models: comfyuiModels });
+      res.json({ models: await probeComfyuiModels(base), entries: [], hints: {}, family: 'opaque' });
       return;
     }
 
-    const headers: Record<string, string> = credentials.apiKey ? { Authorization: `Bearer ${credentials.apiKey}` } : {};
-    const response = await fetch(`${base}/models`, { headers });
-    if (!response.ok) throw new HttpError(response.status, 'The provider rejected the model list request.');
-    const payload = (await response.json()) as { data?: Array<{ id?: string }> };
-    const textModels = (payload.data ?? []).map((model) => model.id ?? '').filter(Boolean);
+    const probe = await probeProviderModels({
+      baseUrl: base,
+      apiKey: credentials.apiKey,
+      kind: credentials.kind,
+    });
 
-    let imageModels: string[] = [];
-    try {
-      const imgRes = await fetch(`${base}/image-models`, { headers });
-      if (imgRes.ok) {
-        const imgPayload = (await imgRes.json()) as { data?: Array<{ id?: string }> };
-        imageModels = (imgPayload.data ?? []).map((m) => m.id ?? '').filter(Boolean);
-      }
-    } catch {  }
+    // LAYER 2 PERSISTENCE: a fetch is the moment the provider states what it
+    // supports, so the hints are stored instead of discarded. Merged, never
+    // replacing — an endpoint that stops publishing a field must not erase the
+    // evidence an earlier fetch already captured.
+    const hints = hintsFromListing(probe);
+    if (Object.keys(hints).length > 0) {
+      const builtIn = findBuiltIn(req.params.id);
+      if (builtIn) await store.mergeBuiltInModelHints(builtIn.id, hints);
+      else await store.mergeModelHints(req.params.id, hints);
+    }
 
-    const merged = [...new Set([...textModels, ...imageModels])];
-    res.json({ models: merged });
+    res.json(modelListPayload(probe));
   }),
 );
 
@@ -490,59 +633,68 @@ app.post(
     }
     const baseUrl = (body.baseUrl as string).replace(/\/+$/, '');
     const apiKey = typeof body.apiKey === 'string' ? body.apiKey : '';
-    const kind = body.kind === 'gemini' ? 'gemini' : body.kind === 'anthropic' ? 'anthropic' : 'openai';
-
-    if (kind === 'gemini') {
-      const response = await fetch(`${baseUrl}/models?pageSize=200`, {
-        headers: apiKey ? { 'x-goog-api-key': apiKey } : {},
-      });
-      if (!response.ok) throw new HttpError(response.status, 'Gemini rejected the model list request.');
-      const payload = (await response.json()) as { models?: Array<{ name?: string }> };
-      res.json({
-        models: (payload.models ?? [])
-          .map((model) => model.name?.replace(/^models\//, '') ?? '')
-          .filter(Boolean),
-      });
-      return;
-    }
-
-    if (kind === 'anthropic') {
-      const response = await fetch(`${baseUrl}/models`, {
-        headers: apiKey
-          ? { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }
-          : { 'anthropic-version': '2023-06-01' },
-      });
-      if (!response.ok) throw new HttpError(response.status, 'Anthropic rejected the model list request.');
-      const payload = (await response.json()) as { data?: Array<{ id?: string }> };
-      res.json({ models: (payload.data ?? []).map((model) => model.id ?? '').filter(Boolean) });
-      return;
-    }
+    const kind: ProviderKind =
+      body.kind === 'gemini'
+        ? 'gemini'
+        : body.kind === 'anthropic'
+          ? 'anthropic'
+          : body.kind === 'mistral'
+            ? 'mistral'
+            : 'openai';
 
     if (await isComfyui(baseUrl)) {
-      const comfyuiModels = await probeComfyuiModels(baseUrl);
-      res.json({ models: comfyuiModels });
+      res.json({ models: await probeComfyuiModels(baseUrl), entries: [], hints: {}, family: 'opaque' });
       return;
     }
 
-    const headers: Record<string, string> = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
-    const response = await fetch(`${baseUrl}/models`, { headers });
-    if (!response.ok) throw new HttpError(response.status, 'The provider rejected the model list request.');
-    const payload = (await response.json()) as { data?: Array<{ id?: string }> };
-    const textModels = (payload.data ?? []).map((model) => model.id ?? '').filter(Boolean);
-
-    let imageModels: string[] = [];
-    try {
-      const imgRes = await fetch(`${baseUrl}/image-models`, { headers });
-      if (imgRes.ok) {
-        const imgPayload = (await imgRes.json()) as { data?: Array<{ id?: string }> };
-        imageModels = (imgPayload.data ?? []).map((m) => m.id ?? '').filter(Boolean);
-      }
-    } catch {  }
-
-    const merged = [...new Set([...textModels, ...imageModels])];
-    res.json({ models: merged });
+    const probe = await probeProviderModels({ baseUrl, apiKey, kind });
+    res.json(modelListPayload(probe));
   }),
 );
+
+/**
+ * Saves the LAYER-1 capability table for one provider (custom or built-in).
+ *
+ * Separate from the provider upsert because saving the grid must not require
+ * echoing the whole definition back: a stale client copy would otherwise
+ * overwrite a newer label or baseUrl. The server re-resolves every row through
+ * the cascade before persisting, so a row can never be stored disagreeing with
+ * the fields it claims.
+ */
+app.put(
+  '/api/providers/:id/model-configs',
+  asyncRoute(async (req, res) => {
+    const providerId = req.params.id;
+    const body = req.body as { configs?: unknown };
+    const raw = body?.configs;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new HttpError(400, 'A "configs" object keyed by model id is required.');
+    }
+
+    const builtIn = findBuiltIn(providerId);
+    const custom = builtIn ? undefined : await store.get(providerId);
+    if (!builtIn && !custom) throw new HttpError(404, `Unknown provider "${providerId}".`);
+
+    const existing = builtIn
+      ? await store.getBuiltInModelConfigs(providerId)
+      : (custom?.modelConfigs ?? {});
+    const hints = builtIn
+      ? await store.getBuiltInModelHints(providerId)
+      : (custom?.modelHints ?? {});
+
+    const configs = sanitizeConfigSubmission(
+      raw as Record<string, unknown>,
+      existing,
+      hints,
+    );
+
+    if (builtIn) await store.setBuiltInModelConfigs(providerId, configs);
+    else await store.setModelConfigs(providerId, configs);
+
+    res.json({ ok: true, modelConfigs: configs });
+  }),
+);
+
 
 /**
  * Streaming chat endpoint.
@@ -616,6 +768,10 @@ app.post(
     const { browserManager } = await import('./agents/browser/manager.js');
     if (settings.webAccess === true) await browserManager.setWebAccess(true);
     resolveWireRefs(body.messages);
+    // HARD PROVIDER CAP — gateways reject the whole request past 8 images
+    // ("At most 8 image(s) may be provided in one prompt"). Age out the OLDEST
+    // media on the wire copy; the user's thread keeps every picture.
+    capWireImages(body.messages);
     const messages = appendDeviceContext(await augmentWithWebContent(body.messages ?? [], fetchEnabled));
 
     const controller = new AbortController();
@@ -635,6 +791,10 @@ app.post(
     res.flushHeaders?.();
 
     const sessionId = typeof body.conversationId === 'string' ? body.conversationId : null;
+    // A NEW run starts: the request body's settings snapshot is the fresh
+    // authority — drop any live-config entry a PREVIOUS run left behind, so a
+    // stale value can never override the newer snapshot inside the guard.
+    if (sessionId) clearLiveCompactionConfig(sessionId);
 
     const registrySessionId = steerSessionId ?? undefined;
     if (registrySessionId) {
@@ -735,6 +895,13 @@ app.post(
       }
     }
 
+    /**
+     * THE CAPABILITY CASCADE, resolved ONCE for this run. Every consumer below
+     * (system injections, adapters, tool loop) reads this same object, so the
+     * prompt, the wire and the budget cannot disagree about what the model is.
+     */
+    const capability = await resolveCapabilityFor(body.providerId, body.model);
+
     const harnessSessionId = typeof body.harness?.sessionId === 'string' ? body.harness.sessionId : undefined;
     const harnessContextId =
       typeof body.harness?.contextId === 'string' && body.harness.contextId.trim()
@@ -768,6 +935,7 @@ app.post(
         typeof body.operatorDirective === 'string' && body.operatorDirective.trim()
           ? body.operatorDirective
           : undefined,
+        capability,
       );
       for (const injection of fresh) {
         send({
@@ -813,6 +981,7 @@ app.post(
         ? attachmentsInjection(
             attachmentPaths,
             typeof body.model === 'string' ? body.model : undefined,
+            capability,
           )
         : null;
       if (attachments) {
@@ -889,12 +1058,28 @@ app.post(
       harnessInjections,
       sessionId: harnessSessionId,
       attachmentPaths: attachmentPaths.length > 0 ? attachmentPaths : undefined,
-      contextLimit: minLimit(
-        lookupModelMetadata(body.model)?.context ?? null,
-        typeof settings.maxContextTokens === 'number' && settings.maxContextTokens > 0
-          ? settings.maxContextTokens
-          : null,
-      ),
+      // THE MODEL'S WINDOW, AS THE USER DEFINED IT. No catalogue fallback:
+      // `capability.context` is the resolved Layer-1 value. The user's own
+      // "Lower context limit" cap is applied LIVE inside the guard (read from
+      // the compaction-config registry every round) — user against user, and
+      // a mid-run change reaches a running loop instead of dying here.
+      contextLimit: capability.context,
+      // THE GUARD FIRES AT THE USER'S THRESHOLD. Passing the Configuration
+      // values keeps the server handoff and the client's own trigger on the
+      // same number — a constant here forced a compaction the client would
+      // re-check against a different ratio and refuse. `conversationId` keys
+      // the LIVE registry: the guard re-reads it every round.
+      compactGuard: {
+        conversationId: sessionId ?? undefined,
+        autoCompact: settings.autoCompact !== false,
+        compactThresholdTokens:
+          typeof settings.compactThresholdTokens === 'number' && settings.compactThresholdTokens > 0
+            ? settings.compactThresholdTokens
+            : null,
+        compactThresholdRatio:
+          typeof settings.compactThresholdRatio === 'number' ? settings.compactThresholdRatio : 0.95,
+      },
+      capability,
     };
 
     let failed = false;
@@ -906,6 +1091,9 @@ app.post(
             break;
           case 'anthropic':
             await streamAnthropic(params, send);
+            break;
+          case 'mistral':
+            await streamMistral(params, send);
             break;
           default:
             await streamOpenAiCompatible(params, send);
@@ -972,6 +1160,41 @@ app.post(
  * is still streaming, tagged with its conversation. Clients poll it every
  * few seconds and merge it with their local state (union).
  */
+/**
+ * LIVE COMPACTION CONFIG — the client pushes the Configuration panel's
+ * compaction settings the moment they change; the running tool loop re-reads
+ * them every round (server/mcp/loop.ts), so a mid-run change applies
+ * immediately instead of at the next request.
+ */
+app.post(
+  '/api/compaction/config',
+  (req, res) => {
+    const body = req.body as { conversationId?: unknown; config?: Record<string, unknown> };
+    const conversationId = typeof body?.conversationId === 'string' ? body.conversationId.trim() : '';
+    const config = body?.config;
+    if (!conversationId || !config || typeof config !== 'object') {
+      res.status(400).json({ error: 'conversationId and config are required.' });
+      return;
+    }
+    setLiveCompactionConfig(conversationId, {
+      autoCompact: config.autoCompact !== false,
+      compactThresholdTokens:
+        typeof config.compactThresholdTokens === 'number' && config.compactThresholdTokens > 0
+          ? config.compactThresholdTokens
+          : null,
+      compactThresholdRatio:
+        typeof config.compactThresholdRatio === 'number' && Number.isFinite(config.compactThresholdRatio)
+          ? config.compactThresholdRatio
+          : null,
+      maxContextTokens:
+        typeof config.maxContextTokens === 'number' && config.maxContextTokens > 0
+          ? config.maxContextTokens
+          : null,
+    });
+    res.json({ ok: true });
+  },
+);
+
 app.get(
   '/api/chat/live',
   (_req, res) => {
@@ -1071,11 +1294,13 @@ app.post(
       parts = [];
       for (const raw of body.parts.slice(0, 12)) {
         if (!raw || typeof raw !== 'object') continue;
-        const part = raw as { type?: unknown; text?: unknown; image_url?: { url?: unknown }; file?: { filename?: unknown; file_data?: unknown } };
+        const part = raw as { type?: unknown; text?: unknown; image_url?: { url?: unknown }; video_url?: { url?: unknown }; file?: { filename?: unknown; file_data?: unknown } };
         if (part.type === 'text' && typeof part.text === 'string' && part.text.trim()) {
           parts.push({ type: 'text', text: part.text });
         } else if (part.type === 'image_url' && typeof part.image_url?.url === 'string' && part.image_url.url) {
           parts.push({ type: 'image_url', image_url: { url: part.image_url.url } });
+        } else if (part.type === 'video_url' && typeof part.video_url?.url === 'string' && part.video_url.url) {
+          parts.push({ type: 'video_url', video_url: { url: part.video_url.url } });
         } else if (
           part.type === 'file' &&
           typeof part.file?.filename === 'string' &&

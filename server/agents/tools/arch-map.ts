@@ -37,7 +37,7 @@ async function archMapTool(args: Record<string, unknown>, ctx: AgentToolContext)
 export const archMapSpec = defineTool({
   def: {
     wireName: 'agent__arch_map',
-    description: 'Module-level architecture map: fan-in/out, instability, cycle detection; format text|mermaid.',
+    description: 'Module-level architecture map (fan-in/out, instability, cycle detection; format text|mermaid). Run before creating >3 new files or a new module, and respect .moriko/architecture.json when present.',
     inputSchema: {
       type: 'object',
       properties: {

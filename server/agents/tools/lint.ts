@@ -191,14 +191,14 @@ async function lintTool(args: Record<string, unknown>, ctx: AgentToolContext): P
     if (fileIssues.length > 20) lines.push(`  … and ${fileIssues.length - 20} more`);
   }
   lines.push('');
-  lines.push('Next: fix the top issues; re-run agent__lint, or agent__verify quick at the end.');
+  lines.push('Next: fix the top issues, then re-run agent__lint.');
   return { ok: false, isError: true, text: truncateOutput(lines.join('\n')) };
 }
 
 export const lintSpec = defineTool({
   def: {
     wireName: 'agent__lint',
-    description: 'Run the project\'s own linter (biome/eslint/oxlint/ruff) when configured; fix:true rewrites (vault-snapshotted).',
+    description: 'Run the project\'s configured linter (biome/eslint/oxlint/ruff — never installs one); fix:true rewrites with vault snapshots. Run ONLY when explicitly requested by the user.',
     inputSchema: {
       type: 'object',
       properties: {

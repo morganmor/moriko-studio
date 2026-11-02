@@ -45,6 +45,11 @@ interface PatchFile {
   hunks: PatchHunk[];
 }
 
+export interface ParsedPatchResult {
+  files: PatchFile[];
+  errors: string[];
+}
+
 /** Normalize all whitespace runs so reformatting does not fail a context match. */
 function squashWhitespace(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
@@ -58,10 +63,11 @@ function whitespaceEquivalent(expected: string, actual: string): boolean {
   return squashWhitespace(expected) === squashWhitespace(actual) && squashWhitespace(expected) !== '';
 }
 
-/** Parse a unified diff (git-style) into structured patch files. */
-export function parsePatch(patchText: string): PatchFile[] {
+/** Parse a unified diff (git-style) into structured patch files and explicit syntax errors. */
+export function parsePatch(patchText: string): ParsedPatchResult {
   const files: PatchFile[] = [];
-  const lines = patchText.split('\n');
+  const errors: string[] = [];
+  const lines = patchText.replace(/\r\n/g, '\n').split('\n');
   let i = 0;
 
   /** `diff --git a/x b/x` is the authoritative path; fall back to ---/+++. */
@@ -83,21 +89,55 @@ export function parsePatch(patchText: string): PatchFile[] {
       while (i < lines.length && !lines[i].startsWith('--- ') && !lines[i].startsWith('diff --git')) i += 1;
       if (i >= lines.length || !lines[i].startsWith('--- ')) continue;
     } else if (!lines[i].startsWith('--- ')) {
+      if (lines[i].startsWith('@@')) {
+        errors.push(`Orphan hunk header at patch line ${i + 1} ("${lines[i].trim()}") outside any --- / +++ file block.`);
+      }
       i += 1;
       continue;
     }
 
+    const oldHeaderLine = i + 1;
     const oldPath = lines[i].slice(4).trim();
     i += 1;
-    if (i >= lines.length || !lines[i].startsWith('+++ ')) break;
+    if (i >= lines.length || !lines[i].startsWith('+++ ')) {
+      errors.push(`Missing "+++ <path>" header after "--- ${oldPath}" at patch line ${oldHeaderLine}.`);
+      break;
+    }
     const newPath = lines[i].slice(4).trim();
+    const targetLabel = gitNew ?? stripPrefix(newPath || oldPath);
     i += 1;
 
     const hunks: PatchHunk[] = [];
-    while (i < lines.length && lines[i].startsWith('@@')) {
+    while (
+      i < lines.length &&
+      !lines[i].startsWith('--- ') &&
+      !lines[i].startsWith('diff --git ')
+    ) {
+      if (!lines[i].startsWith('@@')) {
+        if (lines[i].trim() !== '') {
+          errors.push(
+            `${targetLabel}: unexpected line ${i + 1} ("${lines[i].slice(0, 60)}") outside a hunk — ` +
+              `every hunk must start with unified diff coordinates "@@ -start,count +start,count @@".`,
+          );
+        }
+        i += 1;
+        continue;
+      }
       const match = lines[i].match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
       if (!match) {
+        errors.push(
+          `${targetLabel}: invalid hunk header at patch line ${i + 1} ("${lines[i].trim()}") — ` +
+            `bare "@@" is not supported; provide unified diff line numbers "@@ -oldStart,oldLines +newStart,newLines @@".`,
+        );
         i += 1;
+        while (
+          i < lines.length &&
+          !lines[i].startsWith('@@') &&
+          !lines[i].startsWith('--- ') &&
+          !lines[i].startsWith('diff --git ')
+        ) {
+          i += 1;
+        }
         continue;
       }
       const hunk: PatchHunk = {
@@ -122,7 +162,15 @@ export function parsePatch(patchText: string): PatchFile[] {
         }
         i += 1;
       }
-      hunks.push(hunk);
+      if (hunk.lines.length === 0) {
+        errors.push(`${targetLabel}: hunk @@ -${hunk.oldStart},${hunk.oldLines} has an empty body.`);
+      } else {
+        hunks.push(hunk);
+      }
+    }
+
+    if (hunks.length === 0 && errors.length === 0) {
+      errors.push(`${targetLabel}: file header present but 0 hunks found.`);
     }
     files.push({
       oldPath: gitOld ?? stripPrefix(oldPath),
@@ -130,7 +178,7 @@ export function parsePatch(patchText: string): PatchFile[] {
       hunks,
     });
   }
-  return files;
+  return { files, errors };
 }
 
 export class PatchMismatch extends Error {
@@ -232,9 +280,24 @@ export async function applyPatchTool(args: Record<string, unknown>, ctx: AgentTo
     return { ok: false, isError: true, text: 'apply_patch needs a "patch" (unified diff text).' };
   }
 
-  const files = parsePatch(patchText);
-  if (files.length === 0) {
-    return { ok: false, isError: true, text: 'No valid diff headers (--- / +++ or diff --git) found in the patch.' };
+  const { files, errors: parseErrors } = parsePatch(patchText);
+  if (parseErrors.length > 0) {
+    return {
+      ok: false,
+      isError: true,
+      errorCode: 'malformed_patch',
+      text:
+        `Patch REJECTED — malformed unified diff (no files were written):\n  • ` +
+        parseErrors.join('\n  • '),
+    };
+  }
+  if (files.length === 0 || files.some((f) => f.hunks.length === 0)) {
+    return {
+      ok: false,
+      isError: true,
+      errorCode: 'empty_patch',
+      text: 'No valid diff headers or hunks (--- / +++ followed by @@ -start,count +start,count @@) found in the patch.',
+    };
   }
 
   const ws = getActiveWorkspace(ctx.sessionId);

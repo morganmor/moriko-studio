@@ -28,6 +28,9 @@
     --c-accent-soft:color-mix(in srgb, rgb(var(--c-accent)) 14%, #fff);--c-rail-dot:140 146 158;
     --c-todo-high:220 38 38;--c-todo-medium:217 119 6;--c-todo-low:22 163 74;
     --c-notify-bg:255 255 255;--c-notify-ink:30 24 20;--c-notify-line:232 226 220;
+    --c-mcap-head:252 250 248;--c-mcap-row:255 255 255;--c-mcap-line:232 226 220;
+    --c-mcap-pin:190 40 10;--c-mcap-badge-ink:30 24 20;
+    --c-ctx-s5:124 58 237;
   }
 
   .dark,.scope-dark{
@@ -39,6 +42,9 @@
     --c-accent-soft:color-mix(in srgb, rgb(var(--c-accent)) 22%, rgb(var(--c-canvas)));--c-rail-dot:64 68 78;
     --c-todo-high:248 113 113;--c-todo-medium:251 191 36;--c-todo-low:74 222 128;
     --c-notify-bg:30 30 30;--c-notify-ink:236 236 236;--c-notify-line:44 44 44;
+    --c-mcap-head:26 26 26;--c-mcap-row:21 21 21;--c-mcap-line:44 44 44;
+    --c-mcap-pin:255 236 200;--c-mcap-badge-ink:236 236 236;
+    --c-ctx-s5:167 139 250;
   }
 
   .mocha,.scope-mocha{
@@ -48,6 +54,9 @@
     --c-accent-soft:color-mix(in srgb, rgb(var(--c-accent)) 26%, rgb(var(--c-canvas)));--c-rail-dot:82 70 62;
     --c-todo-high:248 113 113;--c-todo-medium:251 191 36;--c-todo-low:74 222 128;
     --c-notify-bg:44 36 32;--c-notify-ink:242 234 228;--c-notify-line:64 52 46;
+    --c-mcap-head:38 31 28;--c-mcap-row:33 27 24;--c-mcap-line:64 52 46;
+    --c-mcap-pin:242 234 228;--c-mcap-badge-ink:242 234 228;
+    --c-ctx-s5:155 135 245;
   }
 
   /* swatch toggle (settings preview) */
@@ -771,6 +780,10 @@ mark{background:rgb(var(--c-accent)/.25);color:inherit;border-radius:3px;padding
 .modal.open .mpanel{transform:none}
 .mpanel.sm{width:min(440px,100%)}
 .mpanel.wide{width:min(768px,100%)}
+/* Extra-wide panel for two-pane editors whose right side carries a full table
+   (Providers → Models matrix). Sized so a 240px list + the ~700px capability
+   grid both fit with no horizontal scroll at 1280px and up. */
+.mpanel.xl{width:min(96vw,1120px)}
 #m-palette{align-items:flex-start;padding-top:12vh}
 .mh{display:flex;align-items:center;gap:8px;padding:14px 14px 10px 18px;border-bottom:1px solid var(--line)}
 .mh h3{flex:1;margin:0;font-size:16px}
@@ -870,7 +883,7 @@ mark{background:rgb(var(--c-accent)/.25);color:inherit;border-radius:3px;padding
 .cbar2{position:relative;display:flex;height:8px;border-radius:5px;background:rgb(var(--c-ink)/.08);overflow:hidden;margin-bottom:12px}
 .cbar2 i{display:block;height:100%}
 .cbar2 .mk{position:absolute;top:0;bottom:0;width:2px;background:rgb(var(--c-warn))}
-.s1{background:rgb(var(--c-accent))}.s2{background:rgb(var(--c-accent)/.6)}.s3{background:rgb(var(--c-ok))}.s4{background:rgb(var(--c-warn))}
+.s1{background:rgb(var(--c-accent))}.s2{background:rgb(var(--c-accent)/.6)}.s3{background:rgb(var(--c-ok))}.s4{background:rgb(var(--c-warn))}.s5{background:rgb(var(--c-ctx-s5))}
 .crow2{display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:12.5px}
 .crow2 .dot{width:8px;height:8px;border-radius:3px}
 .crow2 span{flex:1;color:var(--muted)}
@@ -1369,6 +1382,11 @@ code{font-family:var(--f-mono)}
   transition:border-color .2s}
 .cp-card::before{content:"";position:absolute;inset:0 auto 0 0;width:3px;
   background:linear-gradient(180deg,rgb(var(--c-accent)),transparent 85%)}
+/* LIVE COMPACTION — border indicator while the model writes the summary. */
+.cp-card[data-live]{border-color:rgb(var(--c-accent)/.65);
+  box-shadow:0 0 0 1px rgb(var(--c-accent)/.22),0 0 18px rgb(var(--c-accent)/.16);
+  animation:cp-live 1.6s ease-in-out infinite}
+@keyframes cp-live{0%,100%{border-color:rgb(var(--c-accent)/.4)}50%{border-color:rgb(var(--c-accent)/.8)}}
 .cp-wrap:hover .cp-card,.cp-wrap[data-open="true"] .cp-card{border-color:var(--line-strong)}
 
 .cp-head{display:flex;align-items:stretch}
@@ -1859,6 +1877,12 @@ code{font-family:var(--f-mono)}
 .call.s-err .cn { color: rgb(var(--c-danger)); }
 .call.steer > .ic { color: rgb(var(--c-accent)); }
 .call.steer .tg { color: rgb(var(--c-ink)); font-family: var(--f); }
+.call .sz { flex: none; font-variant-numeric: tabular-nums; font-size: 10.5px; color: rgb(var(--c-ink) / 0.42); }
+
+/* PENDING TOOL STUB — a call whose name is known and whose arguments are still
+   arriving. Deliberately a plain .call row: no size, no container. */
+.call.pending .cn { color: rgb(var(--c-ink) / 0.82); }
+
 .call .spin { width: 11px; height: 11px; }
 .call .st-e,
 .call .st-w { width: 14px; height: 14px; }
@@ -2783,6 +2807,11 @@ kbd {
 .tip-fill{min-width:0;flex:1}
 .md\:grid2col{display:grid;grid-template-columns:minmax(0,1fr)}
 @media (min-width:768px){.md\:grid2col{grid-template-columns:240px minmax(0,1fr)}}
+/* Providers editor: keep the catalogue list compact (240px) so the detail pane
+   inherits the rest of the xl panel — room for the capability matrix columns
+   without any horizontal scroll. */
+.providers-grid{display:grid;grid-template-columns:minmax(0,1fr)}
+@media (min-width:900px){.providers-grid{grid-template-columns:236px minmax(0,1fr)}}
 .prov-side{border-right:1px solid var(--line);min-width:0}
 .prov-pane{min-width:0}
 @media (max-width:680px){
@@ -2809,6 +2838,83 @@ kbd {
 .att-chip .att-s{color:var(--faint);flex:none}
 .att-chip button{width:18px;height:18px;display:grid;place-items:center;border-radius:5px;color:var(--faint)}
 .att-chip button:hover{background:rgb(var(--c-ink)/.08);color:rgb(var(--c-ink))}
+/* ── capability matrix (Providers → Models) ───────────────────────────────
+   Sticky header + sticky model column, theme-tokenised so it reads in light,
+   dark and mocha. Only what inline styles cannot express lives here. */
+.mcap{display:flex;flex-direction:column;gap:8px;margin-top:8px;min-width:0}
+.mcap-bar{display:flex;align-items:center;gap:8px;min-width:0}
+.mcap-search{display:flex;align-items:center;gap:6px;flex:1;min-width:0;height:28px;padding:0 8px;border-radius:8px;border:1px solid rgb(var(--c-mcap-line));background:rgb(var(--c-field))}
+.mcap-search .ic{width:13px;height:13px;color:var(--faint);flex:none}
+.mcap-search input{flex:1;min-width:0;background:transparent;border:0;outline:0;color:rgb(var(--c-ink));font-size:12px}
+.mcap-search input::placeholder{color:var(--faint)}
+.mcap-count{flex:none;font-size:10.5px;color:var(--faint);font-variant-numeric:tabular-nums}
+.mcap-scroll{overflow-x:auto;overflow-y:auto;border:1px solid rgb(var(--c-mcap-line));border-radius:10px;background:rgb(var(--c-mcap-row));overscroll-behavior:contain}
+/* No scrollbar at all on desktop: the columns sum to ~718px and the right pane
+   is ~840px at the xl panel width. The auto axis only engages on narrow
+   viewports, where scrolling beats clipping the flag columns away. */
+
+/* Fixed layout: every column has a declared width, so the name column can never
+   grow and push the flag columns out of view. */
+.mcap-table{width:100%;min-width:746px;table-layout:fixed;border-collapse:separate;border-spacing:0;font-size:11.5px}
+.mcap-table thead th{position:sticky;top:0;z-index:2;background:rgb(var(--c-mcap-head));border-bottom:1px solid rgb(var(--c-mcap-line));padding-block:10px;padding-inline:4px;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:0;color:var(--faint);white-space:nowrap;text-align:center;overflow:hidden}
+.mcap-table thead th.mcap-name-h{text-align:left;left:0;z-index:3;width:210px}
+/* The table is fixed-layout, so the widths below are authoritative:
+   210 + 6×62 + 96 + 68 = 746px — the name column wraps instead of stretching
+   the row, and the flags never leave the viewport. */
+.mcap-table thead th.mcap-flag-h{width:62px}
+.mcap-table thead th.mcap-ctx-h{width:96px}
+.mcap-table thead th.mcap-act-h{width:68px}
+.mcap-table tbody th,.mcap-table tbody td{padding-block:12px;padding-inline:6px;border-bottom:1px solid rgb(var(--c-mcap-line));vertical-align:middle}
+/* Breathing room at both walls of the table: the first cell never touches the
+   left border, the last never touches the right one. */
+.mcap-table th:first-child,.mcap-table td:first-child{padding-left:18px}
+.mcap-table th:last-child,.mcap-table td:last-child{padding-right:16px}
+.mcap-table tbody tr:last-child th,.mcap-table tbody tr:last-child td{border-bottom:0}
+.mcap-table tbody tr:hover th,.mcap-table tbody tr:hover td{background:rgb(var(--c-ink)/.03)}
+
+/* NAME CELL — wraps to as many lines as the id needs. This is what keeps the
+   flag columns on screen: a long slug folds downward instead of stretching
+   rightward. No ellipsis, no nowrap, no clipped overflow (clipped overflow was
+   what painted the id underneath the neighbouring sticky cell, reading as
+   doubled/ghosted text). */
+.mcap-name{position:sticky;left:0;z-index:1;background:rgb(var(--c-mcap-row));text-align:left;width:210px;white-space:normal;overflow:visible}
+.mcap-table tbody tr:hover .mcap-name{background:color-mix(in srgb,rgb(var(--c-ink)) 3%,rgb(var(--c-mcap-row)))}
+.mcap-id{display:block;font-family:var(--f-mono);font-size:10.5px;line-height:1.35;color:rgb(var(--c-ink));white-space:normal;overflow-wrap:anywhere;word-break:break-word;text-overflow:clip;overflow:visible}
+.mcap-badges{display:inline-flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:nowrap;max-width:100%}
+/* The <Tip> anchor is `inline-flex` (max-content) by design; inside a fixed-width
+   cell that width is meaningless and the text spills over the neighbouring
+   column. Contain it to the cell so the id stays where it belongs. */
+.mcap-name [data-tip-anchor]{display:block;width:100%;max-width:100%;min-width:0}
+.mcap-badge{display:inline-flex;align-items:center;height:14px;padding:0 5px;border-radius:999px;font-size:9px;font-weight:600;letter-spacing:.02em;white-space:nowrap;background:rgb(var(--c-ink)/.08);color:rgb(var(--c-mcap-badge-ink))}
+.mcap-badge.src-user{background:rgb(var(--c-mcap-pin)/.16);color:rgb(var(--c-mcap-pin))}
+.mcap-badge.src-provider{background:rgb(var(--c-ok)/.16);color:rgb(var(--c-ok))}
+.mcap-badge.src-models-dev{background:rgb(var(--c-ink)/.08);color:var(--muted)}
+.mcap-badge.src-default{background:transparent;border:1px dashed rgb(var(--c-mcap-line));color:var(--faint)}
+.mcap-badge.ghost{background:transparent;color:var(--faint);font-weight:500}
+.mcap-flag{text-align:center;padding-left:0;padding-right:0}
+.mcap-check{appearance:none;width:14px;height:14px;border-radius:4px;border:1.5px solid rgb(var(--c-mcap-line));background:rgb(var(--c-field));cursor:pointer;display:inline-grid;place-content:center;margin:0;transition:background .12s,border-color .12s}
+.mcap-check:hover:not(:disabled){border-color:rgb(var(--c-accent)/.7)}
+.mcap-check:checked{background:rgb(var(--c-accent));border-color:rgb(var(--c-accent))}
+.mcap-check:checked::after{content:'';width:8px;height:8px;background:rgb(var(--c-accent-ink));clip-path:polygon(14% 46%,0 62%,40% 100%,100% 20%,86% 6%,38% 66%)}
+.mcap-check:disabled{cursor:not-allowed;opacity:.5}
+.mcap-check:focus-visible{outline:2px solid rgb(var(--c-accent)/.5);outline-offset:1px}
+.mcap-ctx{padding-left:4px;padding-right:4px}
+.mcap-ctx-input{width:100%;max-width:88px;height:24px;padding:0 5px;border-radius:6px;border:1px solid rgb(var(--c-mcap-line));background:rgb(var(--c-field));color:rgb(var(--c-ink));font-family:var(--f-mono);font-size:10.5px;text-align:right;font-variant-numeric:tabular-nums}
+.mcap-ctx-input::placeholder{color:var(--faint);text-align:center}
+.mcap-ctx-input:focus{outline:0;border-color:rgb(var(--c-accent)/.7)}
+.mcap-ctx-input.pinned{border-color:rgb(var(--c-mcap-pin)/.55);color:rgb(var(--c-mcap-pin))}
+.mcap-act{white-space:nowrap;text-align:right}
+/* Fixed-layout tables break if a <td> becomes a flex container, so the action
+   buttons get their own flex row inside the cell instead. */
+.mcap-act-inner{display:flex;align-items:center;justify-content:flex-end;gap:6px}
+.mcap-icon-btn{width:20px;height:20px;display:inline-grid;place-items:center;border-radius:6px;color:var(--faint);background:transparent;border:0;cursor:pointer;vertical-align:middle;padding:0}
+.mcap-icon-btn:hover:not(:disabled){background:rgb(var(--c-ink)/.08);color:rgb(var(--c-ink))}
+.mcap-icon-btn.remove{font-size:15px;line-height:1}
+.mcap-icon-btn.remove:hover:not(:disabled){background:rgb(var(--c-danger)/.12);color:rgb(var(--c-danger))}
+.mcap-icon-btn:disabled{opacity:.45;cursor:not-allowed}
+.mcap-icon-btn .ic{width:12px;height:12px}
+.mcap-empty{text-align:center;padding:14px 8px;font-size:11px;color:var(--faint)}
+
 .composer-ta{width:100%;max-height:200px;resize:none;background:transparent;border:0;outline:0;color:rgb(var(--c-ink));font-size:15px;line-height:1.625}
 .composer-ta::placeholder{color:var(--faint)}
 .composer-shell .composer-ta{display:block;padding:14px 16px 4px;min-height:52px;max-height:240px;line-height:1.55}

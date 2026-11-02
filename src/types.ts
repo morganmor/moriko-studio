@@ -5,7 +5,7 @@
  * browser-only, so neither may import the other. If you change one, change both.
  */
 
-export type ProviderKind = 'openai' | 'gemini' | 'anthropic';
+export type ProviderKind = 'openai' | 'gemini' | 'anthropic' | 'mistral';
 
 /** How an image model can be used in Image Studio. */
 export type ImageModelMode = 'text-to-image' | 'edit';
@@ -51,12 +51,93 @@ export interface ImageProviderCapabilities {
   models?: Record<string, ImageModelCaps>;
 }
 
+/**
+ * WHERE A CAPABILITY VALUE CAME FROM — the provenance half of the 3-layer
+ * cascade (see src/lib/modelCapability.ts). Mirror of `server/contracts.ts`.
+ *
+ *  - 'user'       Layer 1: the user's own checkbox / context field. FINAL.
+ *  - 'provider'   Layer 2: introspected from the provider's own /models payload.
+ *  - 'models.dev' Layer 3: the build-time catalogue HINT (advisory only).
+ *  - 'default'    No layer knew: a documented per-field fallback.
+ */
+export type ModelCapabilitySource = 'user' | 'provider' | 'models.dev' | 'default';
+
+/** The capability bits the cascade resolves. */
+export interface ModelCapabilityFlags {
+  imageIn: boolean;
+  audioIn: boolean;
+  videoIn: boolean;
+  pdfIn: boolean;
+  tools: boolean;
+  reasoning: boolean;
+  imageOut: boolean;
+}
+
+/** Every capability column, named once so loops and the UI cannot drift. */
+export const MODEL_CAPABILITY_FLAGS: ReadonlyArray<keyof ModelCapabilityFlags> = [
+  'imageIn',
+  'audioIn',
+  'videoIn',
+  'pdfIn',
+  'tools',
+  'reasoning',
+  'imageOut',
+];
+
+/** The subset the Providers table shows — see the server-side twin. */
+export const MODEL_CAPABILITY_COLUMNS: ReadonlyArray<keyof ModelCapabilityFlags> = [
+  'imageIn',
+  'audioIn',
+  'videoIn',
+  'pdfIn',
+  'tools',
+  'reasoning',
+];
+
+/**
+ * LAYER 1 — the user's row in the capability matrix. Highest authority in the
+ * chain: a pinned field is exactly what the runtime uses, whatever models.dev
+ * says and whether or not the model is catalogued at all.
+ */
+export interface ProviderModelConfig extends ModelCapabilityFlags {
+  id: string;
+  /** Context window in TOKENS (null = resolve from the layers below). */
+  context: number | null;
+  /** Strongest layer that contributed to this row (drives the UI badge). */
+  source: ModelCapabilitySource;
+  /** Fields the user pinned explicitly — never rewritten by Layer 2. */
+  pinned: Array<keyof ModelCapabilityFlags | 'context'>;
+  maxOut?: number | null;
+}
+
+/**
+ * LAYER 2 — what the provider's own model-list endpoint said, captured at
+ * fetch time. Sparse by design: an absent field means "the endpoint said
+ * nothing", never "false".
+ */
+export interface ProviderModelHint extends Partial<ModelCapabilityFlags> {
+  context?: number | null;
+  maxOut?: number | null;
+  label?: string | null;
+  from?: 'openrouter' | 'lmstudio' | 'vllm' | 'gemini' | 'llamacpp' | 'ollama' | 'anthropic' | 'mistral' | 'opaque';
+}
+
+/** One model as the model-list endpoint knows it (Layer 2 transport shape). */
+export interface ProviderModelEntry {
+  id: string;
+  hint: ProviderModelHint;
+}
+
 export interface ProviderPublic {
   id: string;
   label: string;
   kind: ProviderKind;
   baseUrl: string;
   models: string[];
+  /** LAYER 1 TABLE — per-model capability config keyed by model id. */
+  modelConfigs?: Record<string, ProviderModelConfig>;
+  /** LAYER 2 TABLE — provider-introspected hints keyed by model id. */
+  modelHints?: Record<string, ProviderModelHint>;
   hasServerKey: boolean;
   userSuppliedKey: boolean;
   builtIn: boolean;
@@ -89,6 +170,8 @@ export interface WireToolCall {
 export type MessageContentPart =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string } }
+  /** Video rides the NESTED OpenAI-compatible shape — see server/contracts.ts. */
+  | { type: 'video_url'; video_url: { url: string } }
   | { type: 'file'; file: { filename: string; file_data: string } };
 
 /**
@@ -105,6 +188,15 @@ export type MessageContentPart =
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'tool';
   content: string | MessageContentPart[] | null;
+  /**
+   * The provider's OWN chain-of-thought channel (`reasoning_content` on
+   * DeepSeek/OpenAI-compatible thinking APIs, `reasoning` on relays). It rides
+   * beside `content`, never inside it: wrapping thoughts in tag text taught
+   * the model that thinking is prose it should imitate, and providers that
+   * require their reasoning back on tool-bearing requests (DeepSeek) rejected
+   * every follow-up request when it was missing.
+   */
+  reasoning_content?: string | null;
   /** Present on an assistant message that requested tools. */
   tool_calls?: WireToolCall[];
   /** Present on a `tool` message: which call this result answers. */
@@ -233,12 +325,6 @@ export interface ChatSettings {
   summarizerProviderId: string | null;
   summarizerModel: string | null;
   /**
-   * IMAGE OFFLOAD: images in older turns ride as
-   * read_file placeholders instead of pixels. Pathless images are never
-   * offloaded (dropping them would be unrecoverable).
-   */
-  imageOffload: boolean;
-  /**
    * ENFORCEMENT: the user's graduated punishment ladder. Replaces the old
    * binary `lockdown` flag. `level` (0–5) is the user-controlled trigger:
    *   0 Normal · 1 Guided · 2 Constrained · 3 Locked tools ·
@@ -286,6 +372,48 @@ export interface SavedPrompt {
   name: string;
   prompt: string;
   createdAt: number;
+}
+
+/**
+ * THE SERVER GUARD'S LIVE CONTEXT FIGURES — `context_telemetry` frames.
+ *
+ * `liveContextTokens` is what the NEXT request will carry, measured by the same
+ * code that decides whether to compact: promptTokens + completionTokens +
+ * addedTokens. The chip renders THIS number while a run streams, so the display
+ * cannot disagree with the guard's decision.
+ */
+export interface LiveContextTelemetry {
+  promptTokens: number;
+  completionTokens: number;
+  addedTokens: number;
+  liveContextTokens: number;
+  contextLimit: number | null;
+  /** liveContextTokens / contextLimit (0..1); null when the limit is unknown. */
+  ratio: number | null;
+  /**
+   * THE FIVE-BUCKET BREAKDOWN from the server's `context_live` meter —
+   * measured on the exact request the server sent, grown per second by every
+   * streamed delta. Present only after the first `context_live` frame.
+   */
+  buckets?: {
+    systemTokens: number;
+    toolsTokens: number;
+    inputTokens: number;
+    outputTokens: number;
+    reasoningTokens: number;
+    totalTokens: number;
+  };
+  /**
+   * THE UNMODELLED GAP, FROZEN AT SNAPSHOT TIME.
+   *
+   * `liveContextTokens` minus our static reconstruction of the SAME moment:
+   * the provider bills for framing, encoding overhead and injected blocks the
+   * wire planner does not model. It is an offset, not a live quantity — it is
+   * added to cx-top ONLY, never to a bucket, so no row can eat another.
+   */
+  gap: number;
+  /** Epoch ms the frame landed — lets the chip tell fresh from stale. */
+  at: number;
 }
 
 /** One MCP tool invocation shown on an assistant turn. */
@@ -345,13 +473,40 @@ export interface TurnToolCall {
  * stays anchored to its round instead of collapsing into one block on top.
  */
 export type TurnSegment =
-  | { type: 'text'; text: string }
-  | { type: 'reasoning'; text: string }
+  | { id: string; type: 'text'; text: string }
+  | {
+      /**
+       * REASONING BLOCK. `id` is the server's `blockId`, stable for the whole
+       * block: React keys and the disclosure map anchor on it, so appending a
+       * segment can never remount (and collapse) a strip the user is reading.
+       * `status` is the block's own lifecycle — 'streaming' from
+       * `reasoning_start` until `reasoning_end` — never inferred from the
+       * segment's position in the array.
+       */
+      id: string;
+      type: 'reasoning';
+      text: string;
+      status: 'streaming' | 'done';
+    }
   | ({
+      id: string;
       type: 'tool';
       serverName: string;
       toolName: string;
       args?: string;
+      /** Epoch ms the call began — feeds the live run's own clock. */
+      startedAt?: number;
+      /**
+       * TRUE while the model is still typewriting this call's arguments.
+       *
+       * The row exists from the provider's FIRST fragment (name only) and
+       * settles IN PLACE: `tool_call` fills the arguments, `tool_result`
+       * fills the outcome. One row per tool — never a second row for the
+       * same call.
+       */
+      building?: boolean;
+      /** UTF-8 byte size of the result payload this segment carries. */
+      payloadBytes?: number;
       /**
        * The provider's own id for this call. Wires the segment back to its
        * native `tool_calls` entry when the turn is rebuilt for a later
@@ -378,6 +533,30 @@ export type TurnSegment =
       text: string;
       /** DSH-style: the full content parts the steer carried (images ride too). */
       parts?: import('./lib/api').SteerClientPart[];
+    }
+  | {
+      /**
+       * IN-RUN COMPACTION — a HARNESS step, not a tool the model called.
+       *
+       * It is a segment (rather than a big checkpoint card) precisely because
+       * of WHEN it happens: mid-run, while the model is still working. A card
+       * there would cut the work in half; a step row sits in the trace
+       * alongside read/write/delete and keeps the flow intact.
+       *
+       * `beforeTokens`/`afterTokens` come from the server guard's telemetry, so
+       * the row reports the real shrink (~198k → ~42k) rather than an estimate.
+       * `summary` is the checkpoint text, revealed only when the row is opened.
+       */
+      type: 'compaction';
+      id: string;
+      beforeTokens: number;
+      afterTokens: number;
+      /** How many turns the checkpoint replaced. */
+      coveredTurns: number;
+      /** The full checkpoint text — the expandable inline preview. */
+      summary: string;
+      /** Epoch ms the compaction landed. */
+      at: number;
     };
 
 /** A request for the user to approve an agent operation outside the workspace. */
@@ -391,15 +570,50 @@ export interface AgentPermissionRequest {
 }
 
 export interface StreamEvent {
-  type: 'meta' | 'stream_id' | 'text' | 'reasoning' | 'usage' | 'error' | 'done'
-    | 'tool_call' | 'tool_result' | 'tool_progress'
+  type: 'meta' | 'stream_id' | 'text' | 'reasoning' | 'reasoning_start' | 'reasoning_end' | 'usage' | 'error' | 'done'
+    | 'tool_call' | 'tool_result' | 'tool_progress' | 'tool_building'
     | 'permission_request' | 'permission_result'
     | 'ask_user_request' | 'ask_user_result'
     | 'harness_injection' | 'goals_state' | 'todos_state' | 'steer' | 'context_tools'
+    | 'context_telemetry' | 'context_live' | 'context_compaction_request'
     | 'harness_event'
     | 'tree_update';
+  /**
+   * LIVE CONTEXT TELEMETRY (type 'context_telemetry') — the server guard's own
+   * figures for the round that just ran. `liveContextTokens` is what the NEXT
+   * request will carry, measured by the same code that decides to compact.
+   * (`promptTokens`/`completionTokens` already exist below for `usage`.)
+   */
+  addedTokens?: number;
+  liveContextTokens?: number;
+  contextLimit?: number | null;
+  ratio?: number | null;
+  /**
+   * LIVE CONTEXT BUCKETS (type 'context_live') — the server meter's
+   * five-bucket breakdown, per second. The client stores them verbatim.
+   * `totalTokens` is shared with the `usage` event below.
+   */
+  systemTokens?: number;
+  toolsTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  reasoningTokens?: number;
+  /**
+   * REASONING BLOCK id (types 'reasoning_start' / 'reasoning' /
+   * 'reasoning_end'). The server opens a block before its first delta and
+   * closes it before the answer or a tool call, so the client never has to
+   * guess where one round's thinking ended.
+   */
+  blockId?: string;
   /** HARNESS-EVENT payload (type 'harness_event'). */
   addonId?: string;
+  /**
+   * LIVE TOOL-CALL ASSEMBLY (type 'tool_building') — the adapter's own view of
+   * the arguments being typewritten RIGHT NOW, before a call is executable.
+   * Mimics Chuze's `ToolBuildProgress`: one row per call with its UTF-8 size,
+   * so the panel shows the number climbing instead of an opaque spinner.
+   */
+  building?: { count: number; bytes: number; tools: Array<{ index?: number; name: string; bytes: number; target?: string }> };
   level?: string;
   at?: number;
   /** REALTIME PROJECT STRUCTURE delta (only when agentMode + a workspace). */
@@ -543,6 +757,7 @@ export interface TurnSteer {
 export type TurnSteerPart =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string } }
+  | { type: 'video_url'; video_url: { url: string } }
   | { type: 'file'; file: { filename: string; file_data: string } };
 
 /** A scheduled reminder for a conversation (agent tool or user action). */
@@ -584,9 +799,11 @@ export interface Turn {
   error?: string;
   /**
    * Why a run ended SHORT of a natural stop, when it did: a harness-forced
-   * wrap-up ('context_budget' | 'stalled') or a
-   * provider output cut ('length' | 'max_tokens'). Rendered as a visible
-   * note — a cut run must never masquerade as a completed answer.
+   * wrap-up ('stalled') or a provider output cut ('length' | 'max_tokens').
+   * ('context_budget' is legacy — such runs no longer stop; they compact and
+   * continue, which is recorded as an inline `compaction` segment instead.)
+   * Rendered as a visible note — a cut run must never masquerade as a
+   * completed answer.
    */
   finishReason?: string;
   model?: string;
@@ -602,6 +819,24 @@ export interface Turn {
    * renders from `genStartedAt` (store) instead — no per-second writes.
    */
   processingMs?: number;
+  /**
+   * IN-FLIGHT TOOL-CALL ASSEMBLY — the arguments the model is typewriting
+   * this instant, before they are executable. Rendered as its own live list so
+   * a 30-second payload build never looks like a hang; cleared the moment the
+   * round's `tool_call` events take over.
+   */
+  building?: { at: number; count: number; bytes: number; tools: Array<{ index?: number; name: string; bytes: number; target?: string }> };
+  /**
+   * THE ACTIVE ROW — one tool that exists RIGHT NOW and has no settled row yet.
+   *
+   * `streaming`: the provider announced the name, arguments still arriving.
+   * `executing`: the call is running in the harness.
+   * Cleared the instant its `tool_result` lands, at which point the permanent
+   * segment row (args + summary + diff) takes over in the same position.
+   */
+  inFlightTool?: { name: string; status: 'streaming' | 'executing'; startedAt: number };
+  /** Epoch ms the current assembly phase began (the live counter's origin). */
+  buildingStartedAt?: number;
   toolCalls?: TurnToolCall[];
   /** Ordered text/tool slices — the rendered structure of the reply. */
   segments?: TurnSegment[];

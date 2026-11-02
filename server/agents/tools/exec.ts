@@ -75,6 +75,16 @@ function buildSandbox(ctx: AgentToolContext, state: {
   nestedCalls: number;
   timedOut: boolean;
   exited: boolean;
+  /**
+   * MUTATIONS THE SCRIPT PERFORMED — file diffs its nested tool calls
+   * returned. `exec` is otherwise opaque: the UI sees raw code and one text
+   * blob, so a script that rewrote twelve files reported nothing. Collected
+   * here and hoisted onto the exec result so the row shows real +X -Y badges
+   * and the files it touched.
+   */
+  diffs: string[];
+  diffstat: { added: number; removed: number };
+  files: string[];
 }) {
   const store = getStore(ctx.sessionId);
 
@@ -94,6 +104,19 @@ function buildSandbox(ctx: AgentToolContext, state: {
       const wireName = `agent__${prop}`;
       return async (args: Record<string, unknown>) => {
         const result = await callAgentTool(wireName, args ?? {}, ctx);
+        // Every nested call re-enters the FULL pipeline, so the file tools
+        // already computed a diff — keep it instead of dropping it.
+        if (result.ok && result.diff) {
+          state.diffs.push(result.diff);
+          if (result.diffstat) {
+            state.diffstat.added += result.diffstat.added;
+            state.diffstat.removed += result.diffstat.removed;
+          }
+          const path = typeof (args as { path?: unknown }).path === 'string'
+            ? (args as { path: string }).path
+            : null;
+          if (path && !state.files.includes(path)) state.files.push(path);
+        }
         return result;
       };
     },
@@ -174,7 +197,14 @@ async function runOrchestrator(
   code: string,
   ctx: AgentToolContext,
   timeoutMs: number,
-): Promise<{ text: string; nestedCalls: number; timedOut: boolean; error: string | null }> {
+): Promise<{
+  text: string;
+  nestedCalls: number;
+  timedOut: boolean;
+  error: string | null;
+  diff: string | null;
+  diffstat: { added: number; removed: number } | undefined;
+}> {
   requireWorkspace(ctx);
 
   const state = {
@@ -182,6 +212,9 @@ async function runOrchestrator(
     nestedCalls: 0,
     timedOut: false,
     exited: false,
+    diffs: [] as string[],
+    diffstat: { added: 0, removed: 0 },
+    files: [] as string[],
   };
 
   const sandbox = buildSandbox(ctx, state);
@@ -229,6 +262,9 @@ async function runOrchestrator(
       nestedCalls: 0,
       timedOut: false,
       error: `Syntax error in exec script: ${error instanceof Error ? error.message : String(error)}`,
+      // Nothing ran, so nothing was mutated — but the shape must stay whole.
+      diff: null,
+      diffstat: undefined,
     };
   }
 
@@ -251,11 +287,22 @@ async function runOrchestrator(
   }
 
   const output = state.output.join('\n');
+  // A script that rewrote files must SAY which files. Without this line the
+  // exec result is indistinguishable from a read-only script.
+  const mutationNote =
+    state.files.length > 0
+      ? `\n── mutated ${state.files.length} file(s): ${state.files.join(', ')}`
+      : '';
   return {
-    text: output,
+    text: output + mutationNote,
     nestedCalls: state.nestedCalls,
     timedOut: state.timedOut,
     error,
+    // Hoisted mutations: without these the exec row is a text blob and the
+    // files it rewrote are invisible in the trace.
+    diff: state.diffs.length > 0 ? state.diffs.join('\n') : null,
+    diffstat:
+      state.diffstat.added > 0 || state.diffstat.removed > 0 ? state.diffstat : undefined,
   };
 }
 
@@ -293,5 +340,10 @@ export async function execTool(args: Record<string, unknown>, ctx: AgentToolCont
     ok: !result.timedOut && !result.error,
     isError: result.timedOut || !!result.error,
     text: truncateOutput(parts.join('\n')),
+    // NO INVISIBLE MUTATIONS — the nested file edits this script performed
+    // ride out as a real diff, so the exec row shows its +X -Y badge and the
+    // changed files exactly like edit_file does.
+    ...(result.diff ? { diff: result.diff } : {}),
+    ...(result.diffstat ? { diffstat: result.diffstat } : {}),
   };
 }

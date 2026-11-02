@@ -10,6 +10,7 @@
 import path from 'node:path';
 import type { AgentPermissionRequest } from '../permissions.js';
 import { requestApproval } from '../permissions.js';
+import type { ResolvedModelCapability } from '../../modelCapability.js';
 import { addonsSrcRoot, assertSelfHostAccess, getActiveWorkspace, isInsideRoot, isInsideAllowedDir, isAttachmentPath } from '../workspace.js';
 
 /**
@@ -138,6 +139,12 @@ export interface AgentToolContext {
    * models that have not read the image themselves first (see visionPolicy).
    */
   modelId?: string;
+  /**
+   * The running model's RESOLVED 3-layer capability (server/modelCapability).
+   * Present for chat runs, where the route resolved it once; absent for
+   * one-shot/debug paths, which fall back to the catalogue-only view.
+   */
+  capability?: ResolvedModelCapability;
   /**
    * ENFORCEMENT: the level (3–5) and the user's typed reason, armed by the
    * route when the enforcement catalogue replaces the real one.

@@ -37,6 +37,7 @@ const READ_TOOLS = new Set([
   'read_symbol',
   'batch_read',
   'search',
+  'interlinked',
   'screenshot', // standalone headless capture — inline image, no disk writes
 ]);
 

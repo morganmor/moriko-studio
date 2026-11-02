@@ -1,4 +1,17 @@
-import { ALL_THINK_TAGS, applyReasoningEffort, createThinkingScrubState, flushThinkingScrub, scrubInlineThinkingFragment, type ThinkingScrubState } from '../reasoning.js';
+import {
+  applyReasoningEffort,
+  createReasoningBlockEmitter,
+  createThinkingScrubState,
+  flushNativeReasoning,
+  flushThinkingScrub,
+  modelReasons,
+  replaysReasoningContent,
+  scrubThinkingFragment,
+  thinkingActive,
+  thinkingSuppressesSampling,
+  type ThinkingScrubState,
+} from '../reasoning.js';
+import type { ChatMessage } from '../contracts.js';
 import { coerceText } from '../textUtil.js';
 import { assertOk, iterateSse, type StreamHandler, type StreamParams } from '../sse.js';
 import { idle, STREAM_IDLE_MS } from '../liveness.js';
@@ -16,7 +29,9 @@ import {
   type LoopStopReason,
   type PreparedTools,
 } from '../mcp/loop.js';
-import { gateToolImages, imageCapableFor, separateImageParts, IMAGE_OMITTED_NOTE } from './visionGate.js';
+import { createContextMeter, type ContextMeter } from '../mcp/contextMeter.js';
+import { gateToolImages, imageCapableFor, separateImageParts, separateVideoParts, IMAGE_OMITTED_NOTE, VIDEO_OMITTED_NOTE } from './visionGate.js';
+import { ToolBuildTracker } from './toolCallProgress.js';
 
 /**
  * Composes the system message: the user's own System Prompt first, then the
@@ -71,7 +86,7 @@ interface ContentBlockSplit {
  * text/content only, so it would silently drop them, and routing them
  * through here keeps reasoning out of the visible answer.
  */
-function splitContentBlocks(content: unknown): ContentBlockSplit {
+export function splitContentBlocks(content: unknown): ContentBlockSplit {
   if (!Array.isArray(content)) return { reasoning: null, text: null };
   let reasoning = '';
   let text = '';
@@ -105,6 +120,17 @@ export async function streamOpenAiCompatible(
   const { baseUrl, apiKey, model, messages, settings, signal } = params;
 
   const systemInstruction = buildSystemInstruction(params);
+  /**
+   * THE PER-SECOND METER: prices the exact request (system message, tool
+   * defs, the messages array) with the SHARED estimator, then grows the
+   * buckets from every streamed delta. Emits throttled `context_live` frames.
+   */
+  const meter: ContextMeter = createContextMeter({
+    systemInstruction,
+    systemSegments: [],
+    toolDefsChars: 0,
+    messages,
+  });
   const prepared: PreparedTools = await prepareTools(settings, (tools) =>
     tools.map((tool) => ({
       type: 'function',
@@ -116,25 +142,100 @@ export async function streamOpenAiCompatible(
     })),
   );
 
-  const imageCapable = imageCapableFor(params.model);
+  const imageCapable = await imageCapableFor(params.model, params.providerId, params.capability);
+  /** VIDEO is its own capability — a model with vision does not necessarily
+   *  accept `video_url`, and a model with neither must never be handed the
+   *  binary's path to chase with text tools. */
+  const videoCapable = params.capability?.videoIn === true;
+  /**
+   * REASONING ON THE WIRE. A thinking model gets its own chain-of-thought
+   * back on the native `reasoning_content` field — never as tag text inside
+   * `content` — because DeepSeek (and every provider that follows its tool
+   * contract) rejects a tool-bearing request whose assistant turns lack it.
+   * A model that does not reason never sees the field: unknown message keys
+   * are a 400 on several gateways, and there is nothing to replay.
+   */
+  const thinkingOn = thinkingActive(params.settings.thinkingLevel, model, params.providerId);
+  /**
+   * Whether stored reasoning may ride this request. Thinking models always
+   * may. A tool-bearing request also replays it even when the user just set
+   * effort to Off: providers document that history requirements are keyed to
+   * the presence of `tools`, and a mid-conversation Off must not invalidate
+   * tool rounds that were produced while thinking.
+   */
+  const replayReasoning =
+    thinkingOn || (prepared.count > 0 && modelReasons(model, params.providerId));
+  /**
+   * DeepSeek's tool contract is satisfied by an EMPTY `reasoning_content`, but
+   * only DeepSeek documents the key on input: sending `reasoning_content: ''`
+   * to a relay that rejects unknown message keys is the same 400 in reverse.
+   */
+  const requiresReasoningContent = replaysReasoningContent(model, params.providerId, baseUrl);
+  /** DeepSeek ignores sampling in thinking mode; sending it would lie. */
+  const omitSampling = thinkingSuppressesSampling(
+    params.settings.thinkingLevel,
+    model,
+    params.providerId,
+    baseUrl,
+  );
+  const toWireMessage = (message: ChatMessage): Record<string, unknown> => {
+    const { reasoning_content: reasoningContent, ...rest } = message;
+    const stored =
+      typeof reasoningContent === 'string' && reasoningContent.trim() ? reasoningContent : null;
+    const withReasoning =
+      replayReasoning && stored !== null
+        ? { ...rest, reasoning_content: stored }
+        : message.role === 'assistant' && requiresReasoningContent
+          ? // A turn that produced no thought still must carry the field.
+            { ...rest, reasoning_content: '' }
+          : rest;
+    if (imageCapable && videoCapable) return { ...withReasoning };
+    if (!Array.isArray(withReasoning.content)) return { ...withReasoning };
+    /**
+     * TWO GATES, TWO CAPABILITIES. Image parts and video parts are gated
+     * independently: vision without video input must still drop the video,
+     * and neither gate may ever degrade a video into a file PATH — a path on a
+     * text-only model is what sent the model hunting binaries with read_file.
+     */
+    let parts = withReasoning.content;
+    const notes: string[] = [];
+    if (!imageCapable) {
+      const imageSplit = separateImageParts(parts);
+      parts = imageSplit.kept;
+      if (imageSplit.dropped > 0) notes.push(IMAGE_OMITTED_NOTE.repeat(imageSplit.dropped));
+    }
+    if (!videoCapable) {
+      const videoSplit = separateVideoParts(parts);
+      parts = videoSplit.kept;
+      if (videoSplit.dropped > 0) notes.push(VIDEO_OMITTED_NOTE.repeat(videoSplit.dropped));
+    }
+    if (notes.length === 0) return { ...withReasoning };
+    return {
+      ...withReasoning,
+      content: [...parts, ...notes.map((text) => ({ type: 'text', text }))],
+    };
+  };
   const convo: Array<Record<string, unknown>> = [
     ...(systemInstruction ? [{ role: 'system', content: systemInstruction }] : []),
-    ...messages.map((message) => {
-      if (imageCapable || !Array.isArray(message.content)) return { ...message };
-      const { kept, dropped } = separateImageParts(message.content);
-      if (dropped === 0) return { ...message };
-      return {
-        ...message,
-        content: [...kept, { type: 'text', text: IMAGE_OMITTED_NOTE.repeat(dropped) }],
-      };
-    }),
+    ...messages.map(toWireMessage),
   ];
+  /** One lifecycle for the whole run: block ids stay stable across rounds. */
+  const reasoningBlocks = createReasoningBlockEmitter(onEvent);
 
-  const guard = createLoopGuard(params.contextLimit);
+  const guard = createLoopGuard(params.contextLimit, params.compactGuard);
   let forcedStop: LoopStopReason | null = null;
+  /**
+   * The guard asked for an in-run compaction. The run does NOT end: this flag
+   * only stops the loop from issuing another round BEFORE the client has
+   * shrunk the context, so the next request cannot overflow. The client
+   * resumes the run on the compacted context.
+   */
+  let compactRequested = false;
 
   if (prepared.count > 0 && prepared.defs) {
-    onEvent({ type: 'context_tools', chars: JSON.stringify(prepared.defs).length });
+    const defsChars = JSON.stringify(prepared.defs).length;
+    onEvent({ type: 'context_tools', chars: defsChars });
+    meter.addToolChars(defsChars);
   }
 
   /** Summed across tool rounds — MUST share the cadence of sumCacheReadTokens. */
@@ -166,8 +267,7 @@ export async function streamOpenAiCompatible(
       stream: true,
       stream_options: { include_usage: true },
       messages: convo,
-      temperature: settings.temperature,
-      top_p: settings.topP,
+      ...(omitSampling ? {} : { temperature: settings.temperature, top_p: settings.topP }),
       ...(settings.maxOutputTokens !== null ? { max_tokens: settings.maxOutputTokens } : {}),
       ...(prepared.defs && useTools
         ? { tools: prepared.defs, tool_choice: frozen && !choiceMade ? { type: 'function', function: { name: 'agent__harness_choice' } } : 'auto' }
@@ -182,7 +282,7 @@ export async function streamOpenAiCompatible(
       body.response_format = { type: 'json_object' };
     }
 
-    applyReasoningEffort(body, settings.thinkingLevel, model, params.providerId);
+    applyReasoningEffort(body, settings.thinkingLevel, model, params.providerId, baseUrl);
 
     const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/chat/completions`, {
       method: 'POST',
@@ -200,11 +300,17 @@ export async function streamOpenAiCompatible(
     if (!response.body) throw new Error('Provider returned an empty stream.');
 
     let text = '';
+    /** This round's chain-of-thought, verbatim, for the wire replay below. */
+    let turnReasoning = '';
     const contentScrub = createThinkingScrubState();
+    /** The provider's own reasoning channel: pass-through, never split. */
+    const nativeScrub = createThinkingScrubState('native');
     const argsScrub = new Map<number, ThinkingScrubState>();
     let sawUsage: { promptTokens?: number; completionTokens?: number; totalTokens?: number; cacheReadTokens?: number } | undefined;
     let finishReason: string | undefined;
     const callsByIndex = new Map<number, PendingOpenAiCall>();
+    /** LIVE ASSEMBLY — see toolCallProgress.ts (ported from Chuze). */
+    const buildTracker = new ToolBuildTracker();
 
     for await (const payload of iterateSse(response.body, () => streamIdle.reset())) {
       if (payload === '[DONE]') break;
@@ -231,6 +337,7 @@ export async function streamOpenAiCompatible(
 
       if (chunk.error?.message !== undefined) {
         const errorMessage = coerceText(chunk.error.message)?.trim() || 'Provider stream error.';
+        reasoningBlocks.end();
         flushUsage();
         onEvent({ type: 'error', message: errorMessage });
         return;
@@ -243,20 +350,35 @@ export async function streamOpenAiCompatible(
       const reasoning =
         coerceText(delta?.reasoning_content) ?? coerceText(delta?.reasoning) ?? blocks.reasoning;
       if (reasoning) {
-        const clean = reasoning.replace(ALL_THINK_TAGS, '');
-        if (clean) onEvent({ type: 'reasoning', delta: clean });
+        // Native channel: this IS reasoning. A closer tag the model quotes
+        // inside it is thought content, never a boundary.
+        meter.addReasoningChars(reasoning.length);
+        meter.maybeEmit(onEvent);
+        const routed = scrubThinkingFragment(reasoning, nativeScrub);
+        if (routed.reasoning) {
+          turnReasoning += routed.reasoning;
+          reasoningBlocks.push(routed.reasoning);
+        }
       }
 
       const contentDelta = blocks.text ?? coerceText(delta?.content);
       if (contentDelta) {
-        const scrubbed = scrubInlineThinkingFragment(contentDelta, contentScrub);
-        if (scrubbed.reasoning) onEvent({ type: 'reasoning', delta: scrubbed.reasoning });
+        // The answer starts here — the block is closed before the first token.
+        reasoningBlocks.end();
+        const scrubbed = scrubThinkingFragment(contentDelta, contentScrub);
+        if (scrubbed.reasoning) {
+          turnReasoning += scrubbed.reasoning;
+          reasoningBlocks.push(scrubbed.reasoning);
+        }
         if (scrubbed.text) {
           text += scrubbed.text;
+          meter.addOutputChars(scrubbed.text.length);
+          meter.maybeEmit(onEvent);
           onEvent({ type: 'text', delta: scrubbed.text });
         }
       }
 
+      if (delta?.tool_calls?.length) reasoningBlocks.end();
       for (const fragment of delta?.tool_calls ?? []) {
         const index = fragment.index ?? 0;
         const pending = callsByIndex.get(index) ?? { name: '', arguments: '' };
@@ -267,13 +389,18 @@ export async function streamOpenAiCompatible(
         if (argsFragment) {
           let argScrub = argsScrub.get(index);
           if (!argScrub) {
-            argScrub = createThinkingScrubState();
+            argScrub = createThinkingScrubState('arguments');
             argsScrub.set(index, argScrub);
           }
-          const scrubbed = scrubInlineThinkingFragment(argsFragment, argScrub);
+          const scrubbed = scrubThinkingFragment(argsFragment, argScrub);
           if (scrubbed.text) pending.arguments += scrubbed.text;
         }
         callsByIndex.set(index, pending);
+        // Publish the growing payload: the first fragment forces a frame so the
+        // strip appears instantly, later ones ride the ~120 ms throttle.
+        const isFirst = !buildTracker.sawAnyFragment;
+        buildTracker.ingest(index, nameFragment ?? '', argsFragment ?? '');
+        buildTracker.maybeEmit(onEvent, isFirst);
       }
       if (choice?.finish_reason) finishReason = choice.finish_reason;
 
@@ -288,11 +415,18 @@ export async function streamOpenAiCompatible(
       }
     }
 
+    const nativeTail = flushNativeReasoning(nativeScrub);
+    if (nativeTail) {
+      turnReasoning += nativeTail;
+      reasoningBlocks.push(nativeTail);
+    }
     const contentTail = flushThinkingScrub(contentScrub);
     if (contentTail) {
       text += contentTail;
       onEvent({ type: 'text', delta: contentTail });
     }
+    // Every round ends with a closed block: nothing else arrives for it.
+    reasoningBlocks.end();
     for (const [callIndex, scrub] of argsScrub) {
       const tail = flushThinkingScrub(scrub);
       if (!tail) continue;
@@ -357,10 +491,23 @@ export async function streamOpenAiCompatible(
         function: { name: call.name, arguments: wireSafeArguments(call.arguments) },
       } as const;
     });
+    // The tool CALLS the model just made ride the wire in `tools` too.
+    meter.addToolChars(
+      toolRequests.reduce((sum, call) => sum + call.function.name.length + call.function.arguments.length, 0),
+    );
+    /**
+     * THE 400 FIX. With tools on the request, DeepSeek requires every
+     * assistant turn — including the one that requested these calls — to carry
+     * its `reasoning_content`, and that requirement does not relax for a turn
+     * where the model merely answered. An empty string rides along while
+     * thinking is on; a model that never reasons never sees the field.
+     */
+    const assistantReasoning = turnReasoning || (requiresReasoningContent ? '' : undefined);
     convo.push({
       role: 'assistant',
       ...(text ? { content: text } : { content: null }),
       ...(toolRequests.length > 0 ? { tool_calls: toolRequests } : {}),
+      ...(assistantReasoning !== undefined ? { reasoning_content: assistantReasoning } : {}),
     });
 
     if (signal?.aborted) {
@@ -373,7 +520,10 @@ export async function streamOpenAiCompatible(
     for (const entry of steered) onEvent({ type: 'steer', id: entry.id, text: steerTextOf(entry), parts: entry.parts });
     const steerParts = steersToUserParts(steered);
     resolveSteerPartRefs(steerParts);
-    if (steerParts.length > 0) convo.push({ role: 'user', content: steerParts });
+    if (steerParts.length > 0) {
+      meter.addInputChars(JSON.stringify(steerParts).length);
+      convo.push({ role: 'user', content: steerParts });
+    }
 
     const injections = drainInjections(params.sessionId ?? undefined);
     if (injections.length > 0) {
@@ -381,6 +531,7 @@ export async function streamOpenAiCompatible(
         onEvent({ type: 'steer', id: `addon-inject-${entry.id}`, text: `[${entry.addonId}] ${injectionText(entry)}` });
         return { type: 'text', text: `System notice from the ${entry.addonId} addon:\n${injectionText(entry)}` };
       });
+      meter.addInputChars(injectParts.reduce((sum, part) => sum + part.text.length, 0));
       convo.push({ role: 'user', content: injectParts });
     }
 
@@ -402,6 +553,7 @@ export async function streamOpenAiCompatible(
         : undefined,
       params.settings.enforcement?.message ?? params.settings.lockdown?.message,
       params.settings.webAccess,
+      params.capability,
       params.settings.trust?.level,
     );
     for (const event of executed.events) {
@@ -439,7 +591,34 @@ export async function streamOpenAiCompatible(
         errorCode: output.errorCode as string | undefined,
       })),
     );
+    // The round's tool outputs now ride the wire: price them into `tools`.
+    meter.addToolChars(
+      executed.followUp.reduce((sum, output) => sum + String(output.text ?? '').length, 0),
+    );
+    // The provider's own completion count REPLACES the estimated tail.
+    meter.recordUsage(sawUsage);
     forcedStop = guard.stopReason();
+
+    // TELEMETRY FIRST: the client's ContextChip shows the guard's own
+    // arithmetic, so the number on screen and the number being acted on are
+    // the same value from the same computation.
+    {
+      const telemetry = guard.telemetry();
+      onEvent({ type: 'context_telemetry', ...telemetry });
+      // The buckets, authoritative and per-second, at the round boundary.
+      meter.flush(onEvent);
+      if (forcedStop === 'compact') {
+        const snap = meter.snapshot();
+        onEvent({
+          type: 'context_compaction_request',
+          liveContextTokens: snap.liveContextTokens,
+          contextLimit: null,
+          trigger: 'context-limit',
+        });
+        forcedStop = null;
+        compactRequested = true;
+      }
+    }
 
     for (const output of executed.followUp) {
       const gated = gateToolImages(
@@ -465,6 +644,16 @@ export async function streamOpenAiCompatible(
 
     if (forcedStop) {
       convo.push({ role: 'user', content: wrapUpInstruction(forcedStop) });
+    }
+    // IN-RUN COMPACTION HANDOFF: close the stream, not the task. The finish
+    // reason tells the client to compact and AUTO-RESUME this run — it is
+    // explicitly not a completed answer, so nothing asks the model for a
+    // summary and no tool is stripped mid-step.
+    if (compactRequested) {
+      flushUsage();
+      meter.flush(onEvent);
+      onEvent({ type: 'done', finishReason: 'context_compaction' });
+      return;
     }
     } finally {
       streamIdle.clear();

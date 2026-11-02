@@ -1,4 +1,14 @@
-import type { StreamParams } from './sse.js';
+import type { StreamEvent } from './contracts.js';
+import type { StreamHandler, StreamParams } from './sse.js';
+import {
+  createThinkingScrubState,
+  flushNativeReasoning,
+  flushThinkingScrub,
+  scrubThinkingFragment,
+  splitInlineThinking,
+  type ReasoningChannel,
+  type ThinkingScrubState,
+} from '../src/lib/reasoningLexer.js';
 import {
   isCataloguedProvider,
   lookupExactProviderModel,
@@ -121,14 +131,130 @@ export function effortLadderFromEfforts(
   return LADDER.filter((level) => mapped.has(level));
 }
 
+/** Whether the catalog knows this model to reason at all. */
+export function modelReasons(model: string, providerId?: string): boolean {
+  const ladder = modelEffortLadder(model, providerId);
+  if (ladder) return ladder.some((level) => level !== 'off');
+  return lookupModelMetadata(model)?.reasoning === true;
+}
+
+/**
+ * THE SWITCHES THAT ACTUALLY TURN THINKING OFF.
+ *
+ * `applyReasoningEffort` omitting `reasoning_effort` is not "off": every
+ * thinking-first family ships with thinking ENABLED by default, so omitting
+ * the knob quietly reasons at the provider default (DeepSeek documents
+ * thinking-on as the default; its Chat Completions switch is the separate
+ * `thinking` object). Each vendor gets its documented disable control here,
+ * never an invented field, and only when the catalog says the model reasons
+ * — an endpoint we know nothing about is left alone.
+ */
+interface ThinkingOffVendor {
+  id: string;
+  matches: RegExp;
+  apply: (body: Record<string, unknown>) => void;
+}
+
+const THINKING_OFF_VENDORS: readonly ThinkingOffVendor[] = [
+  {
+    id: 'deepseek',
+    matches: /deepseek|dpsk/i,
+    apply: (body) => {
+      body.thinking = { type: 'disabled' };
+    },
+  },
+  {
+    id: 'chat-template',
+    matches: /moonshot|kimi|zhipu|glm|minimax|qwen|vllm|sglang|baseten/i,
+    apply: (body) => {
+      const existing = body.chat_template_kwargs;
+      body.chat_template_kwargs = {
+        ...(existing && typeof existing === 'object' && !Array.isArray(existing)
+          ? (existing as Record<string, unknown>)
+          : {}),
+        enable_thinking: false,
+      };
+    },
+  },
+];
+
+/** Which vendor's thinking-off control applies to this endpoint, if any. */
+function thinkingOffVendor(model: string, providerId: string | undefined, baseUrl?: string): ThinkingOffVendor | undefined {
+  const identity = `${providerId ?? ''} ${model} ${baseUrl ?? ''}`;
+  const vendor = THINKING_OFF_VENDORS.find((entry) => entry.matches.test(identity));
+  if (!vendor) return undefined;
+  return modelReasons(model, providerId) ? vendor : undefined;
+}
+
+/**
+ * Sets the provider's own thinking-off control when the model reasons by
+ * default. Exported so the branch is testable without a live provider.
+ */
+export function applyThinkingDisabled(
+  body: Record<string, unknown>,
+  model: string,
+  providerId?: string,
+  baseUrl?: string,
+): void {
+  thinkingOffVendor(model, providerId, baseUrl)?.apply(body);
+}
+
+/**
+ * Whether this endpoint documents `reasoning_content` as a REPLAY field on
+ * assistant history.
+ *
+ * DeepSeek's tool contract makes it mandatory — an assistant turn without the
+ * field is a 400, even when the turn has no thought to give back — so the
+ * field must be fabricated as an empty string there. Every other family we
+ * speak to does not accept the key on input, and inventing it would create the
+ * exact error it is meant to prevent. Stored reasoning is replayed when it
+ * exists for any thinking model; only the EMPTY one is vendor-gated.
+ */
+export function replaysReasoningContent(
+  model: string,
+  providerId?: string,
+  baseUrl?: string,
+): boolean {
+  if (!modelReasons(model, providerId)) return false;
+  return /deepseek|dpsk/i.test(`${providerId ?? ''} ${model} ${baseUrl ?? ''}`);
+}
+
+/**
+ * Whether this request will actually think: the user asked for reasoning and
+ * the model is capable of it. Used by adapters that must drop sampling knobs
+ * the provider ignores or rejects in thinking mode.
+ */
+export function thinkingActive(
+  level: StreamParams['settings']['thinkingLevel'],
+  model: string,
+  providerId?: string,
+): boolean {
+  if (!level || level === 'off') return false;
+  return modelReasons(model, providerId);
+}
+
+/**
+ * DeepSeek's thinking mode ignores `temperature` (all sampling penalties) and
+ * fixes `top_p` for V4 Pro with tools. Sending them is not an error, but it
+ * misreports what the request controls — so they are omitted instead.
+ */
+export function thinkingSuppressesSampling(
+  level: StreamParams['settings']['thinkingLevel'],
+  model: string,
+  providerId?: string,
+  baseUrl?: string,
+): boolean {
+  if (!thinkingActive(level, model, providerId)) return false;
+  return /deepseek|dpsk/i.test(`${providerId ?? ''} ${model} ${baseUrl ?? ''}`);
+}
+
 /**
  * Sets `reasoning_effort` on an OpenAI-compatible request body.
  *
  * THREE RULES. No name-based family guesses, no invented protocol fields:
- *  - 'off' omits the field entirely — the provider applies its own default.
- *    A model that always reasons keeps reasoning: that is the model's
- *    nature, known to anyone who read its card. No switch is invented, no
- *    level is floored.
+ *  - 'off' sends the provider's own thinking-off control (see
+ *    THINKING_OFF_VENDORS) — omitting the field is NOT off, because
+ *    thinking-first models keep thinking at their default effort.
  *  - a level on the model's CATALOGUED ladder (models.dev, the same ladder
  *    the UI offers) is clamped to the nearest listed level.
  *  - anything else is sent VERBATIM — the user chose it; the provider that
@@ -139,8 +265,12 @@ export function applyReasoningEffort(
   level: StreamParams['settings']['thinkingLevel'],
   model: string,
   providerId?: string,
+  baseUrl?: string,
 ): void {
-  if (level === 'off') return;
+  if (level === 'off') {
+    applyThinkingDisabled(body, model, providerId, baseUrl);
+    return;
+  }
   const catalogued = modelEffortLadder(model, providerId);
   if (!catalogued) {
     body.reasoning_effort = level;
@@ -151,213 +281,59 @@ export function applyReasoningEffort(
 }
 
 /**
- * Tag patterns for inline reasoning that some models emit INSIDE the
- * `content` (or `tool_call.arguments`) stream instead of using the separate
- * `reasoning_content` channel — GLM-5.3 at 70k+ context is the documented
- * offender. The scrub must be safe to run on a FRAGMENT: a thinking block
- * can open in one delta and close in a later one, so a partial-open or a
- * partial-close has to survive until the rest arrives.
+ * The lexer itself lives in `src/lib/reasoningLexer.ts` because the CLIENT
+ * needs it too: a finished reply is re-split with the same rules the stream
+ * used, and a boundary must never differ between what streamed and what is
+ * replayed. Re-exported here so adapters keep importing one module.
+ */
+export {
+  createThinkingScrubState,
+  flushNativeReasoning,
+  flushThinkingScrub,
+  scrubThinkingFragment,
+  splitInlineThinking,
+  type ReasoningChannel,
+  type ThinkingScrubState,
+};
+
+/* ------------------------------------------------------------------------- *
+ * BLOCK LIFECYCLE
  *
- * `\1` backreferences the TAG NAME (group 1), not the inner text — that is
- * what makes `(Authored thinking)…(closing matching tag)` pair correctly
- * while a mismatched pair does not.
- */
-const THINK_FULL = /<(think|thought|thinking)>([\s\S]*?)<\/\1>/gi;
-const THINK_OPEN = /<(think|thought|thinking)>([\s\S]*)$/i;
-const THINK_CLOSE = /^([\s\S]*?)<\/(?:think|thought|thinking)>/i;
-const ANY_THINK_TAG = /<\/?(?:think|thought|thinking)>/i;
-/** Unanchored opener — locates where reasoning COULD begin in a fragment. */
-const THINK_OPENER = /<(?:think|thought|thinking)>/i;
-/** Every lone tag, anywhere — for whole-string cleanup passes. */
-export const ALL_THINK_TAGS = /<\/?(?:think|thought|thinking)>/gi;
+ * Reasoning is a BLOCK, not a flat delta channel: it opens, it streams, and
+ * it closes — before the answer starts, before a tool call, or at the end of
+ * the round. The client needs those boundaries to render one strip per block
+ * and to stop guessing "the reasoning ended because a different segment type
+ * arrived". One emitter per run; ids are stable, so the same block keeps its
+ * identity across the whole stream.
+ * ------------------------------------------------------------------------- */
 
-/** Every spelling whose prefix could still grow into a complete tag. */
-const THINK_TAG_SPELLINGS = ['<think>', '</think>', '<thought>', '</thought>', '<thinking>', '</thinking>'];
-
-/**
- * The longest suffix of `s` that is a strict prefix of a think tag — i.e.
- * the fragment ended mid-tag (`…<thi`). Held back until the next delta
- * proves it out: a tag split across deltas must never leak as visible text.
- */
-function partialThinkTagTail(s: string): string {
-  for (let k = Math.min(s.length, 10); k >= 1; k -= 1) {
-    const suffix = s.slice(-k);
-    if (!suffix.startsWith('<')) continue;
-    if (THINK_TAG_SPELLINGS.some((tag) => tag.length > k && tag.startsWith(suffix))) return suffix;
-  }
-  return '';
+export interface ReasoningBlockEmitter {
+  /** Route reasoning text, opening the block on first use. */
+  push: (text: string | null | undefined) => void;
+  /** Close the open block exactly once. Safe to call when nothing is open. */
+  end: () => void;
 }
 
-/**
- * Per-stream scrub state. One instance per content channel and one per
- * tool-call index; owned by the adapter's round, reset every round.
- */
-export interface ThinkingScrubState {
-  /** True while a block opened in an earlier fragment is still unclosed. */
-  inside: boolean;
-  /** Trailing partial-tag characters held back from the previous fragment. */
-  tail: string;
-}
-
-export function createThinkingScrubState(): ThinkingScrubState {
-  return { inside: false, tail: '' };
-}
-
-/**
- * Removes tag-wrapped reasoning from a STREAM FRAGMENT, advancing `state`.
- *
- *  - NOT inside, no tags → plain text, byte-identical pass-through (except a
- *    partial tag at the very end, which is held back until proven out).
- *  - NOT inside, `<x>…</x>` → inner text routed to reasoning, prose around it
- *    kept in text.
- *  - NOT inside, `<x>` unclosed → everything after the tag is reasoning; the
- *    `inside` bit carries across fragments.
- *  - NOT inside, stray `</x>` (a close with no open — the model echoing a
- *    boundary for a block that was already routed) → the tag is dropped, the
- *    prose around it kept. Left alone it would render as a raw HTML block and
- *    swallow the rest of the paragraph's formatting.
- *  - INSIDE → everything up to the closing tag is reasoning (a partial close
- *    at the tail is held back, so a `</thi` + `nk>` split across deltas still
- *    ends the block instead of streaming the rest of the answer as thinking).
- *
- * Returns `reasoning` separately so the adapter can route the leaked thinking
- * to the reasoning strip instead of deleting it — the UI keeps showing the
- * model's actual thinking, just on the right channel.
- */
-export function scrubInlineThinkingFragment(
-  fragment: string,
-  state: ThinkingScrubState,
-): { text: string | null; reasoning: string | null } {
-  let work = state.tail ? state.tail + fragment : fragment;
-  state.tail = '';
-  if (!work) return { text: null, reasoning: null };
-
-  const text: string[] = [];
-  const reasoning: string[] = [];
-
-  if (!state.inside && work.includes('</')) {
-    const hasBlock = THINK_FULL.test(work);
-    THINK_FULL.lastIndex = 0;
-    if (!hasBlock) {
-      const openPos = work.search(THINK_OPENER);
-      const limit = openPos === -1 ? work.length : openPos;
-      work = work.slice(0, limit).replace(ALL_THINK_TAGS, '') + work.slice(limit);
-    }
-    if (!work) return { text: null, reasoning: null };
-  }
-
-  if (!state.inside && !ANY_THINK_TAG.test(work)) {
-    const hold = partialThinkTagTail(work);
-    if (hold) {
-      state.tail = hold;
-      work = work.slice(0, work.length - hold.length);
-    }
-    return { text: work || null, reasoning: null };
-  }
-
-  while (work.length > 0) {
-    if (!state.inside) {
-      // silently miss the tag entirely (the reasoning-leak bug).
-      const fullAt = work.search(THINK_FULL);
-      const openAt = work.search(THINK_OPEN);
-      THINK_FULL.lastIndex = 0;
-      THINK_OPEN.lastIndex = 0;
-
-      const take = fullAt !== -1 && (openAt === -1 || fullAt <= openAt) ? 'full' : openAt !== -1 ? 'open' : 'none';
-
-      if (take === 'none') {
-        const hold = partialThinkTagTail(work);
-        if (hold) state.tail = hold;
-        const out = hold ? work.slice(0, work.length - hold.length) : work;
-        if (out) text.push(out);
-        break;
-      }
-
-      if (take === 'full') {
-        const before = work.slice(0, fullAt);
-        if (before) text.push(before);
-        const match = THINK_FULL.exec(work.slice(fullAt));
-        if (match) {
-          if (match[2].trim()) reasoning.push(match[2].trim());
-          work = work.slice(fullAt + match[0].length);
-        } else {
-          work = work.slice(fullAt + 1);
-        }
-        THINK_FULL.lastIndex = 0;
-        continue;
-      }
-
-      const before = work.slice(0, openAt);
-      if (before) text.push(before);
-      const opener = work.slice(openAt).match(THINK_OPENER);
-      work = opener ? work.slice(openAt + opener[0].length) : work.slice(openAt + 1);
-      state.inside = true;
-      continue;
-    }
-
-    const closed = work.match(THINK_CLOSE);
-    if (closed) {
-      if (closed[1].trim()) reasoning.push(closed[1].trim());
-      work = work.slice(closed[0].length);
-      state.inside = false;
-      continue;
-    }
-
-    const closeHold = partialThinkTagTail(work);
-    if (closeHold.startsWith('</')) {
-      const done = work.slice(0, work.length - closeHold.length);
-      if (done.trim()) reasoning.push(done.trim());
-      state.tail = closeHold;
-      break;
-    }
-
-    if (work.trim()) reasoning.push(work.trim());
-    break;
-  }
-
+export function createReasoningBlockEmitter(onEvent: StreamHandler): ReasoningBlockEmitter {
+  let counter = 0;
+  let openId: string | null = null;
   return {
-    text: text.length > 0 ? text.join('') : null,
-    reasoning: reasoning.length > 0 ? reasoning.join('\n') : null,
+    push(text) {
+      if (!text) return;
+      if (openId === null) {
+        counter += 1;
+        openId = `reason-${counter}`;
+        onEvent({ type: 'reasoning_start', blockId: openId } satisfies StreamEvent);
+      }
+      onEvent({ type: 'reasoning', delta: text, blockId: openId } satisfies StreamEvent);
+    },
+    end() {
+      if (openId === null) return;
+      const id = openId;
+      openId = null;
+      onEvent({ type: 'reasoning_end', blockId: id } satisfies StreamEvent);
+    },
   };
-}
-
-/**
- * End of round: a held-back tail that never became a tag is ordinary text —
- * hand it back so nothing the model actually sent is ever swallowed. An
- * unclosed block simply ends with the round (its content was already routed
- * to reasoning fragment by fragment).
- */
-export function flushThinkingScrub(state: ThinkingScrubState): string | null {
-  const tail = state.tail;
-  state.tail = '';
-  state.inside = false;
-  return tail || null;
-}
-
-/** Whole-message version (for a finished buffer): splits reasoning out. */
-export function splitInlineThinking(content: string): {
-  content: string;
-  reasoning: string;
-} {
-  const reasoningParts: string[] = [];
-  let rest = content.replace(THINK_FULL, (_match, _tag: string, inner: string) => {
-    if (inner.trim()) reasoningParts.push(inner.trim());
-    return '';
-  });
-  const unclosed = rest.match(THINK_OPEN);
-  if (unclosed?.index !== undefined) {
-    const tail = unclosed[2];
-    const closed = tail.match(THINK_CLOSE);
-    if (closed) {
-      if (closed[1].trim()) reasoningParts.push(closed[1].trim());
-      rest = rest.slice(0, unclosed.index) + tail.slice(closed[0].length);
-    } else {
-      if (tail.trim()) reasoningParts.push(tail.trim());
-      rest = rest.slice(0, unclosed.index);
-    }
-  }
-  rest = rest.replace(ALL_THINK_TAGS, '');
-  return { content: rest.trim(), reasoning: reasoningParts.join('\n\n').trim() };
 }
 
 /**
@@ -447,15 +423,18 @@ export function geminiThinkingBudget(
 const T_OPEN = '<' + 'thinking' + '>';
 const T_CLOSE = '</' + 'thinking' + '>';
 const U_OPEN = '<' + 'think' + '>';
+const U_CLOSE = '</' + 'think' + '>';
+const R_OPEN = '<' + 'reason' + 'ing>';
+const FENCE = '`' + '`' + '`';
 
 /**
- * Self-test for the fragment scrubber. Run with
- * `MORIKO_TEST_REASONING=1 npx tsx server/reasoning.ts`. The cases cover the
- * failure modes seen at 70k+ context: complete blocks, blocks split across
- * fragments, a TAG SPLIT ACROSS DELTAS (open or close — the old scrubber
- * leaked or swallowed on these), stray closing tags, unclosed blocks,
- * near-tag text that must never be held, and the end-of-round flush that
- * returns a held-back tail that never became a tag.
+ * Self-test for the lexer. Run with
+ * `MORIKO_TEST_REASONING=1 npx tsx server/reasoning.ts`.
+ *
+ * The cases pin the two failure directions that produced the "the model is
+ * bad at opening/closing reasoning" reports: a tag the model QUOTES must
+ * never open a block or cut the answer short, and a channel that IS reasoning
+ * must never be split by a closer it merely mentions.
  */
 export function runScrubs(): void {
   const cases: Array<{
@@ -463,6 +442,7 @@ export function runScrubs(): void {
     fragments: string[];
     expectText: string;
     expectReasoning: string;
+    channel?: ReasoningChannel;
   }> = [
     {
       name: 'plain text passes through untouched',
@@ -471,39 +451,104 @@ export function runScrubs(): void {
       expectReasoning: '',
     },
     {
-      name: 'complete block in one fragment',
-      fragments: [`before ${T_OPEN}secret thought${T_CLOSE} after`],
-      expectText: 'before  after',
-      expectReasoning: 'secret thought',
+      name: 'opener at stream start opens a block',
+      fragments: [T_OPEN + 'secret', ' body' + T_CLOSE + ' after'],
+      expectText: ' after',
+      expectReasoning: 'secret body',
     },
     {
-      name: 'block split across fragments',
-      fragments: [`start ${T_OPEN}`, ' thinking here', ` and then${T_CLOSE}`, ' done after'],
-      expectText: 'start  done after',
-      expectReasoning: 'thinking here\nand then',
+      name: 'leading whitespace may precede the opener',
+      fragments: ['\n  ' + T_OPEN + 'secret' + T_CLOSE + ' answer'],
+      expectText: '\n   answer',
+      expectReasoning: 'secret',
+    },
+    {
+      name: 'opener after prose is quoted text, never a block',
+      fragments: ['Sure. ' + T_OPEN + 'nope' + T_CLOSE + ' done'],
+      expectText: 'Sure. ' + T_OPEN + 'nope' + T_CLOSE + ' done',
+      expectReasoning: '',
     },
     {
       name: 'opening tag split across deltas',
-      fragments: ['head <thi', 'nk>secret body', `${T_CLOSE} tail`],
-      expectText: 'head  tail',
+      fragments: ['<thi', 'nking>secret body', U_CLOSE + ' tail'],
+      expectText: ' tail',
       expectReasoning: 'secret body',
     },
     {
       name: 'closing tag split across deltas',
-      fragments: [`body ${T_OPEN}secret`, ' tail</thi', 'nk> after'],
-      expectText: 'body  after',
-      expectReasoning: 'secret\ntail',
+      fragments: [U_OPEN + 'secret', ' tail</thi', 'nk> after'],
+      expectText: ' after',
+      expectReasoning: 'secret tail',
+    },
+    {
+      name: 'closer inside inline code does NOT close the block',
+      fragments: [
+        T_OPEN + 'he wrote `' + T_CLOSE + '` as an example',
+        ' and kept thinking' + U_CLOSE + ' visible',
+      ],
+      expectText: ' visible',
+      expectReasoning: 'he wrote `' + T_CLOSE + '` as an example and kept thinking',
+    },
+    {
+      name: 'closer inside a fenced block does NOT close the block',
+      fragments: [
+        T_OPEN + 'sample:\n' + FENCE + '\n' + T_CLOSE + '\n' + FENCE + '\nstill reasoning',
+        U_CLOSE + ' answer',
+      ],
+      expectText: ' answer',
+      expectReasoning: 'sample:\n' + FENCE + '\n' + T_CLOSE + '\n' + FENCE + '\nstill reasoning',
+    },
+    {
+      name: 'closer inside quotes does NOT close the block',
+      fragments: [
+        T_OPEN + 'the tag "' + T_CLOSE + '" is literal',
+        ' keep going' + U_CLOSE + ' end',
+      ],
+      expectText: ' end',
+      expectReasoning: 'the tag "' + T_CLOSE + '" is literal keep going',
+    },
+    {
+      name: 'apostrophe before a closer does not swallow the answer',
+      fragments: [T_OPEN + "Let's check the result" + T_CLOSE + ' The answer is 42.'],
+      expectText: ' The answer is 42.',
+      expectReasoning: "Let's check the result",
+    },
+    {
+      name: 'an unmatched quote does not swallow the answer',
+      fragments: [T_OPEN + 'he said "check' + T_CLOSE + ' The answer is 42.'],
+      expectText: ' The answer is 42.',
+      expectReasoning: 'he said "check',
+    },
+    {
+      name: 'a quoted closer with an apostrophe inside stays content',
+      fragments: [
+        T_OPEN + 'quote "it\'s ' + T_CLOSE + ' here" then keep going' + U_CLOSE + ' end',
+      ],
+      expectText: ' end',
+      expectReasoning: 'quote "it\'s ' + T_CLOSE + ' here" then keep going',
+    },
+    {
+      name: 'escaped closer is not a boundary',
+      fragments: [T_OPEN + 'try \\' + T_CLOSE + ' here', ' more' + U_CLOSE + ' x'],
+      expectText: ' x',
+      expectReasoning: 'try \\' + T_CLOSE + ' here more',
     },
     {
       name: 'unclosed block runs to end of round',
-      fragments: [`visible ${T_OPEN}hidden thinking`, ' still hidden'],
-      expectText: 'visible ',
-      expectReasoning: 'hidden thinking\nstill hidden',
+      fragments: [R_OPEN + 'hidden thinking', ' still hidden'],
+      expectText: '',
+      expectReasoning: 'hidden thinking still hidden',
     },
     {
-      name: 'stray closing tag with no opener is dropped, prose kept',
-      fragments: [`prose ${T_CLOSE} more prose`],
-      expectText: 'prose  more prose',
+      name: 'stray closer before any prose is dropped',
+      fragments: [T_CLOSE + 'prose starts here'],
+      expectText: 'prose starts here',
+      expectReasoning: '',
+    },
+    {
+      name: 'a quoted tag after prose stays in the answer',
+      fragments: ['prose ' + T_CLOSE + ' more prose'],
+      expectText: 'prose ' + T_CLOSE + ' more prose',
       expectReasoning: '',
     },
     {
@@ -520,8 +565,8 @@ export function runScrubs(): void {
     },
     {
       name: 'mismatched names still close the open block',
-      fragments: [`p ${U_OPEN}inner${T_CLOSE} q`],
-      expectText: 'p  q',
+      fragments: [U_OPEN + 'inner' + T_CLOSE + ' q'],
+      expectText: ' q',
       expectReasoning: 'inner',
     },
     {
@@ -532,9 +577,28 @@ export function runScrubs(): void {
     },
     {
       name: 'reasoning leak inside tool args json',
-      fragments: ['{"path": "src/f', `${U_OPEN}leaked into args${T_CLOSE}`, 'inal.ts"}'],
+      channel: 'arguments',
+      fragments: ['{"path": "src/f', U_OPEN + 'leaked into args' + T_CLOSE, 'inal.ts"}'],
       expectText: '{"path": "src/final.ts"}',
       expectReasoning: 'leaked into args',
+    },
+    {
+      name: 'native channel never splits on a closer it mentions',
+      channel: 'native',
+      fragments: [
+        'The regex closes on ' + T_CLOSE + ' which my parser must not treat as a boundary here',
+        ' and the thought continues.',
+      ],
+      expectText: '',
+      expectReasoning:
+        'The regex closes on ' + T_CLOSE + ' which my parser must not treat as a boundary here and the thought continues.',
+    },
+    {
+      name: 'native channel strips only a leading wrapper',
+      channel: 'native',
+      fragments: [T_OPEN + 'wrapped thought body that is long enough'],
+      expectText: '',
+      expectReasoning: 'wrapped thought body that is long enough',
     },
   ];
 
@@ -542,14 +606,17 @@ export function runScrubs(): void {
   for (const c of cases) {
     let text = '';
     let reasoning = '';
-    const state = createThinkingScrubState();
+    const state = createThinkingScrubState(c.channel ?? 'response');
     for (const fragment of c.fragments) {
-      const out = scrubInlineThinkingFragment(fragment, state);
+      const out = scrubThinkingFragment(fragment, state);
       if (out.text) text += out.text;
-      if (out.reasoning) reasoning += (reasoning ? '\n' : '') + out.reasoning;
+      if (out.reasoning) reasoning += out.reasoning;
     }
-    const tail = flushThinkingScrub(state);
-    if (tail) text += tail;
+    const tail = state.channel === 'native' ? flushNativeReasoning(state) : flushThinkingScrub(state);
+    if (tail) {
+      if (state.channel === 'native') reasoning += tail;
+      else text += tail;
+    }
     if (text !== c.expectText || reasoning !== c.expectReasoning) {
       failures += 1;
       console.error(`FAIL ${c.name}`);
@@ -558,23 +625,46 @@ export function runScrubs(): void {
     }
   }
 
-  const whole = splitInlineThinking(`answer ${T_OPEN}deep${T_CLOSE} after stray ${T_CLOSE} end`);
-  if (whole.content !== 'answer  after stray  end' || whole.reasoning !== 'deep') {
+  // Whole-message split must agree with the stream lexer.
+  const atStart = splitInlineThinking(T_OPEN + 'deep' + T_CLOSE + ' answer');
+  if (atStart.content !== 'answer' || atStart.reasoning !== 'deep') {
     failures += 1;
-    console.error('FAIL splitInlineThinking whole-message case');
-    console.error(`  content:   ${JSON.stringify(whole.content)}`);
-    console.error(`  reasoning: ${JSON.stringify(whole.reasoning)}`);
+    console.error('FAIL splitInlineThinking leading block');
+    console.error(`  content:   ${JSON.stringify(atStart.content)}`);
+    console.error(`  reasoning: ${JSON.stringify(atStart.reasoning)}`);
   }
-  const unclosedWhole = splitInlineThinking(`x ${T_OPEN}hidden tail`);
-  if (unclosedWhole.content !== 'x' || unclosedWhole.reasoning !== 'hidden tail') {
+  const lateBlock = splitInlineThinking('answer ' + T_OPEN + 'quoted' + T_CLOSE + ' end');
+  if (lateBlock.content !== 'answer ' + T_OPEN + 'quoted' + T_CLOSE + ' end' || lateBlock.reasoning !== '') {
+    failures += 1;
+    console.error('FAIL splitInlineThinking must not split a quoted tag');
+    console.error(`  content:   ${JSON.stringify(lateBlock.content)}`);
+    console.error(`  reasoning: ${JSON.stringify(lateBlock.reasoning)}`);
+  }
+  const unclosedWhole = splitInlineThinking(T_OPEN + 'hidden tail');
+  if (unclosedWhole.content !== '' || unclosedWhole.reasoning !== 'hidden tail') {
     failures += 1;
     console.error('FAIL splitInlineThinking unclosed case');
     console.error(`  content:   ${JSON.stringify(unclosedWhole.content)}`);
     console.error(`  reasoning: ${JSON.stringify(unclosedWhole.reasoning)}`);
   }
 
-  const total = cases.length + 2;
-  if (failures === 0) console.log(`reasoning scrubber: ${total} cases passed`);
+  // Thinking-off controls: a reasoning model gets a real switch, a model the
+  // catalog says cannot reason gets nothing invented for it.
+  const deepseekBody: Record<string, unknown> = {};
+  applyThinkingDisabled(deepseekBody, 'deepseek-v4-pro', 'deepseek');
+  if (JSON.stringify(deepseekBody.thinking) !== JSON.stringify({ type: 'disabled' })) {
+    failures += 1;
+    console.error(`FAIL thinking-off for deepseek: ${JSON.stringify(deepseekBody)}`);
+  }
+  const unknownBody: Record<string, unknown> = {};
+  applyThinkingDisabled(unknownBody, 'definitely-not-a-real-model-xyz', 'custom');
+  if (Object.keys(unknownBody).length !== 0) {
+    failures += 1;
+    console.error(`FAIL thinking-off must not invent fields: ${JSON.stringify(unknownBody)}`);
+  }
+
+  const total = cases.length + 5;
+  if (failures === 0) console.log(`reasoning lexer: ${total} cases passed`);
   else process.exitCode = 1;
 }
 

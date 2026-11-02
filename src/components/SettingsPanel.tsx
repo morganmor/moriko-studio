@@ -41,6 +41,20 @@ import {
 } from '../lib/api';
 import { WorkflowEditor } from './WorkflowEditor';
 import { lookupModelMeta, nearestThinkingLevel, thinkingLadderFor } from '../lib/modelMeta';
+import { resolveCapability } from '../store/useStore';
+import type { ModelCapabilitySource } from '../types';
+
+/**
+ * How each provenance layer is NAMED to the user. One map so the Context
+ * section, the composer chip and the Providers table all say the same words
+ * about the same layer.
+ */
+const CONTEXT_SOURCE_COPY: Record<ModelCapabilitySource, string> = {
+  user: 'your Providers table',
+  provider: 'reported by the provider',
+  'models.dev': 'models.dev hint',
+  default: 'unknown — no cap applied',
+};
 import {
   ASPECT_RATIOS,
   PX_MAX,
@@ -1717,8 +1731,8 @@ function ContextSection({
   updateSettings: (patch: Partial<ChatSettings>) => void;
 }) {
   const model = useStore((state) => state.model);
-  const modelMeta = useStore((state) => state.modelMeta);
-  const modelMetaInfo = model ? lookupModelMeta(modelMeta, model) : undefined;
+  const providerId = useStore((state) => state.providerId);
+  const capability = resolveCapability(providerId, model);
   const providers = useStore((state) => state.providers);
   const summarizerModels = settings.summarizerProviderId
     ? (providers.find((entry) => entry.id === settings.summarizerProviderId)?.models ?? [])
@@ -1736,17 +1750,21 @@ function ContextSection({
         <TokenInput
           value={settings.maxContextTokens}
           placeholder={
-            modelMetaInfo?.context
-              ? `${modelMetaInfo.context.toLocaleString('id-ID')} — model default`
+            capability?.context
+              ? `${capability.context.toLocaleString('id-ID')} — ${CONTEXT_SOURCE_COPY[capability.sources.context]}`
               : 'model default'
           }
           onCommit={(next) => updateSettings({ maxContextTokens: next })}
         />
-        {modelMetaInfo?.context ? (
+        {capability?.context ? (
           <span style={{ display: 'block', marginTop: 2, fontSize: 10.5, lineHeight: 1.375, color: 'var(--faint)' }}>
-            {"Empty = the model's full capacity (models.dev). A value here can only LOWER the limit — it never exceeds what the model accepts."}
+            {`Empty = the model's full capacity (${CONTEXT_SOURCE_COPY[capability.sources.context]}). A value here can only LOWER the limit — it never exceeds what the model accepts.`}
           </span>
-        ) : null}
+        ) : (
+          <span style={{ display: 'block', marginTop: 2, fontSize: 10.5, lineHeight: 1.375, color: 'var(--faint)' }}>
+            No layer knows this model's window. Set its Context Size in Providers → Models.
+          </span>
+        )}
       </label>
 
       <div className="trow" style={{ minHeight: 36, padding: '6px 4px', gap: 12 }}>
@@ -1849,18 +1867,9 @@ function ContextSection({
         </>
       ) : null}
 
-      <div className="trow" style={{ minHeight: 36, padding: '6px 4px', gap: 12 }}>
-        <span style={{ flex: 1, fontSize: 13, color: 'rgb(var(--c-ink))' }}>Image offload</span>
-        <Toggle
-          checked={settings.imageOffload}
-          onChange={(value) => updateSettings({ imageOffload: value })}
-          label="Image offload"
-          hideLabel
-        />
-      </div>
       <p style={{ padding: '0 4px', fontSize: 10.5, lineHeight: 1.375, color: 'var(--faint)' }}>
-        Old images (outside the kept window) ride as read_file placeholders instead of pixels — the
-        agent re-reads them from disk when needed. Type <span style={{ color: 'var(--muted)' }}>/compact</span>{' '}
+        Images and tool results always ride the context in full — nothing leaves except via
+        compaction. Type <span style={{ color: 'var(--muted)' }}>/compact</span>{' '}
         in the composer to condense this conversation now.
       </p>
     </section>

@@ -1,5 +1,6 @@
 import type { HarnessInjection } from './agents/systemPrompt.js';
 import type { ChatMessage, ChatSettingsDTO, StreamEvent } from './contracts.js';
+import type { ResolvedModelCapability } from './modelCapability.js';
 
 export interface StreamParams {
   baseUrl: string;
@@ -18,10 +19,32 @@ export interface StreamParams {
   /** Conversation id — keys session-scoped harness state (goals). */
   sessionId?: string;
   /**
-   * The model's context window (tokens, models.dev snapshot) — drives the
-   * tool loop's context-budget stop. Null/absent = unknown, budget stop off.
+   * The model's context window (tokens) — drives the tool loop's
+   * context-budget stop. Null/absent = unknown, budget stop off.
    */
   contextLimit?: number | null;
+  /**
+   * THE USER'S COMPACTION SETTINGS, handed to the loop guard.
+   *
+   * The guard must fire at the number the Configuration panel says, not at a
+   * hardcoded constant: a 0.85 server threshold against a 0.95 client dropdown
+   * made the server ask for compaction that the client's own `compactCandidate`
+   * still considered premature.
+   */
+  compactGuard?: {
+    autoCompact: boolean;
+    compactThresholdTokens: number | null;
+    compactThresholdRatio: number;
+    /** Conversation id — keys the LIVE config registry (mid-run changes). */
+    conversationId?: string;
+  };
+  /**
+   * THE RESOLVED 3-LAYER CAPABILITY of the running model (server/modelCapability).
+   * Adapters gate image parts on `capability.imageIn`; the tool loop reads the
+   * same object. Resolved ONCE per run by the route so every consumer inside
+   * this request agrees — no adapter re-derives it from a different source.
+   */
+  capability?: ResolvedModelCapability;
   /**
    * Attachment paths persisted THIS request (see server/attachments.ts),
    * relative to the active workspace root. The agent-harness injection turns

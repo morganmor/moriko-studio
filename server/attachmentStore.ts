@@ -45,6 +45,53 @@ export const INLINE_DATA_URL_LIMIT = 50_000;
 /** The pseudo-protocol wire URLs use: `moriko-ref://<mime>/<hash>`. */
 export const REF_PROTOCOL = 'moriko-ref://';
 
+/**
+ * HARD CAP ON IMAGE PARTS PER REQUEST.
+ *
+ * Gateways enforce it literally ("At most 8 image(s) may be provided in one
+ * prompt. Set '--limit-mm-per-prompt' to increase this limit.") and reject the
+ * WHOLE request when a long thread replays every screenshot it ever carried.
+ * The window is SLIDING and NEWEST-WINS: only the last N images stay real
+ * payloads; older ones degrade to a short text note so the model still knows a
+ * picture existed there. The user's own thread keeps every image — this runs on
+ * the wire copy only.
+ */
+export const MAX_WIRE_IMAGES = 8;
+
+/** The note an aged-out image becomes. `turn` is a human-facing ordinal. */
+export function agedImageNote(turn: number): string {
+  return `[Gambar terdahulu turn ${turn} tersimpan]`;
+}
+
+/**
+ * Enforces {@link MAX_WIRE_IMAGES} on an outgoing message list.
+ *
+ * Walks BACKWARD so the newest media wins; every image part beyond the budget
+ * is replaced in place by {@link agedImageNote}. Returns how many aged out.
+ * Video parts are counted separately by the gateway, so they are untouched.
+ */
+export function capWireImages(messages: unknown, limit = MAX_WIRE_IMAGES): number {
+  if (!Array.isArray(messages)) return 0;
+  let seen = 0;
+  let aged = 0;
+  for (let m = messages.length - 1; m >= 0; m -= 1) {
+    const message = messages[m];
+    if (!message || typeof message !== 'object') continue;
+    const content = (message as { content?: unknown }).content;
+    if (!Array.isArray(content)) continue;
+    for (let i = content.length - 1; i >= 0; i -= 1) {
+      const part = content[i];
+      if (!part || typeof part !== 'object') continue;
+      if ((part as { type?: string }).type !== 'image_url') continue;
+      seen += 1;
+      if (seen <= limit) continue;
+      content[i] = { type: 'text', text: agedImageNote(seen - limit) };
+      aged += 1;
+    }
+  }
+  return aged;
+}
+
 
 function hashBytes(bytes: Buffer): string {
   return createHash('sha1').update(bytes).digest('hex');
@@ -263,11 +310,21 @@ function dataUrlFor(hash: string, mime: string): string | null {
  * dead pseudo-protocol URL.
  */
 export function resolveSteerPartRefs(
-  parts: Array<{ type: string; image_url?: { url?: string }; file?: { file_data?: string } }>,
-): void {
+  parts: Array<{ type: string; image_url?: { url?: string }; video_url?: { url?: string }; file?: { file_data?: string } }>,
+  ): void {
   for (let i = parts.length - 1; i >= 0; i -= 1) {
     const part = parts[i];
     if (!part || typeof part !== 'object') continue;
+    if (part.type === 'video_url' && typeof part.video_url?.url === 'string' && part.video_url.url.startsWith(REF_PROTOCOL)) {
+      const rest = part.video_url.url.slice(REF_PROTOCOL.length);
+      const slash = rest.lastIndexOf('/');
+      const mime = slash > 0 ? rest.slice(0, slash) : 'video/mp4';
+      const hash = slash > 0 ? rest.slice(slash + 1) : rest;
+      const dataUrl = dataUrlFor(hash, mime);
+      if (dataUrl) part.video_url.url = dataUrl;
+      else parts.splice(i, 1);
+      continue;
+    }
     if (part.type === 'image_url' && typeof part.image_url?.url === 'string' && part.image_url.url.startsWith(REF_PROTOCOL)) {
       const rest = part.image_url.url.slice(REF_PROTOCOL.length);
       const slash = rest.lastIndexOf('/');
@@ -305,8 +362,19 @@ export function resolveWireRefs(messages: unknown): void {
       const typed = part as {
         type?: string;
         image_url?: { url?: string };
+        video_url?: { url?: string };
         file?: { file_data?: string };
       };
+      if (typed.type === 'video_url' && typeof typed.video_url?.url === 'string' && typed.video_url.url.startsWith(REF_PROTOCOL)) {
+        const rest = typed.video_url.url.slice(REF_PROTOCOL.length);
+        const slash = rest.lastIndexOf('/');
+        const mime = slash > 0 ? rest.slice(0, slash) : 'video/mp4';
+        const hash = slash > 0 ? rest.slice(slash + 1) : rest;
+        const dataUrl = dataUrlFor(hash, mime);
+        if (dataUrl) typed.video_url.url = dataUrl;
+        else content.splice(i, 1);
+        continue;
+      }
       if (typed.type === 'image_url' && typeof typed.image_url?.url === 'string' && typed.image_url.url.startsWith(REF_PROTOCOL)) {
         const rest = typed.image_url.url.slice(REF_PROTOCOL.length);
         const slash = rest.lastIndexOf('/');

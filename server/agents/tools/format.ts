@@ -116,7 +116,7 @@ async function formatTool(args: Record<string, unknown>, ctx: AgentToolContext):
 export const formatSpec = defineTool({
   def: {
     wireName: 'agent__format',
-    description: 'Run the project\'s formatter (prettier/biome/ruff) when configured; vault-snapshots files before rewriting.',
+    description: 'Run the project\'s configured formatter (prettier/biome/ruff — never installs one); vault-snapshots files before rewriting.',
     inputSchema: {
       type: 'object',
       properties: {

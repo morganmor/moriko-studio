@@ -203,7 +203,7 @@ function mutationReason(name: string, args: Record<string, unknown>): string | n
 
 const ALLOWED_NOW =
   'Allowed now: exploration (read_file, batch_read, grep, glob, read_symbol, context_pack, arch_map, ' +
-  'lsp_symbols, tree_outline, deps, list), ask_user, adr, todo_*, and the rsat_* planning tools.';
+  'lsp_symbols, tree_outline, deps, interlinked, list), ask_user, adr, todo_*, and the rsat_* planning tools.';
 
 /**
  * The single question the pipeline asks before every tool call.
@@ -241,7 +241,7 @@ export function planGateDenial(
         : 'This session is in plan mode.',
       ALLOWED_NOW,
       'To start implementing: call agent__exit_plan_mode with the structured plan — ' +
-        'summary, files[], approach, verification[]. That records the plan and lifts this gate.',
+        'summary, files[], approach. That records the plan and lifts this gate.',
     ].join('\n');
   }
 

@@ -1,6 +1,13 @@
 import type { ChatMessage } from '../contracts.js';
 import { parseDataUrl } from '../contracts.js';
-import { geminiThinkingBudget, createThinkingScrubState, flushThinkingScrub, scrubInlineThinkingFragment, ALL_THINK_TAGS } from '../reasoning.js';
+import {
+  createReasoningBlockEmitter,
+  createThinkingScrubState,
+  flushNativeReasoning,
+  flushThinkingScrub,
+  geminiThinkingBudget,
+  scrubThinkingFragment,
+} from '../reasoning.js';
 import { coerceText } from '../textUtil.js';
 import { assertOk, iterateSse, UpstreamError, type StreamHandler, type StreamParams } from '../sse.js';
 import { idle, STREAM_IDLE_MS } from '../liveness.js';
@@ -18,6 +25,7 @@ import {
   type CatalogueTool,
   type LoopStopReason,
 } from '../mcp/loop.js';
+import { createContextMeter, type ContextMeter } from '../mcp/contextMeter.js';
 import { geminiToolName, toGeminiDeclaration, toGeminiDeclarationLegacy } from './geminiSchema.js';
 
 /** Gemini inline part: plain text or base64 media (image/audio/video/pdf). */
@@ -58,13 +66,31 @@ const CANONICAL: readonly StreamParams['settings']['thinkingLevel'][] = [
   'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max',
 ];
 
+/**
+ * THINKING CONFIG for Gemini.
+ *
+ * `includeThoughts` IS NOT OPTIONAL. Per the Gemini thinking docs, thought
+ * summaries are suppressed unless the request asks for them explicitly — the
+ * model still burns its budget internally, but the response carries no part
+ * with `thought: true`, so the adapter's (correct) parser has nothing to route
+ * and the UI shows a plain answer with no reasoning. That was the whole bug:
+ * the config sent a budget/level and never turned thoughts ON.
+ *
+ * `thinkingLevel` (Gemini 3+) and `thinkingBudget` (2.5 and earlier) are
+ * mutually exclusive — sending the wrong one is an error — so the flag rides
+ * alongside whichever the model accepts. `off` sends budget 0, which is itself
+ * the documented way to disable thinking; no thoughts to include then.
+ */
 function thinkingConfigFor(
   level: StreamParams['settings']['thinkingLevel'],
   model: string,
   baseUrl: string,
 ): Record<string, unknown> {
   if (!usesThinkingLevel(model)) {
-    return { thinkingBudget: geminiThinkingBudget(level, model, baseUrl) };
+    const budget = geminiThinkingBudget(level, model, baseUrl);
+    return budget === 0
+      ? { thinkingBudget: 0 }
+      : { thinkingBudget: budget, includeThoughts: true };
   }
   // `off`/`xhigh`/`max` have no proto equivalent: clamp to the nearest rung.
   const target = CANONICAL.indexOf(level);
@@ -73,7 +99,9 @@ function thinkingConfigFor(
     const bestDistance = Math.abs(CANONICAL.indexOf(best[0]) - target);
     return distance < bestDistance ? entry : best;
   });
-  return { thinkingLevel: resolved[1] };
+  return level === 'off'
+    ? { thinkingLevel: resolved[1] }
+    : { thinkingLevel: resolved[1], includeThoughts: true };
 }
 
 
@@ -89,10 +117,15 @@ function toGeminiParts(content: ChatMessage['content']): GeminiRequestPart[] {
   const pushMedia = (
     part:
       | { type: 'image_url'; image_url: { url: string } }
+      | { type: 'video_url'; video_url: { url: string } }
       | { type: 'file'; file: { filename: string; file_data: string } },
     name: string,
   ): void => {
-    const dataUrl = part.type === 'image_url' ? part.image_url.url : part.file.file_data;
+    const dataUrl = part.type === 'image_url'
+      ? part.image_url.url
+      : part.type === 'video_url'
+        ? part.video_url.url
+        : part.file.file_data;
     const media = parseDataUrl(dataUrl);
     if (media) {
       parts.push({ inline_data: { mime_type: media.mime, data: media.data } });
@@ -105,6 +138,8 @@ function toGeminiParts(content: ChatMessage['content']): GeminiRequestPart[] {
       if (part.text) parts.push({ text: part.text });
     } else if (part.type === 'image_url') {
       pushMedia(part, 'image');
+    } else if (part.type === 'video_url') {
+      pushMedia(part, 'video');
     } else {
       pushMedia(part, part.file.filename);
     }
@@ -124,6 +159,16 @@ function toGeminiParts(content: ChatMessage['content']): GeminiRequestPart[] {
 export async function streamGemini(params: StreamParams, onEvent: StreamHandler): Promise<void> {
   const { baseUrl, apiKey, model, messages, settings, signal } = params;
   const base = baseUrl.replace(/\/+$/, '');
+  /**
+   * THE PER-SECOND METER: prices the exact request with the SHARED estimator,
+   * then grows the buckets from every streamed delta.
+   */
+  const meter: ContextMeter = createContextMeter({
+    systemInstruction: settings.systemInstruction ?? '',
+    systemSegments: params.harnessInjections.map((injection) => injection.content),
+    toolDefsChars: 0,
+    messages,
+  });
 
   /**
    * Tool declarations travel as `parametersJsonSchema` — the lossless JSON
@@ -160,7 +205,7 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
   for (const message of messages) {
     for (const call of message.tool_calls ?? []) wireNameById.set(call.id, call.function.name);
   }
-  const imageCapable = imageCapableFor(params.model);
+  const imageCapable = await imageCapableFor(params.model, params.providerId, params.capability);
   const stripImages = (content: ChatMessage['content']): ChatMessage['content'] => {
     if (imageCapable || !Array.isArray(content)) return content;
     const { kept, dropped } = separateImageParts(content);
@@ -205,11 +250,17 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
     });
   }
 
-  const guard = createLoopGuard(params.contextLimit);
+  const guard = createLoopGuard(params.contextLimit, params.compactGuard);
   let forcedStop: LoopStopReason | null = null;
+  /** In-run compaction handoff: the run resumes after the client compacts. */
+  let compactRequested = false;
+  /** One lifecycle for the whole run: block ids stay stable across rounds. */
+  const reasoningBlocks = createReasoningBlockEmitter(onEvent);
 
   if (prepared.count > 0 && prepared.defs) {
-    onEvent({ type: 'context_tools', chars: JSON.stringify(prepared.defs).length });
+    const defsChars = JSON.stringify(prepared.defs).length;
+    onEvent({ type: 'context_tools', chars: defsChars });
+    meter.addToolChars(defsChars);
   }
 
   /** Summed across tool rounds — MUST share the cadence of sumCacheReadTokens. */
@@ -328,6 +379,8 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
     }> = [];
     let usage: GeminiChunk['usageMetadata'] | undefined;
     const contentScrub = createThinkingScrubState();
+    /** Gemini's `thought` parts are the native reasoning channel. */
+    const nativeScrub = createThinkingScrubState('native');
 
     for await (const payload of iterateSse(response.body, () => streamIdle.reset())) {
       let chunk: GeminiChunk;
@@ -350,6 +403,7 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
       const candidate = chunk.candidates?.[0];
       for (const part of candidate?.content?.parts ?? []) {
         if (part.functionCall) {
+          reasoningBlocks.end();
           const declared = coerceText(part.functionCall.name) ?? part.functionCall.name;
           // Gemini answers the DECLARED name; the catalogue knows the real one.
           const name = declToWire.get(declared) ?? declared;
@@ -365,13 +419,25 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
         const textDelta = coerceText(part.text);
         if (textDelta === null || textDelta === '') continue;
         if (part.thought) {
-          const clean = textDelta.replace(ALL_THINK_TAGS, '');
-          if (clean) onEvent({ type: 'reasoning', delta: clean });
+          // Native thought part: verbatim, never split on a tag it mentions.
+          meter.addReasoningChars(textDelta.length);
+          meter.maybeEmit(onEvent);
+          const routed = scrubThinkingFragment(textDelta, nativeScrub);
+          if (routed.reasoning) reasoningBlocks.push(routed.reasoning);
           continue;
         }
-        const scrubbed = scrubInlineThinkingFragment(textDelta, contentScrub);
-        if (scrubbed.reasoning) onEvent({ type: 'reasoning', delta: scrubbed.reasoning });
-        if (scrubbed.text) onEvent({ type: 'text', delta: scrubbed.text });
+        reasoningBlocks.end();
+        const scrubbed = scrubThinkingFragment(textDelta, contentScrub);
+        if (scrubbed.reasoning) {
+          reasoningBlocks.push(scrubbed.reasoning);
+          meter.addReasoningChars(scrubbed.reasoning.length);
+          meter.maybeEmit(onEvent);
+        }
+        if (scrubbed.text) {
+          meter.addOutputChars(scrubbed.text.length);
+          meter.maybeEmit(onEvent);
+          onEvent({ type: 'text', delta: scrubbed.text });
+        }
       }
 
       if (chunk.usageMetadata) {
@@ -386,6 +452,9 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
       if (candidate?.finishReason) finishReason = candidate.finishReason;
     }
 
+    const nativeTail = flushNativeReasoning(nativeScrub);
+    if (nativeTail) reasoningBlocks.push(nativeTail);
+    reasoningBlocks.end();
     const contentTail = flushThinkingScrub(contentScrub);
     if (contentTail) onEvent({ type: 'text', delta: contentTail });
 
@@ -399,6 +468,10 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
       functionCall: { name: geminiToolName(call.name), args: call.args, id: call.id },
       ...(call.signature ? { thoughtSignature: call.signature } : {}),
     }));
+    // The tool CALLS the model just made ride the wire in `tools` too.
+    meter.addToolChars(
+      calls.reduce((sum, call) => sum + call.name.length + JSON.stringify(call.args ?? {}).length, 0),
+    );
     convo.push({ role: 'model', parts: modelParts });
 
     if (signal?.aborted) {
@@ -421,6 +494,7 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
         : undefined,
       params.settings.enforcement?.message ?? params.settings.lockdown?.message,
       params.settings.webAccess,
+      params.capability,
       params.settings.trust?.level,
     );
     for (const event of executed.events) {
@@ -473,7 +547,30 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
         errorCode: output.errorCode as string | undefined,
       })),
     );
+    // The round's tool outputs now ride the wire: price them into `tools`.
+    meter.addToolChars(
+      executed.followUp.reduce((sum, output) => sum + String(output.text ?? '').length, 0),
+    );
+    meter.recordUsage(usage ? { promptTokens: usage.promptTokenCount, completionTokens: usage.candidatesTokenCount } : undefined);
     forcedStop = guard.stopReason();
+
+    // TELEMETRY: the guard's own arithmetic, so the chip cannot disagree.
+    {
+      const telemetry = guard.telemetry();
+      onEvent({ type: 'context_telemetry', ...telemetry });
+      meter.flush(onEvent);
+      if (forcedStop === 'compact') {
+        const snap = meter.snapshot();
+        onEvent({
+          type: 'context_compaction_request',
+          liveContextTokens: snap.liveContextTokens,
+          contextLimit: null,
+          trigger: 'context-limit',
+        });
+        forcedStop = null;
+        compactRequested = true;
+      }
+    }
 
     if (forcedStop) {
       responseParts.push({ text: wrapUpInstruction(forcedStop) });
@@ -484,16 +581,27 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
     const steerParts = steersToUserParts(steered);
     resolveSteerPartRefs(steerParts);
     if (steered.length > 0) {
-      responseParts.push(...toGeminiParts(steerParts));
+      const steerGeminiParts = toGeminiParts(steerParts);
+      meter.addInputChars(JSON.stringify(steerGeminiParts).length);
+      responseParts.push(...steerGeminiParts);
     }
 
     const injections = drainInjections(params.sessionId ?? undefined);
     for (const entry of injections) {
       onEvent({ type: 'steer', id: `addon-inject-${entry.id}`, text: `[${entry.addonId}] ${injectionText(entry)}` });
-      responseParts.push({ text: `System notice from the ${entry.addonId} addon:\n${injectionText(entry)}` });
+      const notice = `System notice from the ${entry.addonId} addon:\n${injectionText(entry)}`;
+      meter.addInputChars(notice.length);
+      responseParts.push({ text: notice });
     }
 
     convo.push({ role: 'user', parts: responseParts });
+    // IN-RUN COMPACTION HANDOFF: end the stream, not the task.
+    if (compactRequested) {
+      flushUsage();
+      meter.flush(onEvent);
+      onEvent({ type: 'done', finishReason: 'context_compaction' });
+      return;
+    }
     } finally {
       streamIdle.clear();
     }

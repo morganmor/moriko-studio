@@ -37,9 +37,9 @@ import { attachmentRefUrl, storeBytesRef, uploadAttachment } from '../lib/api';
 
 import { uid } from '../lib/storage';
 import { contextBreakdown, reasoningFootprint } from '../lib/compaction';
-import { useEffectiveSettings, useStore } from '../store/useStore';
+import { useEffectiveSettings, useStore, resolveCapability } from '../store/useStore';
 import { CatEyeModeToggle, useTypewriterStatus } from './CatEyeModeToggle';
-import { lookupModelMeta, nearestThinkingLevel, thinkingLadderFor } from '../lib/modelMeta';
+import { nearestThinkingLevel, thinkingLadderFor } from '../lib/modelMeta';
 import type { TurnAttachment } from '../types';
 import { ImageLightbox } from './ImageLightbox';
 import { Popover } from './Popover';
@@ -518,11 +518,29 @@ export function Composer({
       return;
     }
     const state = useStore.getState();
-    if (state.model) {
-      const meta = lookupModelMeta(state.modelMeta, state.model);
-      const hasImage = picked.some((file) => file.type.startsWith('image/') && file.type !== 'image/svg+xml');
-      if (hasImage && meta && !meta.imageIn) {
+    const hasImage = picked.some((file) => file.type.startsWith('image/') && file.type !== 'image/svg+xml');
+    if (hasImage) {
+      // The cascade decides — a model the user marked Vision-capable in the
+      // Providers table never triggers this warning, catalogued or not.
+      const caps = resolveCapability(state.providerId, state.model);
+      if (caps && !caps.imageIn) {
         showNotice('attachments.imageNotSupported', { model: state.model });
+      }
+    }
+    /**
+     * VIDEO GATE — a video rides the wire as a `video_url` part or not at all.
+     * Without video input the model would receive a PATH and reach for text
+     * tools on a binary file, so the upload is refused here with a reason
+     * instead of being handed over as a dead end.
+     */
+    const hasVideo = picked.some((file) => file.type.startsWith('video/'));
+    if (hasVideo) {
+      const caps = resolveCapability(state.providerId, state.model);
+      if (caps && !caps.videoIn) {
+        for (const file of picked.filter((entry) => entry.type.startsWith('video/'))) {
+          showNotice('attachments.videoNotSupported', { name: file.name, model: state.model });
+        }
+        return;
       }
     }
     const loaded: TurnAttachment[] = [];
@@ -1411,7 +1429,7 @@ function PlusMenuRow({
 function ContextChip({ streaming }: { streaming: boolean }) {
   const activeConversation = useStore((state) => state.activeConversation());
   const model = useStore((state) => state.model);
-  const modelMetaMap = useStore((state) => state.modelMeta);
+  const providerId = useStore((state) => state.providerId);
   const settings = useEffectiveSettings();
   const [open, setOpen] = useState(false);
   const contextButtonRef = useRef<HTMLButtonElement>(null);
@@ -1428,11 +1446,22 @@ function ContextChip({ streaming }: { streaming: boolean }) {
       setThrottledConversation(activeConversation);
     }
   }, [activeConversation, open]);
-  const modelMetaInfo = model ? lookupModelMeta(modelMetaMap, model) : undefined;
+  const capability = useMemo(() => resolveCapability(providerId, model), [providerId, model]);
   const conversation = throttledConversation ?? activeConversation;
+  /**
+   * THE SERVER'S LIVE RECORD — the per-second meter buckets (`context_live`)
+   * plus the guard's total and its FROZEN gap. While a run streams this is the
+   * authoritative figure; when the run ends `settleLiveContext` keeps the
+   * buckets and only zeroes the in-flight tail, so the rows stay the server's
+   * own breakdown while idle. The local estimate fills in only before the
+   * first server frame and after the user edits turns.
+   */
+  const live = useStore((state) =>
+    conversation ? state.liveContext[conversation.id] : undefined,
+  );
   const breakdown = useMemo(
-    () => (conversation ? contextBreakdown(conversation, modelMetaInfo) : null),
-    [conversation, modelMetaInfo],
+    () => (conversation ? contextBreakdown(conversation, capability, live) : null),
+    [conversation, capability, live],
   );
   const reasoning = useMemo(
     () => (conversation ? reasoningFootprint(conversation) : null),
@@ -1485,8 +1514,9 @@ function ContextChip({ streaming }: { streaming: boolean }) {
           <div className="cbar2">
             <i className="s1" style={{ width: `${bucketPct(breakdown.systemTokens)}%` }} />
             <i className="s2" style={{ width: `${bucketPct(breakdown.toolsTokens)}%` }} />
-            <i className="s3" style={{ width: `${bucketPct(breakdown.outputTokens)}%` }} />
-            <i className="s4" style={{ width: `${bucketPct(breakdown.reasoningTokens)}%` }} />
+            <i className="s3" style={{ width: `${bucketPct(breakdown.inputTokens)}%` }} />
+            <i className="s4" style={{ width: `${bucketPct(breakdown.outputTokens)}%` }} />
+            <i className="s5" style={{ width: `${bucketPct(breakdown.reasoningTokens)}%` }} />
             {settings.autoCompact ? (
               <span
                 className="mk"
@@ -1506,11 +1536,16 @@ function ContextChip({ streaming }: { streaming: boolean }) {
           </div>
           <div className="crow2">
             <i className="dot s3" />
-            <span>Messages</span>
-            <b>{fmtK(breakdown.outputTokens)}</b>
+            <span>Input</span>
+            <b>{fmtK(breakdown.inputTokens)}</b>
           </div>
           <div className="crow2">
             <i className="dot s4" />
+            <span>Output</span>
+            <b>{fmtK(breakdown.outputTokens)}</b>
+          </div>
+          <div className="crow2">
+            <i className="dot s5" />
             <span>Reasoning</span>
             <b>{fmtK(breakdown.reasoningTokens)}</b>
           </div>
@@ -1519,11 +1554,11 @@ function ContextChip({ streaming }: { streaming: boolean }) {
               ? `Auto-compact at ${Math.round(settings.compactThresholdRatio * 100)}%.`
               : breakdown.limitSource === 'manual'
                 ? 'Limit: manually lowered below the model capacity.'
-                : breakdown.limitSource === 'fallback'
-                  ? 'Limit: assumed 256K — no models.dev metadata for this model.'
-                  : breakdown.effectiveLimit
-                    ? 'Limit: the model built-in capacity (models.dev).'
-                    : 'Limit: unknown — no models.dev metadata for this model.'}
+                : breakdown.limitSource === 'user'
+                  ? 'Limit: your Context Size for this model (Providers table).'
+                  : breakdown.limitSource === 'provider'
+                    ? 'Limit: reported by the provider for this model.'
+                    : 'Limit: unknown — set this model’s Context Size in Providers → Models.'}
           </div>
           {reasoning.turns > 0 ? (
             <div style={{ marginTop: 8 }}>

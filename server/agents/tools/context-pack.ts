@@ -126,7 +126,7 @@ async function contextPackTool(args: Record<string, unknown>, ctx: AgentToolCont
 export const contextPackSpec = defineTool({
   def: {
     wireName: 'agent__context_pack',
-    description: 'One call → minimal context to edit a symbol safely: body + receipt, signature, callers, tests.',
+    description: 'Assemble minimal context before changing a shared symbol/API in one call: symbol body + edit receipt, referenced type signatures, callers, callees, and mentioning tests (within budgetChars).',
     inputSchema: {
       type: 'object',
       properties: {

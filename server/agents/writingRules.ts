@@ -19,8 +19,8 @@ workspace:
   writing manual testing code based on your own implementation.
 - Only perform verifications and additional testing if the user explicitly
   asked for them.
-- Report all errors honestly and in a structured manner — never make excuses
-  to avoid or run away from the problem.
+- Report all errors in a structured manner — never make excuses to avoid or run
+  away from the problem.
 - Do not ignore or underestimate warnings that appear in the runtime,
   terminal, or devtools.
 

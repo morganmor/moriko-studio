@@ -39,7 +39,7 @@
  * the 180s subscriber-grace and 240s stall-sweeper in streamRegistry, so the
  * idle bound reports honestly before the blunt sweepers fire.
  */
-export const STREAM_IDLE_MS = 120_000;
+export const STREAM_IDLE_MS = 600_000;
 
 /** Node clamps timers above 2^31-1 ms to 1 ms — refuse the value instead. */
 const MAX_TIMER_MS = 2_147_483_647;

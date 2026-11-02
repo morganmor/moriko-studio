@@ -25,13 +25,21 @@ import {
   fetchRemoteModels,
   probeRemoteModels,
   providerHasKey,
+  saveModelConfigs,
   updateBuiltInProvider,
 } from '../lib/api';
 import { uid } from '../lib/storage';
 import { useStore } from '../store/useStore';
 import { exportAll, importBundle } from '../lib/exportImport';
-import type { ProviderDraft, ProviderKind } from '../types';
+import type {
+  ProviderDraft,
+  ProviderKind,
+  ProviderModelConfig,
+  ProviderModelHint,
+} from '../types';
 import { Field, Modal, cx } from './ui';
+import { ModelCapabilityTable } from './ModelCapabilityTable';
+import { buildModelConfig } from '../lib/modelCapability';
 
 const EMPTY_DRAFT: ProviderDraft = {
   id: '',
@@ -57,6 +65,7 @@ const KIND_OPTIONS: Array<{ value: ProviderKind; label: string; hint: string }> 
   { value: 'openai', label: 'OpenAI-compatible', hint: '/chat/completions' },
   { value: 'gemini', label: 'Google Gemini', hint: 'generateContent' },
   { value: 'anthropic', label: 'Anthropic', hint: '/messages' },
+  { value: 'mistral', label: 'Mistral AI', hint: '/chat/completions' },
 ];
 
 /** Starting points offered when adding a provider, so nothing is blank. */
@@ -109,6 +118,17 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
   /** Draft model ids for a BUILT-IN provider (comma-separated is fine). */
   const [builtInModelInput, setBuiltInModelInput] = useState('');
   /**
+   * LAYER-1 CAPABILITY TABLE for the provider being edited.
+   *
+   * Lives in component state until Save, exactly like the rest of the draft —
+   * the table is a form, not a live wire. Keyed by model id; a model with no
+   * row simply resolves through Layers 2/3.
+   */
+  const [modelConfigs, setModelConfigs] = useState<Record<string, ProviderModelConfig>>({});
+  /** LAYER-2 hints for the draft, filled by "Fetch from provider". */
+  const [draftHints, setDraftHints] = useState<Record<string, ProviderModelHint>>({});
+  const modelMetaMap = useStore((state) => state.modelMeta);
+  /**
    * Open model picker after a live fetch: the provider's /models list minus
    * everything already in the catalogue, with search + checkboxes so the user
    * decides what lands instead of the fetch dumping every id in at once.
@@ -145,6 +165,9 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
         ? JSON.stringify(selected.imageConfig, null, 2)
         : '',
     });
+    // The saved Layer-1 table + the last captured Layer-2 hints seed the matrix.
+    setModelConfigs(selected.modelConfigs ?? {});
+    setDraftHints(selected.modelHints ?? {});
     setEditing(false);
     setConfirmDelete(false);
     setShowKey(false);
@@ -235,9 +258,10 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
     if (!selected || !selected.builtIn) return;
     setFetchingModels(true);
     try {
-      const raw = await fetchRemoteModels(selected.id);
+      const listing = await fetchRemoteModels(selected.id);
+      seedHints(listing.hints, listing.models);
       const NON_CHAT = /embedding|dall-e|whisper|tts|moderation|babbage|davinci|audio|realtime|transcribe|image|search|codex/i;
-      const models = raw.filter((id) => !NON_CHAT.test(id));
+      const models = listing.models.filter((id) => !NON_CHAT.test(id));
       const fresh = models.filter((id) => !selected.models.includes(id));
       if (models.length === 0) {
         showNotice('provider.fetchNone');
@@ -255,9 +279,33 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
     }
   };
 
-  const startNew = (template?: Partial<ProviderDraft>) => {    const base = template ?? QUICK_TEMPLATES[0].draft;
+  /**
+   * Merges fetched Layer-2 hints into the draft and pre-fills rows for every
+   * id that has none. Pinned fields survive untouched — a re-fetch improves the
+   * rows the user never spoke about and cannot reverse the ones they did.
+   */
+  const seedHints = (
+    hints: Record<string, ProviderModelHint>,
+    ids: readonly string[],
+  ): void => {
+    setDraftHints((current) => ({ ...current, ...hints }));
+    setModelConfigs((current) => {
+      const next = { ...current };
+      for (const id of ids) {
+        const existing = next[id];
+        if (existing && existing.pinned.length > 0) continue;
+        next[id] = buildModelConfig(id, hints[id], modelMetaMap[id]);
+      }
+      return next;
+    });
+  };
+
+  const startNew = (template?: Partial<ProviderDraft>) => {
+    const base = template ?? QUICK_TEMPLATES[0].draft;
     setSelectedId('');
     setDraft({ ...EMPTY_DRAFT, id: uid('provider'), models: [], ...base });
+    setModelConfigs({});
+    setDraftHints({});
     setEditing(true);
     setConfirmDelete(false);
   };
@@ -296,10 +344,25 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
         baseUrl: draft.baseUrl,
         apiKey: draft.apiKey || undefined,
         models: draft.models,
+        modelConfigs,
         imageAdapter: draft.imageAdapter || undefined,
         imageConfig,
       });
 
+      // The table is persisted through its OWN endpoint so that a partial save
+      // (or a built-in, which has no provider record) still lands the grid.
+      // `createProvider` already echoed it for custom providers; this keeps a
+      // single code path and refreshes provenance server-side.
+      let savedConfigs = saved.modelConfigs ?? modelConfigs;
+      if (Object.keys(modelConfigs).length > 0) {
+        try {
+          savedConfigs = await saveModelConfigs(saved.id, modelConfigs);
+        } catch {
+          // The provider itself saved; a grid failure must not look like a
+          // provider failure — the notice below reports the provider outcome.
+        }
+      }
+      setModelConfigs(savedConfigs);
 
       await refresh();
       setSelectedId(saved.id);
@@ -307,6 +370,33 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
       showNotice('provider.saved', { label: saved.label });
     } catch (error) {
       showNotice('provider.saveFailed', undefined, error instanceof Error ? { detail: error.message } : undefined);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  /**
+   * Saves the LAYER-1 table alone — the built-in path (no provider record) and
+   * the "only the grid changed" case, so the user never has to re-save a whole
+   * provider just to persist a checkbox.
+   */
+  const saveTable = async () => {
+    if (!selected) return;
+    setSaving(true);
+    try {
+      const next = await saveModelConfigs(selected.id, modelConfigs);
+      setModelConfigs(next);
+      // Layer-2 hints ride the built-in key route (custom providers store them
+      // server-side on every fetch already).
+      if (selected.builtIn && Object.keys(draftHints).length > 0) {
+        await updateBuiltInProvider(selected.id, { modelHints: draftHints });
+      }
+      await refresh();
+      showNotice('provider.updated', { message: 'Capability table saved.' });
+    } catch (error) {
+      showNotice('provider.updateFailed', undefined, {
+        detail: error instanceof Error ? error.message : undefined,
+      });
     } finally {
       setSaving(false);
     }
@@ -349,7 +439,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
   const discoverModels = async () => {
     setLoadingModels(true);
     try {
-      const models = draft.baseUrl.trim()
+      const listing = draft.baseUrl.trim()
         ? await probeRemoteModels({
             baseUrl: draft.baseUrl.trim(),
             apiKey: draft.apiKey || undefined,
@@ -357,11 +447,16 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
           })
         : providers.some((entry) => entry.id === draft.id)
           ? await fetchRemoteModels(draft.id, draft.apiKey || undefined)
-          : [];
+          : null;
+      const models = listing?.models ?? [];
       if (models.length === 0 && !draft.baseUrl.trim()) {
         showNotice('provider.saveFirst');
         return;
       }
+      // LAYER 2 lands in the draft: every fetched id gets a pre-filled row from
+      // whatever the endpoint published, and ids the user already pinned keep
+      // their pins (buildModelConfig never invents a user decision).
+      if (listing) seedHints(listing.hints, listing.models);
       const fresh = models.filter((id) => !draft.models.includes(id));
       if (models.length === 0) {
         showNotice('provider.fetchEmpty');
@@ -413,7 +508,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
       onClose={onClose}
       title="Providers"
       description="Select or add provider"
-      size="wide"
+      size="xl"
       footer={
         <button type="button" className="btn ghost" onClick={onClose}>
           Close
@@ -421,7 +516,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
       }
     >
       {}
-      <div className={cx('card', 'md:grid2col')} style={{ padding: 0, gap: 0 }}>
+      <div className={cx('card', 'providers-grid')} style={{ padding: 0, gap: 0 }}>
         {}
         {}
         <aside
@@ -748,35 +843,22 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
                   </button>
                 </div>
 
-                {draft.models.length > 0 ? (
-                  <ul className="chipset" style={{ margin: '8px 0 0', listStyle: 'none' }}>
-                    {draft.models.map((model) => (
-                      <li key={model}>
-                        <span className="att-chip" style={{ borderRadius: 999, height: 26, fontFamily: 'var(--f-mono)', fontSize: 11 }}>
-                          {model}
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setDraft({
-                                ...draft,
-                                models: draft.models.filter((entry) => entry !== model),
-                              })
-                            }
-                            aria-label={`Remove ${model}`}
-                            style={{ color: 'var(--faint)' }}
-                          >
-                            ×
-                          </button>
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p style={{ margin: '8px 0 0', fontSize: 11, color: 'var(--faint)' }}>
-                    No models yet. Add ids manually, or save and fetch them from the provider.
-                  </p>
-                )}
+                <ModelCapabilityTable
+                  models={draft.models}
+                  configs={modelConfigs}
+                  hints={draftHints}
+                  catalog={modelMetaMap}
+                  disabled={saving}
+                  onChange={setModelConfigs}
+                  onRemoveModel={(modelId) =>
+                    setDraft((current) => ({
+                      ...current,
+                      models: current.models.filter((entry) => entry !== modelId),
+                    }))
+                  }
+                />
               </div>
+
 
               {}
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
@@ -992,47 +1074,38 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
 
               {}
               <div>
-                <p className="field-label" style={{ marginBottom: 8 }}>Default model</p>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+                  <p className="field-label" style={{ marginBottom: 0 }}>Models</p>
+                  <button
+                    type="button"
+                    className="btn ghost sm"
+                    onClick={() => void saveTable()}
+                    disabled={saving}
+                  >
+                    {saving ? 'Saving…' : 'Save changes'}
+                  </button>
+                </div>
                 {selected.models.length > 0 ? (
-                  <ul className="chipset" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-                    {selected.models.map((name) => {
-                      const isActive = selected.id === providerId && name === activeModel;
-                      return (
-                        <li key={name}>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setProvider(selected.id, name);
-                              showNotice('provider.modelSetTo', { model: name });
-                            }}
-                            className="sc"
-                            aria-pressed={isActive}
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: 6,
-                              height: 32,
-                              padding: '0 12px',
-                              borderRadius: 8,
-                              fontFamily: 'var(--f-mono)',
-                              fontSize: 13,
-                            }}
-                          >
-                            {isActive
-                              ? <Check className="ic" style={{ width: 12, height: 12 }} aria-hidden="true" />
-                              : null}
-                            {name}
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
+                  <ModelCapabilityTable
+                    models={selected.models}
+                    configs={modelConfigs}
+                    hints={draftHints}
+                    catalog={modelMetaMap}
+                    disabled={saving}
+                    onChange={setModelConfigs}
+                    activeModel={selected.id === providerId ? activeModel : undefined}
+                    onSelectModel={(modelId) => {
+                      setProvider(selected.id, modelId);
+                      showNotice('provider.modelSetTo', { model: modelId });
+                    }}
+                  />
                 ) : (
                   <p style={{ margin: 0, fontSize: 12.5, color: 'var(--faint)' }}>
-                    Belum ada model. Tambahkan lewat Edit.
+                    No models yet. Add them via Edit.
                   </p>
                 )}
               </div>
+
 
               {}
               <div>

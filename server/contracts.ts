@@ -6,7 +6,7 @@
  * import from `src/` because that tree is browser-only.
  */
 
-export type ProviderKind = 'openai' | 'gemini' | 'anthropic';
+export type ProviderKind = 'openai' | 'gemini' | 'anthropic' | 'mistral';
 
 export type ProviderPresetId =
   | 'openai'
@@ -44,6 +44,119 @@ export interface ImageProviderCapabilities {
   models?: Record<string, ImageModelCaps>;
 }
 
+/**
+ * WHERE A CAPABILITY VALUE CAME FROM — the provenance half of the 3-layer
+ * cascade (see server/modelCapability.ts). It exists so the UI can state the
+ * truth about a number instead of implying certainty it does not have.
+ *
+ *  - 'user'       Layer 1: the user's own checkbox / context field. FINAL.
+ *  - 'provider'   Layer 2: introspected from the provider's own /models payload.
+ *  - 'models.dev' Layer 3: the build-time catalogue HINT (advisory only).
+ *  - 'default'    No layer knew: a documented per-field fallback.
+ */
+export type ModelCapabilitySource = 'user' | 'provider' | 'models.dev' | 'default';
+
+/** The capability bits the cascade resolves. */
+export interface ModelCapabilityFlags {
+  imageIn: boolean;
+  audioIn: boolean;
+  videoIn: boolean;
+  pdfIn: boolean;
+  tools: boolean;
+  reasoning: boolean;
+  imageOut: boolean;
+}
+
+/** Every capability column, named once so loops and the UI cannot drift. */
+export const MODEL_CAPABILITY_FLAGS: ReadonlyArray<keyof ModelCapabilityFlags> = [
+  'imageIn',
+  'audioIn',
+  'videoIn',
+  'pdfIn',
+  'tools',
+  'reasoning',
+  'imageOut',
+];
+
+/**
+ * The subset the Providers table shows as checkbox columns. `imageOut` is
+ * resolved and honoured at runtime (Image Studio routing) but stays out of the
+ * grid: it is not an INPUT capability, and the image adapter already classifies
+ * output models — a column there would be a second, competing authority.
+ */
+export const MODEL_CAPABILITY_COLUMNS: ReadonlyArray<keyof ModelCapabilityFlags> = [
+  'imageIn',
+  'audioIn',
+  'videoIn',
+  'pdfIn',
+  'tools',
+  'reasoning',
+];
+
+/**
+ * THE single allowlist of fields a user may pin — one authority shared by the
+ * store's normalizer and the route's submission validator.
+ *
+ * It was previously duplicated in both modules, which is exactly how the
+ * "PINNABLE_FIELDS is not defined" failure happened: one copy lands, the other
+ * module references a name it does not have, and the route dies at request
+ * time. A shared export cannot drift and cannot be missing.
+ */
+export const PINNABLE_FIELDS: ReadonlySet<string> = new Set<string>([
+  ...MODEL_CAPABILITY_FLAGS,
+  'context',
+]);
+
+
+/**
+ * LAYER 1 — the user's own row in the capability matrix (Providers dialog →
+ * Models table). This is the HIGHEST authority in the whole resolution chain:
+ * whatever it says is what the runtime does, even when models.dev disagrees or
+ * the model is absent from the catalogue entirely.
+ *
+ * A field is user-owned only while it sits in `pinned`. Everything else is a
+ * cached resolution that a later provider re-fetch may refresh. The moment the
+ * user ticks a box or types a context size, that field is pinned and nothing
+ * below Layer 1 may override it again.
+ */
+export interface ProviderModelConfig extends ModelCapabilityFlags {
+  /** Model id exactly as the provider lists it. */
+  id: string;
+  /** Context window in TOKENS (null = resolve from the layers below). */
+  context: number | null;
+  /** Strongest layer that contributed to this row (drives the UI badge). */
+  source: ModelCapabilitySource;
+  /** Fields the user pinned explicitly — never rewritten by Layer 2. */
+  pinned: Array<keyof ModelCapabilityFlags | 'context'>;
+  /** Max output tokens when the provider states one (null = unknown). */
+  maxOut?: number | null;
+}
+
+/**
+ * LAYER 2 — what the provider's OWN model-list endpoint told us, captured at
+ * fetch time. Deliberately SPARSE: every field is optional because almost no
+ * endpoint publishes all of them, and a missing field means "this endpoint
+ * said nothing", never "false".
+ */
+export interface ProviderModelHint extends Partial<ModelCapabilityFlags> {
+  context?: number | null;
+  maxOut?: number | null;
+  /** Human name from the provider payload, shown beside the id when present. */
+  label?: string | null;
+  /** Which endpoint family answered (for the UI's provenance badge). */
+  from?: 'openrouter' | 'lmstudio' | 'vllm' | 'gemini' | 'llamacpp' | 'ollama' | 'anthropic' | 'mistral' | 'opaque';
+}
+
+/**
+ * ONE model as the model-list endpoint knows it (Layer 2 transport shape).
+ * `hint` stays empty for endpoints that publish bare ids — the honest answer,
+ * which lets Layer 3 fill in as a HINT instead of a verdict.
+ */
+export interface ProviderModelEntry {
+  id: string;
+  hint: ProviderModelHint;
+}
+
 /** A provider the UI can send requests through. Keys never leave the server. */
 export interface ProviderPublic {
   id: string;
@@ -52,6 +165,16 @@ export interface ProviderPublic {
   baseUrl: string;
   /** Suggested model ids, used to populate model pickers. */
   models: string[];
+  /**
+   * LAYER 1 TABLE — per-model capability config keyed by model id. `models`
+   * above stays the authoritative membership list.
+   */
+  modelConfigs?: Record<string, ProviderModelConfig>;
+  /**
+   * LAYER 2 TABLE — provider-introspected hints keyed by model id. Read-only
+   * for the client; refreshed by "Fetch from provider".
+   */
+  modelHints?: Record<string, ProviderModelHint>;
   /** True when a credential is configured on the server (or none is needed). */
   hasServerKey: boolean;
   /** True when the user supplied the key from the UI instead of `.env`. */
@@ -96,6 +219,15 @@ export interface WireToolCall {
 export type MessageContentPart =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string } }
+  /**
+   * VIDEO, strictly in the OpenAI-compatible nested shape. Gateways with a
+   * Rust/Serde body parser (MiniMax among them) reject the WHOLE request when a
+   * content part does not match one of their untagged variants — a
+   * `{ type: 'video', url }` or a `file` wrapper 400s with "did not match any
+   * variant of untagged enum". Nested `video_url.url` as a data URL is the
+   * documented shape, so that is the only one the harness emits.
+   */
+  | { type: 'video_url'; video_url: { url: string } }
   | { type: 'file'; file: { filename: string; file_data: string } };
 
 /**
@@ -112,6 +244,15 @@ export type MessageContentPart =
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'tool';
   content: string | MessageContentPart[] | null;
+  /**
+   * The provider's OWN chain-of-thought channel (`reasoning_content` on
+   * DeepSeek/OpenAI-compatible thinking APIs, `reasoning` on relays). It rides
+   * beside `content`, never inside it: wrapping thoughts in tag text taught
+   * the model that thinking is prose it should imitate, and providers that
+   * require their reasoning back on tool-bearing requests (DeepSeek) rejected
+   * every follow-up request when it was missing.
+   */
+  reasoning_content?: string | null;
   /** Present on an assistant message that requested tools. */
   tool_calls?: WireToolCall[];
   /** Present on a `tool` message: which call this result answers. */
@@ -200,6 +341,13 @@ export interface ChatSettingsDTO {
   /** Explicit auto-compact trigger; `null` = only the context-limit trigger. */
   compactThresholdTokens: number | null;
   /**
+   * Context-limit auto-compact trigger as a ratio of the effective window
+   * (0.5–0.98). THE SAME value the Configuration dropdown controls — the server
+   * guard reads it so both brakes fire at the number the user chose instead of
+   * a hardcoded constant that could disagree with the client.
+   */
+  compactThresholdRatio: number;
+  /**
    * ENFORCEMENT — the user's graduated punishment ladder. Replaces the old
    * binary `lockdown` flag. `level` (0–5) is the user-controlled trigger:
    *   0 Normal · 1 Guided · 2 Constrained · 3 Locked tools ·
@@ -251,6 +399,13 @@ export interface CustomProviderInput {
   baseUrl: string;
   apiKey?: string;
   models: string[];
+  /**
+   * LAYER 1: the capability matrix as saved from the Providers dialog. Absent
+   * means "keep whatever is stored" — a rename must never wipe the table.
+   */
+  modelConfigs?: Record<string, ProviderModelConfig>;
+  /** LAYER 2: hints captured by "Fetch from provider" (server-written). */
+  modelHints?: Record<string, ProviderModelHint>;
   /** Optional image-generation routing: which adapter speaks this provider. */
   imageAdapter?: string;
   /** Adapter-specific configuration, e.g. the `declarative` adapter's paths. */
@@ -369,8 +524,67 @@ export type StreamEvent =
       turnId?: string;
     }
   | { type: 'text'; delta: string }
-  | { type: 'reasoning'; delta: string }
+  | {
+      /**
+       * A reasoning BLOCK opened. Reasoning is a block with a lifecycle, not a
+       * flat delta channel: `reasoning_start` → `reasoning`* → `reasoning_end`
+       * for every round. `blockId` is stable for the whole block, so the client
+       * can anchor one strip per round instead of inferring boundaries from
+       * whatever segment type happens to arrive next.
+       */
+      type: 'reasoning_start';
+      blockId: string;
+    }
+  | {
+      /** Reasoning text for the block named by `blockId`. */
+      type: 'reasoning';
+      delta: string;
+      blockId?: string;
+    }
+  | {
+      /** The block closed: nothing else will arrive for this `blockId`. */
+      type: 'reasoning_end';
+      blockId: string;
+    }
   | { type: 'usage'; promptTokens?: number; completionTokens?: number; totalTokens?: number; cacheReadTokens?: number }
+  | {
+      /**
+       * LIVE CONTEXT TELEMETRY — the guard's own arithmetic, streamed every
+       * tool round so the client's ContextChip can show the exact figure the
+       * guard is acting on instead of re-estimating locally and disagreeing.
+       *
+       * `liveContextTokens` is what the NEXT request would carry:
+       * promptTokens + completionTokens + addedTokens. It is the number the
+       * compaction threshold is compared against, verbatim.
+       */
+      type: 'context_telemetry';
+      /** Provider-reported prompt tokens of the round that just ran. */
+      promptTokens: number;
+      /** Provider-reported output tokens of that round. */
+      completionTokens: number;
+      /** Tokens the tool outputs that just landed will add to the next prompt. */
+      addedTokens: number;
+      /** promptTokens + completionTokens + addedTokens — the guard's figure. */
+      liveContextTokens: number;
+      /** The 3-layer resolved window, or null when no layer knows it. */
+      contextLimit: number | null;
+      /** liveContextTokens / contextLimit (0..1), null without a limit. */
+      ratio: number | null;
+    }
+  | {
+      /**
+       * IN-RUN COMPACTION HANDOFF. The guard crossed the compaction threshold
+       * mid-run. This is NOT a stop: tools stay enabled and no wrap-up is
+       * requested. The client compacts with the main Moriko engine and
+       * auto-resumes the same run on the compacted context.
+       */
+      type: 'context_compaction_request';
+      /** The guard's figure that tripped the threshold. */
+      liveContextTokens: number;
+      contextLimit: number | null;
+      /** Which trigger the client should record on the checkpoint. */
+      trigger: 'context-limit';
+    }
   | {
       /**
        * The exact JSON size of the native tool definitions riding this request
@@ -380,6 +594,39 @@ export type StreamEvent =
        */
       type: 'context_tools';
       chars: number;
+    }
+  | {
+      /**
+       * LIVE CONTEXT BUCKETS, PER SECOND — the server meter's own five-bucket
+       * breakdown of the context as THIS request carries it, grown live by
+       * every streamed delta (text → output, reasoning → reasoning). Throttled
+       * to ~1 s by the meter, flushed at every round boundary. The client
+       * stores these verbatim; cx-top is their sum plus the frozen gap.
+       */
+      type: 'context_live';
+      systemTokens: number;
+      toolsTokens: number;
+      inputTokens: number;
+      outputTokens: number;
+      reasoningTokens: number;
+      /** The buckets' exact sum — nothing unaccounted. */
+      totalTokens: number;
+    }
+  | {
+      /**
+       * LIVE TOOL-CALL ASSEMBLY — the model is still typewriting the arguments.
+       *
+       * Mirrors Chuze's `building` event: it fires on the FIRST fragment and
+       * then on a ~120 ms throttle, carrying every call being assembled with
+       * its UTF-8 size. Without it the panel is blank for the whole payload
+       * build (which for a large call is minutes), because `tool_call` only
+       * exists once the arguments are complete.
+       */
+      type: 'tool_building';
+      at: number;
+      count: number;
+      bytes: number;
+      tools: Array<{ index?: number; name: string; bytes: number; target?: string }>;
     }
   | {
       /** The model asked for an MCP tool; the proxy is executing it. */
@@ -442,10 +689,11 @@ export type StreamEvent =
       type: 'steer';
       id: string;
       text: string;
-      /** DSH-style: the full content parts (text/image/file) the steer carried. */
+      /** DSH-style: the full content parts (text/image/video/file) the steer carried. */
       parts?: Array<
         | { type: 'text'; text: string }
         | { type: 'image_url'; image_url: { url: string } }
+        | { type: 'video_url'; video_url: { url: string } }
         | { type: 'file'; file: { filename: string; file_data: string } }
       >;
     }

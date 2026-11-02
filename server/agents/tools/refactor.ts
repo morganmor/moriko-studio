@@ -186,7 +186,7 @@ async function applyEdits(
 export const refactorSpec = defineTool({
   def: {
     wireName: 'agent__refactor',
-    description: 'Compiler-driven refactors: rename (cross-file), move_file (updates imports), organize_imports; dryRun default shows a diff.',
+    description: 'Compiler-driven refactors (prefer over manual cross-file renames): rename (cross-file), move_file (updates imports), organize_imports; dryRun (default true) previews unified diff, dryRun:false applies atomically with vault snapshots.',
     inputSchema: {
       type: 'object',
       properties: {

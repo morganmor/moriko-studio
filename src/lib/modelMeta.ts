@@ -121,6 +121,54 @@ function indexOf(map: Record<string, ModelMeta>): CatalogIndex {
 }
 
 /**
+ * Tokens that change what a model CAN DO. A core-name hunt may never DROP one
+ * of these — `deepseek-v4-flash` is text-only while `deepseek-v4-flash-latest`
+ * takes images, and `qwen3.5-9b` takes them while `qwen3.5-9b-base` does not.
+ * Derived from the catalog itself. Mirrors `CAPABILITY_TOKENS` in
+ * server/modelMetadata.ts — keep the two in sync.
+ */
+const CAPABILITY_TOKENS = new Set([
+  'vl', 'vision', 'image', 'omni', 'multimodal',
+  'audio', 'video', 'pdf', 'tts', 'transcribe',
+  'base', 'it', 'latest',
+]);
+
+/** Minimum core length: a lone token ("flash", "pro") is too weak to name a model. */
+const MIN_CORE_TOKENS = 2;
+
+/** Identity tokens of a model id; dots survive so "v4.1" stays one token. */
+function modelTokens(id: string): string[] {
+  return id
+    .split(/[^a-z0-9.]+/i)
+    .filter(Boolean)
+    .map((token) => token.toLowerCase());
+}
+
+/**
+ * The catalogued core name inside a decorated id, or the id itself when it is
+ * already known. Fine-tuned releases wrap a base model with prefixes
+ * ("gabli-", "takeku-") and suffixes ("-heretic", "-abliterated",
+ * "-uncensored") that models.dev never lists, so the LONGEST contiguous token
+ * window that names a known model wins — longest first keeps
+ * "minimax-m3.1-flash" from collapsing into "minimax-m3".
+ *
+ * Mirrors `coreModelName` in server/modelMetadata.ts.
+ */
+function coreModelName(bare: string, known: (name: string) => boolean): string {
+  if (known(bare)) return bare;
+  const tokens = modelTokens(bare);
+  for (let size = tokens.length - 1; size >= MIN_CORE_TOKENS; size -= 1) {
+    for (let start = 0; start + size <= tokens.length; start += 1) {
+      const dropped = tokens.filter((_, index) => index < start || index >= start + size);
+      if (dropped.some((token) => CAPABILITY_TOKENS.has(token))) continue;
+      const candidate = tokens.slice(start, start + size).join('-');
+      if (known(candidate)) return candidate;
+    }
+  }
+  return bare;
+}
+
+/**
  * The ladder to offer for a provider+model, resolved in two tiers.
  *
  *  1. THE PROVIDER IS CATALOGUED → its own entry wins, restrictions included.
@@ -159,7 +207,7 @@ export function thinkingLadderFor(
     if (mapped.length > 0) return { levels: mapped, source: 'provider' };
   }
 
-  const entries = index.byBareModel.get(bareModelPart(wantedModel)) ?? [];
+  const entries = index.byBareModel.get(coreModelName(bareModelPart(wantedModel), (name) => index.byBareModel.has(name))) ?? [];
   const union = new Set<ThinkingLevel>();
   for (const meta of entries) {
     if (meta.reasoning !== true) continue;
@@ -193,12 +241,13 @@ export function nearestThinkingLevel(
 
 /**
  * Resolves metadata for a model id from any provider. Matching is
- * provider-tolerant and variant-tolerant: exact "provider/model" key first
- * (an OpenRouter-style ":variant" suffix is stripped from EITHER side, so
- * "bothub/…/gemma-4-31b-it:free" and "mimo-v2.6-flash:free" both resolve to
- * their base model), then the bare model part (last "/" segment) against the
- * whole map. Mirrors the server-side lookup (server/modelMetadata.ts) — keep
- * the two in sync.
+ * provider-tolerant, variant-tolerant and fine-tune tolerant: exact
+ * "provider/model" key first (an OpenRouter-style ":variant" suffix is
+ * stripped from EITHER side, so "bothub/…/gemma-4-31b-it:free" and
+ * "mimo-v2.6-flash:free" both resolve to their base model), then the bare
+ * model part (last "/" segment) against the whole map, then the decorated
+ * core ("gabli-minimax-m3-heretic" → "minimax-m3"). Mirrors the server-side
+ * lookup (server/modelMetadata.ts) — keep the two in sync.
  */
 export function lookupModelMeta(
   map: Record<string, ModelMeta>,
@@ -212,7 +261,11 @@ export function lookupModelMeta(
   const wantExact = stripVariantSuffix(wanted);
   const exact = index.byExactKey.get(wantExact);
   if (exact) return exact;
-  return index.byBareModel.get(bareModelPart(wanted))?.[0];
+
+  const bare = bareModelPart(wanted);
+  const direct = index.byBareModel.get(bare)?.[0];
+  if (direct) return direct;
+  return index.byBareModel.get(coreModelName(bare, (name) => index.byBareModel.has(name)))?.[0];
 }
 
 /** "provider/…/model:variant" → "provider/…/model" — see the server-side twin. */

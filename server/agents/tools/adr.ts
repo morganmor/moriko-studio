@@ -94,7 +94,7 @@ ${body.alternatives ?? '(n/a)'}
 export const adrSpec = defineTool({
   def: {
     wireName: 'agent__adr',
-    description: 'Architecture Decision Records (docs/adr): new, list, read, supersede.',
+    description: 'Architecture Decision Records in docs/adr (new | list | read | supersede); offer mode "new" to record major structural decisions.',
     inputSchema: {
       type: 'object',
       properties: {

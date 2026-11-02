@@ -2,11 +2,10 @@ import { describeAttachment } from '../attachments.js';
 import type { ChatSettingsDTO } from '../contracts.js';
 import { listGoals, renderGoalsForContext } from '../goals/store.js';
 import { listTodos, renderTodosForContext } from '../todos/store.js';
-import { lookupModelMetadata } from '../modelMetadata.js';
+import { resolveWithoutProvider, type ResolvedModelCapability } from '../modelCapability.js';
 import { listWireTools } from '../mcp/manager.js';
 import { listReminders, renderReminder, takeDueReminders } from '../reminders/store.js';
 import { listContextProviders } from '../addons/registry.js';
-import { builtinAddonIds } from '../addons/seed.js';
 import { isTerminalTool, isWebTool, listAgentToolDefs } from './tools/index.js';
 import { resolveStoredWorkflow } from './workflowStore.js';
 import { listImageCapableProviders } from '../images/runtime.js';
@@ -76,18 +75,25 @@ function structuredOutputsInjection(): HarnessInjection {
 /**
  * MODEL CAPABILITY GUIDANCE — tells the model what IT can perceive natively.
  *
- * models.dev metadata (synced at build time) says whether the RUNNING model
- * accepts image/video/audio/pdf input. The harness uses that so vision-capable
- * models stop wasting agent__vision calls on attachments that are already
- * visible to them as conversation parts, while text-only models learn that
- * agent__vision is the ONLY way they will ever see an image. Rebuilt on every
- * model switch (injections refresh at that trigger), so it never goes stale
- * within a conversation.
+ * The answer comes from the 3-layer cascade (server/modelCapability.ts): the
+ * user's own table first, then what the provider published, then models.dev as
+ * a hint. A user who ticks Vision for a model models.dev has never heard of
+ * gets "SUPPORTED natively" here — the prompt must not contradict the wire.
+ *
+ * Rebuilt on every model switch (injections refresh at that trigger), so it
+ * never goes stale within a conversation.
  */
-function modelCapabilitiesInjection(modelId?: string): HarnessInjection | null {
+function modelCapabilitiesInjection(
+  modelId?: string,
+  capability?: ResolvedModelCapability,
+): HarnessInjection | null {
   if (!modelId) return null;
-  const meta = lookupModelMetadata(modelId);
-  if (!meta) {
+  const caps = capability ?? resolveWithoutProvider(modelId);
+  const meta = caps.hint;
+  /** True when NO layer had an opinion — the "we do not know" case. */
+  const unknown = !meta && caps.source === 'default';
+
+  if (unknown) {
     return {
       id: 'model-capabilities',
       title: 'System prompt · Model capabilities',
@@ -98,15 +104,16 @@ function modelCapabilitiesInjection(modelId?: string): HarnessInjection | null {
       ].join('\n'),
     };
   }
-  const lines: string[] = [`Input modalities for "${modelId}" (models.dev metadata):`];
+
+  const lines: string[] = [`Input modalities for "${modelId}" (resolved: ${caps.source}):`];
   lines.push(
-    meta.imageIn
+    caps.imageIn
       ? '- Images: SUPPORTED natively — user-attached images ride the conversation as image parts AND read_file on an image file returns the image INLINE as an image part of the tool result. You SEE both directly.\n  - STRICT RULE: delegating to agent__vision is FORBIDDEN for you. NEVER call agent__vision for any image you can open yourself — even when an image is not visible in the current context, call read_file { path } first and LOOK at the result before doing anything else. The harness hard-rejects agent__vision calls that skip this. agent__vision is reserved for text-only models; for you it yields only a secondhand description you would have to attribute.'
       : '- Images: NOT supported — you cannot see image parts. To actually SEE an image attachment, call agent__vision { path } (its description returns as text). Never claim to see an image you cannot. read_file on an image tells you so instead of rendering it.',
   );
-  if (meta.videoIn) lines.push('- Video: SUPPORTED natively — attached video parts are visible to you directly.');
-  if (meta.audioIn) lines.push('- Audio: SUPPORTED natively — attached audio parts are usable by you directly.');
-  if (meta.pdfIn) lines.push('- PDF: SUPPORTED natively — attached PDF parts are readable by you directly; read_file is for text files, not PDFs.');
+  if (caps.videoIn) lines.push('- Video: SUPPORTED natively — attached video parts are visible to you directly.');
+  if (caps.audioIn) lines.push('- Audio: SUPPORTED natively — attached audio parts are usable by you directly.');
+  if (caps.pdfIn) lines.push('- PDF: SUPPORTED natively — attached PDF parts are readable by you directly; read_file is for text files, not PDFs.');
   lines.push('- Metadata can lag a provider: if a part is rejected anyway, say so and continue with the text.');
   lines.push(
     '- VISION ATTRIBUTION (applies to every model): agent__vision returns a SECONDHAND description from another model. Relay it with attribution ("<model> reports…") — never as "I see…" — unless the image part is genuinely in your own context.',
@@ -261,10 +268,11 @@ export function agentHarnessInjection(
 		'- **Only generate code with short, concise, and clear comments. Spamming the code with bloated comments is strictly prohibited and constitutes a violation of code structure and cleanliness.**',
 		'- Proper End-to-End (E2E) testing is done by using dedicated tools, not by writing manual testing code based on your own implementation.',
 		'- Relying on end-to-end (e2e) tests as the ultimate proof that the runtime is working is a fatal mistake and amounts to testing in a closed environment. External sources, such as users or external testing tools not developed by you, provide more evidence.',
-		'- Before adding any new UI/UX/frontend component, study the existing design system first (theme tokens, light/dark mode handling, spacing, typography, reusable components); never hardcode colors or style values for a single theme, use the projects theme variables/tokens instead, and verify the new component is visible and functional in every supported mode (light, dark, responsive) before declaring the task complete.',
+		'- Before adding any new UI/UX/frontend component, study the existing design system first (theme tokens, light/dark mode handling, spacing, typography, reusable components); never hardcode colors or style values for a single theme, use the projects theme variables/tokens instead, and consider how the new component reads in every supported mode (light, dark, responsive).',
 		'- Before adding or integrating a feature, search the codebase for existing functionality (routes, services, helpers, components, types) and understand the dependency relationships between the related files; prefer extending or reusing existing modules over creating parallel implementations, consolidate overlapping code when you find it, and state which files you read and why you chose the location for your changes.',
 		'- Only perform verifications and additional testing if explicitly requested or instructed by the user.',
-		'- Report all errors honestly and in a structured manner. Making excuses to avoid or run away from the problem and retrieving contextual information or previous turns to defend your position constitutes a violation of agentic coding and architecture..',
+		'- **NEVER append "honest notes" ("Catatan jujur", "Honest summary", "Not verified at runtime", "Yang belum saya buktikan", or "What remains unverified") at the end of your response. The user sees every tool call and verification step live in the UI trace—explaining that you did not run runtime tests or that web access is off is redundant garbage and strictly prohibited.**',
+      '- Report all errors in a structured manner. Making excuses to avoid or run away from the problem and retrieving contextual information or previous turns to defend your position constitutes a violation of agentic coding and architecture.',
       ].join('\n'),
     };
   }
@@ -300,15 +308,14 @@ export function agentHarnessInjection(
 	  '- **Agent Moriko must actively review and check off completed Todos as work progresses, and must never accumulate pending Todos or leave any Todo forgotten.**',
 	  '- **Goals are strictly reserved for large-scale implementations, and must be accompanied by comprehensive, detailed Todos.**',
       '- **Todos are a STATE MACHINE, not a checklist: pending → in_progress (with `activeForm`) → completed. Never jump pending → completed. At most ONE todo is in_progress at a time — that is what "current work" means.**',
-      '- **A todo cannot be completed while an edit from this session left a syntax diagnostic unresolved. Fix the build, then complete it.**',
       '',
       '## Planning (plan mode)',
       '- Plan mode is a PHYSICAL gate, not advice: agent__enter_plan_mode makes every file write (edit_file, multi_edit, edit_lines, edit_between, insert_at_line, write, apply_patch, layout_edit, rename, move, copy, delete) and every command runner (run, exec, git except read-only subcommands, task_*, harness_reload) be REFUSED before it executes.',
       '- ENTER when: (1) new feature work, (2) more than 2-3 files will change, (3) an architecture decision has several valid answers, (4) the request is ambiguous about scope or intent, (5) the user must choose between approaches.',
       '- GOOD: "Add a logout button" — where does it go, what happens on click, does the session end server-side? Enter plan mode, read the auth code, ask what is genuinely unknown, then exit with a plan.',
       '- BAD: "Fix the typo in the README", "rename this variable", "the test on line 40 fails" — just do it. Planning these burns a turn and the user notices.',
-      '- EXIT only with a structured plan: summary, files[], approach (and the alternative you rejected), verification[]. A plan that cannot name its files and its checks is an intention, not a plan.',
-      '- Work the plan afterwards: one todo in_progress at a time, completed only once its verification passes.',
+      '- EXIT only with a structured plan: summary, files[], and approach (with the alternative you rejected). A plan that cannot name its files is an intention, not a plan.',
+      '- Work the plan afterwards: one todo in_progress at a time.',
       '',
       '## Plan mode × RSA/T (they compose, they do not compete)',
       '- Plan mode + todos discipline ONE session: cheap, always available, no addon required.',
@@ -324,185 +331,33 @@ export function agentHarnessInjection(
 	  '- **Only generate code with short, concise, and clear comments. Spamming the code with bloated comments is strictly prohibited and constitutes a violation of code structure and cleanliness.**',
       '- Proper End-to-End (E2E) testing is done by using dedicated tools, not by writing manual testing code based on your own implementation.',
 	  '- Relying on end-to-end (e2e) tests as the ultimate proof that the runtime is working is a fatal mistake and amounts to testing in a closed environment. External sources, such as users or external testing tools not developed by you, provide more evidence.',
-	  '- Before adding any new UI/UX/frontend component, study the existing design system first (theme tokens, light/dark mode handling, spacing, typography, reusable components); never hardcode colors or style values for a single theme, use the projects theme variables/tokens instead, and verify the new component is visible and functional in every supported mode (light, dark, responsive) before declaring the task complete.',
+	  '- Before adding any new UI/UX/frontend component, study the existing design system first (theme tokens, light/dark mode handling, spacing, typography, reusable components); never hardcode colors or style values for a single theme, use the projects theme variables/tokens instead, and consider how the new component reads in every supported mode (light, dark, responsive).',
 	  '- Before adding or integrating a feature, search the codebase for existing functionality (routes, services, helpers, components, types) and understand the dependency relationships between the related files; prefer extending or reusing existing modules over creating parallel implementations, consolidate overlapping code when you find it, and state which files you read and why you chose the location for your changes.',
       '- Only perform verifications and additional testing if explicitly requested or instructed by the user.',
-      '- Report all errors honestly and in a structured manner. Making excuses to avoid or run away from the problem and retrieving contextual information or previous turns to defend your position constitutes a violation of agentic coding and architecture..',
+      '- **For architecture tasks and large codebases, using `agent__interlinked` to map cross-file module relationships is mandatory — NEVER skip it out of arrogance ("sok pintar"), stubbornness ("bebal"), or corner-cutting ("culas"), yet NEVER become lazy about using `agent__grep` and other precision tools just because `agent__interlinked` exists.**',
+      '- **NEVER append "honest notes" ("Catatan jujur", "Honest summary", "Not verified at runtime", "Yang belum saya buktikan", or "What remains unverified") at the end of your response. The user sees every tool call and verification step live in the UI trace—explaining that you did not run runtime tests or that web access is off is redundant garbage and strictly prohibited.**',
+      '- Report all errors in a structured manner. Making excuses to avoid or run away from the problem and retrieving contextual information or previous turns to defend your position constitutes a violation of agentic coding and architecture.',
       '',
-      '## Reading',
-      '- agent__read_file: lines returned WHOLE with sha256 + read# footer. Read (or grep with receipts) before editing. Modes:',
-      '  • window (default): numbered slice, 400 lines (max 1000). Pass footer token next:"r:…" VERBATIM as continueFrom.',
-      '  • outline: line-numbered symbol map. NOT a read receipt.',
-      '  • fold: whole file as signature tree (bodies shown as ⋯ N lines). NOT a read receipt. maxDepth default 2, max 8.',
-      '  • Extras: ranges [[1,30],[395,480]] (max 6 ranges, 2000 lines); line: N for one full line; showWhitespace: true exposes tabs/trailing spaces.',
-      '  • A REPEATED request on an unchanged file answers with an "unchanged" stub AUTOMATICALLY — you do not track hashes. Pass refresh: true only when you genuinely need the text again (e.g. it was compacted away).',
-      '- agent__read_all: standalone fold, same output, not a read receipt.',
-      '- agent__batch_read: ANY number of files per call — files[{ path, maxLines }], maxLines REQUIRED per file (caller-chosen; no default, no clamp, no file cap, output never truncated). Each file still returns sha + receipt.',
-      '- FOLD-FIRST (mandatory): a file >400 lines must be mapped (read_all / fold) before window-reading; then read only the needed block. Exceptions: region already pinpointed (grep receipt, earlier map, line: N, known offsetLine) or file ≤400 lines.',
-      '- Symbol-aware reading: symbol name known → agent__read_symbol (exact range + receipt, no fold needed); about to change a shared API → agent__context_pack (body + callers + tests in one call).',
-      '- agent__search is LEXICAL (camelCase-aware BM25) — keywords, not embeddings.',
-      '- Images: read_file returns them inline (image-capable models MUST use it before agent__vision; text-only models fall back to agent__vision). Vision output is secondhand: attribute it ("<model> reports…"), never "I see…".',
+      '## Execution Gates',
+      '- **READ-BEFORE-EDIT (mandatory):** Every file mutation on an existing file requires a current read receipt covering the edited region; copy edit anchors verbatim from receipted output so they match uniquely. Structural outlines/folds are maps only, never edit receipts.',
+      '- **FOLD-FIRST (mandatory):** Any file >400 lines must be structurally mapped before window-reading, then read only the needed block — except when the target region is already pinpointed (existing receipt, earlier map, single-line lookup, or known line offset) or the file is ≤400 lines.',
+      '- **AUTO-HEAL & DETECTOR:** On every write/edit, the harness automatically strips edit-introduced duplicate blocks/seam overlaps (1–5 lines) and standalone surplus closing delimiters, reports missing closers, syntax errors, and same-scope redeclarations (const/let, imports, classes) with line numbers, and rolls back broken syntax via vault snapshots when syntax verification is on. Read `⟲ auto-heal` / `⚠ detector` notices in tool results: the file on disk is already cleaned, so never re-apply a removal the harness just performed. Diffs mark token changes with `│ changed: old → new` and moved lines with `⇄ moved from before:N`.',
+      '- **ADDONS SOURCE JAIL:** Builtin addon sources in `addons-src/<id>/` are always accessible under the same read/edit/syntax gates without switching workspaces; addon removal/deletion is strictly user-only.',
       '',
-      '## Editing',
-      '- agent__edit_file (DEFAULT edit): anchor replace old_string/new_string; replace_all, line_hint: N (disambiguate), dry_run, expected_read_hash, preserve_eol (default on), verify_syntax (default on).',
-      '- Split tools, all sharing the same read-before-edit gate: agent__write (create file), agent__multi_edit (edits[] atomic batch, max 50), agent__edit_lines ({ from, to } for a READ range), agent__edit_between ({ start, end } unique anchors), agent__insert_at_line (insert_at_line: N / append: true).',
-      '- Prefer edit_file for a single anchor replace (the default); edit_lines for a read range; multi_edit for dependent batch changes; edit_between for regions in flux; write only for a brand-new file (it refuses to overwrite). Anchors must be copied from read_file output and be unique.',
-      '- Options shared: dry_run (preview; pass pre-edit hash as expected_read_hash on apply), expected_read_hash (blocks if file changed), verify_syntax (default on, rolls back broken .json/.js), preserve_eol (default on).',
-      '- AUTO-HEAL (every edit tool: edit_file, multi_edit, edit_lines, edit_between, insert_at_line, write, apply_patch, layout_edit): duplicated lines/blocks the edit introduced — including a 1-5 line overlap at the top/bottom seam of the edited region — are deleted automatically; a surplus closer standing ALONE on its line is removed, while a MISSING closer is only reported with its line number (the harness never invents a delimiter, because guessing inside a literal would corrupt real content); syntax errors and duplicate same-scope declarations (const/let, imports, classes) are reported with line numbers. Read the "⟲ auto-heal" / "⚠ detector" block in the result: the file on disk is ALREADY clean, so do not re-apply a removal the harness just made.',
-      '- agent__apply_patch: multi-file unified diff, atomic (any hunk fails → nothing written). Use for cross-file refactors.',
-      '- Diffs: `│ changed: old → new` lists only moved tokens (word_level: false disables); `⇄ moved from before:N` = a move, not a rewrite.',
-      '',
-      '## Search & Navigation',
-      '- agent__grep: context: N / wholeLines: true returns whole-line windows WITH read receipts (edit directly, no read_file). Options: glob(s), subpath(s), patterns[] (one walk, grouped), caseSensitive, maxResults (100), sort: "density" (not paginable), continueFrom g:<file>:<line>.',
-      '  • SCOPE FIRST, RETRY NEVER: pass subpath on the first call; if the footer says matches concentrate in "X/", that is your subpath. Anchor broad keywords with \\b.',
-      '- agent__search: semantic BM25 by meaning ("where are auth tokens validated"), limit default 10, max 30. Use before grep when the identifier is unknown; follow with read_file. Index is cached and invalidated on edits.',
-      '- agent__glob: flat path list; multiple patterns (OR), subpath, sort name|modified, maxResults. Heavy dirs skipped.',
-      '- agent__list: folder listing. mode:"touched" audits session footprint (EDITED/STALE/READ/MISSING; re-read STALE, run before closing a task); sort:"modified"; sizes:true; git:true (status badges).',
-      '- agent__tree_outline { depth 1-8 (3), filter, maxEntries }: in-memory realtime project tree, use FIRST to orient. agent__tree_refresh: force rebuild after mass generation or checkout.',
-      '- agent__lsp_symbols (TS Language Service): definition, references, symbols, rename. Use before renaming/changing shared symbols; finds what grep misses.',
-      '- agent__deps { path }: imports, dependents, blast radius (≤3). Check before renaming, moving, or changing signatures of shared files.',
-      '- agent__explain_error: call once on a pasted stack trace; workspace frames are read and annotated with receipts.',
-      '',
-      '## Safety & Recovery',
-      '- Vault: overwritten/deleted files are snapshotted — workspace files into <workspace>/.moriko/vault/<session>/ (browsable with glob/grep/read_file), others into the home vault. vault_diff previews current vs snapshot; vault_restore brings it back (full file, or rangeFrom/rangeTo for a surgical line splice). Mention only if the user asks about undo.',
-      '- agent__checkpoint { label }: snapshot all files edited this session (also freezes Layout IR). agent__checkpoint_list: list them.',
-      '- agent__undo { label? }: atomic restore (latest if no label; undo is itself undoable). Read the reported spatial drift and reintroduced collision candidates before saying done.',
-      '- move/copy never overwrite: delete the destination first.',
-      '',
-      '## Quality (F3)',
-      '- Use agent__refactor (rename / move_file / organize_imports) instead of manual cross-file renames; dryRun default shows a diff, apply is atomic + vaulted.',
-      '- Post-edit diagnostics: successful .ts/.tsx edits report NEW syntactic diagnostics in the result — do not leave any behind.',
-      '- agent__diagnostics: per-file TS diagnostics in milliseconds (scope "touched" = files edited this session).',
-      '- agent__lint / agent__format: run the PROJECT\'s own linter/formatter when configured; never install one.',
-      '- agent__code_metrics / agent__dead_code: complexity hotspots and zero-reference exports (review only, never auto-delete).',
-      '- Call agent__verify quick ONCE at the END of a task (full adds typecheck + arch rules). Not per edit.',
-      '- Never write your own test/E2E scripts; use the existing runners.',
-      '',
-      '## Architecture (F4)',
-      '- Before creating >3 new files or a new module: agent__arch_map first; respect .moriko/architecture.json when present.',
-      '- agent__arch_rules: init proposes the rules file (dryRun default); check reports layer/cycle/size violations.',
-      '- Offer an ADR (agent__adr new) for big structural decisions; agent__scaffold instantiates project templates.',
-      '',
-      '## Background Processes',
-      '- agent__task_start: non-blocking spawn, returns taskId (48 KB buffer, max 10 tasks, in-memory).',
-      '- agent__task_output: read buffer, optional waitMs; status running/exited.',
-      '- agent__task_stop: kill and remove.',
-      '- Use for dev servers and long builds; blocking agent__run for quick commands.',
-      '',
-      '## Orchestrator',
-      '- agent__exec: one JS program composing many tools with no model round-trip, in a Node vm sandbox. Calls go through the same gates (validation, audit, spatial gate, workspace jail).',
-      '- Use for: 3+ independent reads/searches (Promise.allSettled), conditional chains, retry/paging loops, setup before a visual decision. Skip it for 1-2 plain sequential calls.',
-      '- Sandbox has only: tools.* (each returns { ok, isError, text }), text(), store(k,v)/load(k) (persist across exec calls), notify(msg), exit(), setTimeout/clearTimeout, JS intrinsics. No Node, require, process, fs, network. Top-level await works.',
-      '- Only text() output re-enters context: filter aggressively. Limits: timeout 30s (max 120s via timeoutMs), 200 nested calls, 48k chars output.',
-      '- Visual loop (screenshot → judge → click) cannot be folded: script the deterministic prefix, then yield to the model.',
-      '  ```js',
-      '  const [a, b] = await Promise.allSettled([tools.read_file({ path: "src/a.ts" }), tools.read_file({ path: "src/b.ts" })]);',
-      '  const A = a.status === "fulfilled" ? a.value?.text : "";',
-      '  const B = b.status === "fulfilled" ? b.value?.text : "";',
-      '  text(A.includes("TODO") || B.includes("TODO") ? (await tools.grep({ pattern: "TODO", subpath: "src" })).text : "clean");',
-      '  ```',
-      '',
-      '## Spatial Layout & UI',
-      '- agent__spatial modes: map | check | diff | runtime | mockup. Truth ladder: static (candidates) → gate (enforced) → runtime (hard facts); mockup is intent only.',
-      '  • PRE-EDIT: run map before editing any UI file (CSS, tsx/jsx). Never write absolute coordinates blind; prefer flow/flex/grid (raw px = magic number).',
-      '  • POST-EDIT: run check (isError on overlap candidates). Fix or justify (modal/tooltip/popover exempt) before reporting done. edit_file/apply_patch on UI files also run this gate automatically (errorCode spatial_gate).',
-      '  • diff + snapshot:true: baseline; only YOUR regions may move, no NEW collisions.',
-      '  • runtime { url }: headless browser measures real DOM boxes (hard overlaps, viewport overflow, tiny touch targets, screenshot). saveBaseline:true before a UI session; compareStatic:true shows source-vs-render drift.',
-      '  • mockup { path|url|dataUrl }: vision model turns a design image into an ESTIMATED target IR; build with flex/grid, verify with runtime.',
-      '- agent__layout_edit (PREFERRED UI edit path): declare a relation (move-right-of / move-below / swap / resize-relative / align) with target + reference region ids; the compiler computes coordinates, vaults the file, and auto-verifies (isError on new collisions). dryRun to preview.',
-      '',
-      '## Visuals',
-      '- agent__render_visual: inline live visual from a COMPLETE standalone HTML document (charts, diagrams, demos). Sandboxed: no network, no host access, inline all data/assets (no CDN). Source ≤256 KB, height 120–2000 (default 360). Payload never re-enters context.',
-      '- EDIT IN PLACE: the render summary returns a stable visual id — call render_visual again with the SAME value as "id" to REPLACE that card in place (no new card; the live card re-binds in every open browser). Use this for every iteration of the SAME visual; only spawn a new card when it is genuinely a new artifact.',
-      '- FRONTEND PREVIEW (when the user asks for a design/frontend): pass "variants": [{ source, title?, height? }, …] (1..3 candidates) — ONE call, ONE card, up to 3 complete frontends shown side by side; the user picks one and the pick is announced back to you as a tool_result-shaped steer ("User picked <id>…"). Then refine ONLY the chosen candidate with render_visual + its id (edit-in-place).',
-      '',
-      '## Backend (inert until a database is opened)',
-      '- agent__backend open: in-memory SQLite {name} (ephemeral), or file-backed {name, filePath}.',
-      '- exec / query: bounded SQL, 500 rows max, bound params.',
-      '- fork {name, forkName}: branch schema+data; try risky migrations there, source untouched.',
-      '- seed: deterministic rows from a table spec (kinds: int, pick, name, email…; seed default 42).',
-      '- contract_lint: OpenAPI unresolved $refs and missing responses. contract_check: validate a request body against a schema before it ships. Pass the parsed spec or specPath.',
-      '',
+      '## Web Access',
       ...(webAccess
         ? [
-            '## Browser (persistent profile, user watches a live panel + harness cursor)',
-      '- Navigation:',
-      '  - browser_open { url, newTab? }: http(s) only; Google search via https://www.google.com/search?q=<encoded>.',
-      '  - browser_wait: selector state, load state, url, text, or function. ALWAYS wait after open before reading.',
-      '  - browser_url, browser_back, browser_forward, browser_reload.',
-      '  - browser_tabs, browser_switch_tab, browser_close_tab.',
-      '- Perception (prefer text over pixels; works during takeover):',
-      '  - browser_read { selector? }, browser_read_article (clean markdown).',
-      '  - browser_semantic (interactive elements + rects), browser_inspect { x,y } (verify a target before clicking).',
-      '  - browser_form (fields, labels, options; passwords masked).',
-      '  - browser_watch → act → browser_watch_result: diff of what an action changed, no screenshot.',
-      '  - browser_metadata: meta, OpenGraph, JSON-LD.',
-      '  - browser_eval { script }: page-context JS (not Node); get coordinates via getBoundingClientRect (never guess). Viewport follows the panel size (read via browser_url or browser_status); origin top-left.',
-      '  - browser_snapshot { url?, selector?, fullPage?, full? }: ONE-call page observer — screenshot + URL/title/viewport, FCP/TTFB/LCP, console errors, failed 4xx/5xx, numbered interactive-element map (text-first: still useful without a vision model). PREFERRED over browser_screenshot for page inspection.',
-      '  - Iframes: read/eval/click/wait/screenshot accept frame: "selector".',
-      '- Input (BLOCKED during takeover, error browser_takeover: do not retry, tell the user and wait):',
-      '  - browser_click { x,y | selector, button?, clickCount? }, browser_type { text, selector?, pressEnter?, delayMs? } (with selector, fill() replaces content).',
-      '  - browser_cursor_move { x,y,steps? } (show target before acting, also triggers hover), browser_hover, browser_scroll { direction, amount, selector? }, browser_press { key, holdMs? }.',
-      '  - browser_drag, browser_mouse_down / browser_mouse_up (strokes, signatures), browser_touch_tap (touch sites), browser_dialog { action, text? } (set BEFORE the triggering action).',
-      '- User handoff:',
-      '  - browser_handover { message? } for logins, captchas, 2FA, payment; read-only tools keep working.',
-      '  - browser_release ends takeover.',
-      '  - browser_annotations reads user-drawn marks (then inspect/eval at those coordinates).',
-      '- Safety:',
-      '  - browser_request_approval { action } BEFORE destructive actions (delete, payment, settings); timeout = denied, never retry past a denial.',
-      '  - browser_plan { steps } for multi-step sensitive flows: user approves the numbered plan first.',
-      '  - browser_clear_data { cookies?, storage?, cache? }: irreversible, confirm if intent is ambiguous.',
-      '  - browser_audit_log: action trail.',
-      '- Workspace bridge (paths jail-checked):',
-      '  - browser_save_page (Markdown), browser_save_images, browser_upload, browser_download, browser_table (JSON/CSV/TSV), browser_pdf.',
-      '  - browser_crawl { itemSelector, nextSelector, extract, maxPages?, path? }: auto-paginate and save dataset.',
-      '- Speed & parallel:',
-      '  - browser_block_requests { patterns } / browser_unblock_requests: 3-10× faster text loads.',
-      '  - browser_fan_out { urls (≤10), extract }: parallel ephemeral tabs. browser_merge_tabs { extract }: run one extractor across open tabs.',
-      '- Automation & memory:',
-      '  - browser_debug { x?, y? }: console/pageerror/HTTP 4xx + top element; call when an action failed.',
-      '  - browser_install_script / browser_list_scripts / browser_remove_script: persistent userscripts.',
-      '  - browser_mark / browser_marks: element notes (persistent per URL).',
-      '  - browser_record / browser_replay: macros from user takeover.',
-      '  - browser_baseline / browser_visual_diff: pixel regression with inline diff image.',
-      '- Sessions persist (cookies, logins): do not re-run login flows if the session is likely alive. Narrate actions in chat so the panel and your words agree. Inside agent__exec, script open → wait → eval → screenshot per decision point.',
-            ]
-          : [
-              '## Web Access',
-              'WEB ACCESS IS OFF — the user disabled it for this conversation. There are NO browser, fetch or download tools in your catalogue, and any attempt to call one is refused. Do not open websites or fetch URLs; if the task truly needs the web, tell the user to enable Web Access (Configuration → Tools).',
-            ]),
-      '',
-      '## User Interaction',
-      '- agent__ask_user: for ambiguity, real decisions, or missing info, ask instead of guessing. Batch 1..N questions in one card: "text" (free-form) or "choice" (2-8 options, optional allowCustom). Keep each concrete and answerable in one sentence.',
-      '- The call pauses until answered. If skipped/timed out: proceed with a sensible default, state the assumption, offer to revisit, never re-block on the same question.',
-      ...(webAccess ? ['- Internet tools reach PUBLIC http(s) only (local/private blocked); downloads land in the workspace.'] : []),
-      '',
-      '## Addons (Moriko extensible system)',
-      '- ADDON MANAGER: builtin addons are authored in the repo\'s `addons-src/` folder — your dedicated addon workspace, ALWAYS accessible without repointing the user\'s main workspace. Builtin ids: ' + builtinAddonIds().join(', ') + '.',
-      '- All file tools (read/edit/write/patch/grep/glob/list/deps/refactor/…) accept `addons-src/<addon>/...` paths. Use them as your primary editing path for builtin addons — full agent capability (read receipts, edit gates, syntax guard, LSP) applies. agent__addon_manage read/write/install/edit also operate on the addons-src source for builtin ids.',
-      '- Deleting is USER-ONLY: agent__delete on addons-src is refused, and addon_manage remove is refused. Only the user removes addons (Addon Hub → Remove).',
-      '- Runtime refresh: after changing addons-src, the change goes live when the user clicks Disable/Reload in the Addon Hub (the reseed copies your source into ~/.moriko-studio/addons). Tell the user to do that when you finish an addon task.',
-      '- Addons installed at the RUNTIME root only (third-party, not in addons-src) keep the classic path: agent__addon_manage read/write/edit operate on ~/.moriko-studio/addons/<id>/ and hot-reload immediately.',
-      '- AUTHORING PATTERN (register.ts): export `register(on, $)`. Register hooks with `on(event, matcher?, handler)`; each handler is `async ($, e, next) => { ... }` middleware:',
-      '  • Return `next(e)` to pass the event on (observe), `next({ ...e, <field>: newValue })` to rewrite it, or `{ deny: "reason" }` WITHOUT next to block it (answer).',
-      '  • Events: "tool.call" {tool, args} (before execution — deny/rewrite), "tool.result" {tool, result} (observe), "turn.start"/"turn.end", "session.open", "command.run" {command, args}, "ui.render" {site}.',
-      '  • Matchers narrow firing: on("tool.call", { tool: "agent__run" }, ...) or { tool: ["a","b"] } or a RegExp; on("command.run", { command: "standup" }, ...).',
-      '  • `.catch(handler)` on the returned registration handles that hook\'s errors (fail-closed: the hook is skipped, the chain continues).',
-      '- API surface ($) available in handlers and register():',
-      '  • $.tool.register({ name, description, inputSchema, execute }) — register a NEW agent tool dynamically (it appears in your own catalogue on the next round). $.tool.call(wireName, args) runs any tool.',
-      '  • $.ui.draw(site, { type: "widget", component: "./client/index.tsx" }) — mount a widget at a render site: "thread-sidebar" (after the last turn), "composer-band" (above the composer), "right-dock", "floating" (fixed overlay, e.g. games during generation). $.ui.log(text) / $.ui.toast(text, kind) go to the server console.',
-      '  • $.command.register({ name, description }) + on("command.run", { command: name }, ...) — add a slash command.',
-      '  • $.store (get/set/delete, persistent per addon), $.http.fetch(url), $.fs.read/write/list (addon-root scoped), $.clock.every/after/sleep.',
-      '  • $.workspace (root/read/write/list/exists) — read/write files in the ACTIVE workspace root (e.g. a project-local data file like PRD.json); workspace-jailed like the agent file tools.',
-      '  • $.bus.publish(topic, payload) / $.bus.subscribe(topic, handler) — CROSS-SESSION realtime pub/sub: a publish reaches every other addon subscriber server-side AND every connected browser via SSE (/api/addons/events). Use for multi-agent coordination (e.g. broadcasting "achievement claimed by session A").',
-      '  • $.context.provide(title, lines) / $.context.revoke(title) — contribute a LIVE block to the system prompt of EVERY agent-mode session ("Addon context" injection). This is how your state reaches other agents: keep it current (update on every state change, revoke when done).',
-      '- Widget component (client/index.tsx): default-export a React component. It is served by the harness and rendered inside the site slot; keep it self-contained (no imports beyond react). For REALTIME panels: open EventSource("/api/addons/events") and react to bus messages pushed by $.bus.publish — no polling needed.',
-      '- WORKFLOW when the user asks for a new tool/widget/game: install (or write) the addon files via agent__addon_manage, then confirm to the user what was added and where it renders. Errors in loadError mean the register has a bug — read the file, fix, write again (auto-reloads).',
-	  '## Built-in tools',
-      catalogue,
-	  '',
-	  '',
+            '- Internet tools reach PUBLIC http(s) only (local/private hosts blocked for external fetch/download); files saved into the workspace are jail-checked.',
+            '- Built-in browser sessions persist (cookies/logins) in a live user-visible panel: reuse active sessions instead of repeating login flows, narrate actions in chat, prefer text/semantic observation over raw pixels, and never guess click coordinates.',
+            '- Input actions are BLOCKED while the user holds takeover control (`browser_takeover` error — do not retry; inform the user and wait). Always obtain explicit user approval before destructive or multi-step sensitive browser actions, and never retry past a denial or timeout.',
+          ]
+        : [
+            'WEB ACCESS IS OFF — the user disabled it for this conversation. There are NO browser, fetch or download tools in your catalogue, and any attempt to call one is refused. Do not open websites or fetch URLs; if the task truly needs the web, tell the user to enable Web Access (Configuration → Tools).',
+          ]),
       ...(terminalRule ? ['', '## Terminal', terminalRule] : []),
+      '',
+      '## Built-in tools',
+      catalogue,
     ].join('\n'),
   };
 }
@@ -547,7 +402,7 @@ function goalsInjection(sessionId?: string): HarnessInjection | null {
     content: [
       'The GOALS below belong to this conversation (also visible to the user in the Goals panel).',
       running > 0
-        ? `${running} goal(s) are RUNNING: work through their todos within the CURRENT turn — check todos off with goal_update as you complete them, and mark the goal "done" once every todo is checked. There is NO automatic continuation: when the turn ends, the user decides whether to send the next message. Finish the turn with a clear summary of what is done and what remains.`
+        ? `${running} goal(s) are RUNNING: work through their todos within the CURRENT turn — check todos off with goal_update as you complete them, and mark the goal "done" once every todo is checked. There is NO automatic continuation: when the turn ends, the user decides whether to send the next message. Finish the turn with a concise summary of the changes made.`
         : 'No goals are currently running.',
       '',
       renderGoalsForContext(goals),
@@ -568,7 +423,7 @@ function todosInjection(sessionId?: string): HarnessInjection | null {
     content: [
       'The TODOS below are STANDALONE (not tied to any goal) and belong to this conversation (also visible to the user in the Todos panel).',
       open > 0
-        ? `${open} todo(s) are OPEN: work through them within the CURRENT turn. Move ONE to in_progress (with activeForm), do it, then complete it — never jump pending to completed. There is NO automatic continuation: when the turn ends, the user decides whether to send the next message. Finish the turn with a clear summary of what is done and what remains.`
+        ? `${open} todo(s) are OPEN: work through them within the CURRENT turn. Move ONE to in_progress (with activeForm), do it, then complete it — never jump pending to completed. There is NO automatic continuation: when the turn ends, the user decides whether to send the next message. Finish the turn with a concise summary of the changes made.`
         : 'All standalone todos are done.',
       '',
       renderTodosForContext(todos),
@@ -609,8 +464,12 @@ function remindersInjection(sessionId?: string): HarnessInjection | null {
  * so the model can never confuse the order two files arrived in — even when
  * the same file was re-uploaded or the message text mentions them sideways.
  */
-export function attachmentsInjection(paths: string[], modelId?: string): HarnessInjection | null {
-  const caps = modelId ? lookupModelMetadata(modelId) : undefined;
+export function attachmentsInjection(
+  paths: string[],
+  modelId?: string,
+  capability?: ResolvedModelCapability,
+): HarnessInjection | null {
+  const caps = modelId ? (capability ?? resolveWithoutProvider(modelId)) : undefined;
   if (paths.length === 0) return null;
   const described = paths
     .map((entry) => ({ path: entry, ...describeAttachment(entry) }))
@@ -622,6 +481,18 @@ export function attachmentsInjection(paths: string[], modelId?: string): Harness
         : `- ${entry.path}`,
     )
     .join('\n');
+  /**
+   * VIDEO-ONLY advice. A video is a MULTIMODAL part on the wire, not a document
+   * at a path: telling the model to open it with a file tool is what made it
+   * call read_file on a binary and then hallucinate ffmpeg. The path stays
+   * listed (it is real and readable), but the instruction is explicit that the
+   * content is already IN the message.
+   */
+  const videoNote = caps?.videoIn
+    ? 'Videos: video attachments ride this conversation as video_url parts — you SEE the video content directly (this model accepts video input). NEVER reach for read_file, exec, ffmpeg or any frame-extraction tool on a video path: the picture is already in your context, and a binary file read only produces noise.'
+    : caps === undefined
+      ? 'Videos: a video attachment can only be analysed through native video input. If you cannot see it in-context, say so — do not open the binary with read_file or shell out to ffmpeg.'
+      : 'THIS MODEL HAS NO VIDEO INPUT. A video attachment was NOT injected into context and must NOT be read with read_file, exec, ffmpeg or any frame-extraction tool — those only produce binary noise. Tell the user plainly that this model cannot watch the video and that they should switch to a video-capable model.';
   return {
     id: 'attachments',
     title: 'Context injection · Attachment locations',
@@ -634,6 +505,7 @@ export function attachmentsInjection(paths: string[], modelId?: string): Harness
       caps?.imageIn
         ? 'Images: image attachments ride the conversation as image_url parts AND are listed at their workspace paths below — you SEE them directly (this model accepts image input). DELEGATING TO agent__vision IS FORBIDDEN for you — the harness hard-rejects it until read_file has been called on an image first; workspace images you have not seen yet are opened with read_file { path }, which returns the image inline. TEXT documents were NOT inlined — only a 500-char preview rides the wire, the full content lives at the path: read_file for the full text, edit_file/grep/copy/move for the rest. Do not ask the user to re-upload; do not search the workspace for files you were just given.'
         : 'Every attachment below is reached by PATH, exactly like a text document. Text files: read_file for the full content (a 500-char preview rides the wire). Images: you CANNOT see them in-context (this model has no image input) — to actually SEE one, call agent__vision { path }. If a downstream tool cannot process the image, say so instead of guessing. Do not ask the user to re-upload; do not search the workspace for files you were just given.',
+      videoNote,
     ].join('\n'),
   };
 }
@@ -855,6 +727,12 @@ export async function buildHarnessInjections(
   trust?: { level: 1 | 2 | 3 | 4 | 5; outputFrozen: boolean; evadeAt?: number },
   /** OPERATOR RELAY: the operator's message, spoken by the harness itself. */
   operatorDirective?: string,
+  /**
+   * THE RESOLVED CAPABILITY of the running model. When absent the injections
+   * fall back to the catalogue-only view (agent tools have no provider here),
+   * which is the same cascade with Layers 1/2 empty — never a different rule.
+   */
+  capability?: ResolvedModelCapability,
 ): Promise<HarnessInjection[]> {
   const injections: HarnessInjection[] = [];
 
@@ -893,7 +771,7 @@ export async function buildHarnessInjections(
   if (enforcementLevel >= 4) {
     const reason = settings.enforcement?.message ?? settings.lockdown?.message ?? '';
     injections.push(enforcementInjection(enforcementLevel as 4 | 5, reason));
-    const attachments = attachmentsInjection(attachmentPaths ?? [], modelId);
+    const attachments = attachmentsInjection(attachmentPaths ?? [], modelId, capability);
     if (attachments) injections.push(attachments);
     return injections;
   }
@@ -906,9 +784,9 @@ export async function buildHarnessInjections(
       content: workflow.content,
     });
     if (settings.structuredOutputs) injections.push(structuredOutputsInjection());
-    const capabilities = modelCapabilitiesInjection(modelId);
+    const capabilities = modelCapabilitiesInjection(modelId, capability);
     if (capabilities) injections.push(capabilities);
-    const attachments = attachmentsInjection(attachmentPaths ?? [], modelId);
+    const attachments = attachmentsInjection(attachmentPaths ?? [], modelId, capability);
     if (attachments) injections.push(attachments);
     const agent = agentHarnessInjection(settings.terminalMode ?? 'auto', sessionId, settings.webAccess === true);
     if (agent) injections.push(agent);

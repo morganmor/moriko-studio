@@ -9,6 +9,8 @@ import { listTodos } from '../todos/store.js';
 import { INLINE_DATA_URL_LIMIT, putBytes } from '../attachmentStore.js';
 import { callWireTool, listWireTools, type McpWireTool } from './manager.js';
 import { toWireSchema } from '../agents/tools/casing.js';
+import type { ResolvedModelCapability } from '../modelCapability.js';
+import { getLiveCompactionConfig } from '../compactionLiveConfig.js';
 
 /**
  * P2 EXTERNALIZATION: decodes one data URL for the byte store (shared by the
@@ -60,26 +62,50 @@ function decodeStoredDataUrl(dataUrl: string): { mime: string; bytes: Buffer } |
  */
 
 /**
- * Fire the context-budget stop once the PROJECTED next request (last round's
- * prompt + its completion + the tool outputs that just landed) reaches this
- * share of the effective window. Ported from the DSH token-meter: the guard
- * measures what the NEXT request would carry, so the wrap-up round — not a
- * provider overflow error — is what closes a long run. 95% matches the
- * client-side auto-compaction trigger: mid-run and between-turns now agree,
- * which is what the old 85%-guard-vs-90%-compaction split broke (the two
- * thresholds fought, and the context display oscillated between them).
+ * Fires the IN-RUN COMPACTION handoff once the PROJECTED next request (last
+ * round's prompt + its completion + the tool outputs that just landed) reaches
+ * this share of the effective window.
+ *
+ * This ratio no longer stops anything. Crossing it hands the run to Moriko's
+ * main compaction engine, which shrinks the context and resumes the SAME run —
+ * tools stay enabled and no wrap-up summary is requested. Stopping mid-task to
+ * ask for a summary was the defect this replaces: a run with tens of thousands
+ * of tokens still free was being killed for arithmetic that measured a
+ * projection, not an overflow.
+ *
+ * Kept deliberately BELOW 1.0 so compaction happens while there is still room
+ * for the summarizer's own request to fit alongside the transcript.
  */
-export const CONTEXT_HEADROOM_RATIO = 0.95;
+export const CONTEXT_COMPACT_RATIO = 0.85;
 /** Consecutive rounds with the EXACT same call signature set = spinning. */
 export const STALL_REPEATS = 12;
 
 /**
- * The harness ends the tool loop short of the model's own natural end ONLY
- * for these two reasons — a detected spin, or a physical context wall.
- * (There used to be a round-count cap; it was removed: it stopped working
- * agents mid-task and gave them nothing honest to tell the user.)
+ * The harness ends the tool loop for ONE reason: a detected spin.
+ *
+ * There is no context-budget stop. `'compact'` is not a termination — it is a
+ * handoff signal the adapters translate into a compaction request while
+ * keeping the tool catalogue intact, so the run continues afterwards.
  */
-export type LoopStopReason = 'stalled' | 'context_budget';
+export type LoopStopReason = 'stalled' | 'compact';
+
+/** What the guard reports after every recorded round. */
+export interface ContextTelemetry {
+  promptTokens: number;
+  completionTokens: number;
+  addedTokens: number;
+  /** promptTokens + completionTokens + addedTokens — the number acted upon. */
+  liveContextTokens: number;
+  contextLimit: number | null;
+  /** liveContextTokens / contextLimit (0..1), null when no limit is known. */
+  ratio: number | null;
+  /**
+   * The resolved trigger in TOKENS (from the user's settings), or null when
+   * auto-compaction is off / no window is known. Lets the UI report the real
+   * threshold instead of assuming a ratio.
+   */
+  compactAtTokens: number | null;
+}
 
 /** Normalized identity of one tool call: wire name + key-sorted args JSON. */
 export function toolCallSignature(wireName: string, rawArgs: string): string {
@@ -144,10 +170,43 @@ export interface LoopGuard {
     outcomes?: Array<{ wireName: string; errorCode?: string }>,
   ): void;
   /**
-   * The reason the NEXT tool round must not run (a wrap-up round should close
-   * the run instead), or null while the model may keep calling tools.
+   * The reason the NEXT tool round must not run, or null while the model may
+   * keep calling tools.
+   *
+   * `'compact'` means "hand off to compaction and CONTINUE" — the round still
+   * runs, with tools, after the context has been rebuilt. Only `'stalled'`
+   * genuinely ends the loop.
    */
   stopReason(): LoopStopReason | null;
+  /**
+   * The guard's own arithmetic after the last recorded round — the numbers the
+   * client's ContextChip displays. Returned even when nothing tripped, so the
+   * UI always shows the figure the guard is acting on.
+   */
+  telemetry(): ContextTelemetry;
+}
+
+/**
+ * THE USER'S COMPACTION SETTINGS, as the guard must honour them.
+ *
+ * The guard used to compare against a hardcoded 0.85 while the Configuration
+ * dropdown could say 0.95. That made the SERVER ask for compaction at a point
+ * the CLIENT still considered below threshold — the client then re-checked,
+ * disagreed, and the handoff went nowhere. One number, taken from the user.
+ */
+export interface CompactGuardOptions {
+  /** When false the guard NEVER returns 'compact' — auto-compaction is off. */
+  autoCompact?: boolean;
+  /** Absolute token trigger; wins over the ratio when set (> 0). */
+  compactThresholdTokens?: number | null;
+  /** Ratio of the effective window (0.5–0.98), mirroring the client trigger. */
+  compactThresholdRatio?: number | null;
+  /**
+   * Conversation id — keys the LIVE config registry (server/
+   * compactionLiveConfig.ts). When present, every round re-reads the user's
+   * current compaction settings instead of the request-time snapshot.
+   */
+  conversationId?: string;
 }
 
 /**
@@ -169,19 +228,72 @@ export interface LoopGuard {
  * agents mid-job with nothing to say for it but "the cap was reached".
  * Stall wins over budget — the most specific reason surfaces.
  */
-export function createLoopGuard(contextLimit: number | null | undefined): LoopGuard {
+export function createLoopGuard(
+  contextLimit: number | null | undefined,
+  compact?: CompactGuardOptions,
+): LoopGuard {
   /** What the NEXT request would carry, per the last recorded round. */
   let projectedNextPrompt = 0;
+  /** The last round's components, kept for the telemetry frame. */
+  let lastPrompt = 0;
+  let lastCompletion = 0;
+  let lastAdded = 0;
   const recentRounds: string[][] = [];
   /** Per-round failure class: "wire:code" keys joined, or '' for an all-ok
    * round. '' is never foldable — changed calls must fail IDENTICALLY too. */
   const recentFailures: string[] = [];
 
+  const limit = typeof contextLimit === 'number' && contextLimit > 0 ? contextLimit : null;
+
+  /**
+   * THE COMPACTION TRIGGER, RE-RESOLVED EVERY ROUND with the client's exact
+   * precedence (see `triggerForMeasuredTokens` in src/lib/compaction.ts):
+   *
+   *   1. `autoCompact === false`  → no compaction trigger at all.
+   *   2. `compactThresholdTokens` (> 0) → absolute token count, wins outright.
+   *   3. otherwise effectiveLimit * compactThresholdRatio (default
+   *      CONTEXT_COMPACT_RATIO), the effective limit being the model window
+   *      as the user may have LOWERED it mid-run.
+   *
+   * `null` means "never trigger": auto-compaction is off, or no window is
+   * known. The LIVE registry (POST /api/compaction/config) overrides the
+   * request snapshot field-by-field, so a Configuration change made while the
+   * run streams applies from the very next round — not at the next request.
+   */
+  const currentCompactAtTokens = (): number | null => {
+    const live = getLiveCompactionConfig(compact?.conversationId);
+    if (live ? live.autoCompact === false : compact?.autoCompact === false) return null;
+    const absolute = live ? live.compactThresholdTokens : compact?.compactThresholdTokens;
+    if (typeof absolute === 'number' && absolute > 0) return absolute;
+    // The effective window: the model's resolved capacity, lowered ONLY by the
+    // user's own manual cap — user against user, never a catalogue shrinking
+    // a human decision.
+    const manual = live ? live.maxContextTokens : null;
+    const effectiveLimit =
+      manual !== null && manual > 0 && (limit === null || manual < limit) ? manual : limit;
+    if (!effectiveLimit) return null;
+    const raw = live ? live.compactThresholdRatio : compact?.compactThresholdRatio;
+    const ratio =
+      typeof raw === 'number' && Number.isFinite(raw)
+        ? Math.min(0.98, Math.max(0.5, raw))
+        : CONTEXT_COMPACT_RATIO;
+    return effectiveLimit * ratio;
+  };
+
   return {
     record(signatures, usage, addedTokens, outcomes = []) {
+      // A round WITHOUT provider usage must not leave a stale high-water mark
+      // behind: the previous projection described a request that is no longer
+      // next, so it is replaced by the tool-output delta only. Leaving the old
+      // peak in place was what made one fat round poison every later check.
       if (usage?.promptTokens && usage.promptTokens > 0) {
-        projectedNextPrompt =
-          usage.promptTokens + (usage.completionTokens ?? 0) + Math.max(0, addedTokens);
+        lastPrompt = usage.promptTokens;
+        lastCompletion = usage.completionTokens ?? 0;
+        lastAdded = Math.max(0, addedTokens);
+        projectedNextPrompt = lastPrompt + lastCompletion + lastAdded;
+      } else if (addedTokens > 0) {
+        lastAdded = Math.max(0, addedTokens);
+        projectedNextPrompt = lastPrompt + lastCompletion + lastAdded;
       }
       recentRounds.push([...signatures].sort());
       if (recentRounds.length > STALL_REPEATS) recentRounds.shift();
@@ -205,20 +317,40 @@ export function createLoopGuard(contextLimit: number | null | undefined): LoopGu
       if (sameCalls || sameFailure) {
         return 'stalled';
       }
-      if (contextLimit && projectedNextPrompt >= contextLimit * CONTEXT_HEADROOM_RATIO) {
-        return 'context_budget';
+      // NOT a stop: a handoff. The adapter keeps tools enabled and asks the
+      // client to compact before the round that would have overflowed. The
+      // threshold is the USER'S setting, re-read EVERY call so a mid-run
+      // Configuration change applies on the very next round.
+      const compactAtTokens = currentCompactAtTokens();
+      if (compactAtTokens !== null && projectedNextPrompt >= compactAtTokens) {
+        return 'compact';
       }
       return null;
+    },
+    telemetry() {
+      return {
+        promptTokens: lastPrompt,
+        completionTokens: lastCompletion,
+        addedTokens: lastAdded,
+        liveContextTokens: projectedNextPrompt,
+        contextLimit: limit,
+        ratio: limit ? projectedNextPrompt / limit : null,
+        compactAtTokens: currentCompactAtTokens(),
+      };
     },
   };
 }
 
 /** The harness message that opens the wrap-up round: an HONEST stop. */
 export function wrapUpInstruction(reason: LoopStopReason): string {
+  // Only a detected spin reaches this function now — the context path is a
+  // handoff (see LoopStopReason), never a wrap-up. The parameter stays so a
+  // future termination reason can name itself here instead of silently
+  // borrowing the stall wording.
   const why =
     reason === 'stalled'
       ? 'the harness detected the same tool calls repeating without forward progress'
-      : 'the context budget left for this run is nearly exhausted';
+      : 'the run cannot continue safely';
   return (
     `[Harness] The tool loop stops here — ${why}. Do NOT attempt further tool calls; they will not execute. ` +
     'Write your closing message NOW: (1) precisely what was completed and found so far, ' +
@@ -520,6 +652,7 @@ async function dispatchCall(
   enforcementLevel?: 3 | 4 | 5,
   enforcementReason?: string,
   webAccess?: boolean,
+  capability?: ResolvedModelCapability,
 ): Promise<{ ok: boolean; text: string; diff?: string; diffstat?: { added: number; removed: number }; images?: ToolImage[]; visual?: VisualPayload; errorCode?: string; panelUrl?: string }> {
   let ok = false;
   let text = '';
@@ -569,6 +702,7 @@ async function dispatchCall(
       enforcementLevel,
       enforcementReason,
       webAccess,
+      capability,
     });
     ok = result.ok;
     text = result.text;
@@ -627,6 +761,7 @@ const READ_ONLY_TOOLS = new Set([
   'agent__tree_outline',
   'agent__lsp_symbols',
   'agent__tree_refresh',
+  'agent__interlinked',
 ]);
 
 /** Max concurrent read-only calls — bounds the spike for a 10-read round. */
@@ -685,11 +820,12 @@ async function dispatchCallMaybeRetry(
   enforcementLevel?: 3 | 4 | 5,
   enforcementReason?: string,
   webAccess?: boolean,
+  capability?: ResolvedModelCapability,
 ): Promise<{ ok: boolean; text: string; diff?: string; diffstat?: { added: number; removed: number }; images?: ToolImage[]; visual?: VisualPayload; errorCode?: string }> {
-  const first = await dispatchCall(call, signal, sessionId, terminalMode, confirmDeletes, modelId, onEvent, enforcementLevel, enforcementReason, webAccess);
+  const first = await dispatchCall(call, signal, sessionId, terminalMode, confirmDeletes, modelId, onEvent, enforcementLevel, enforcementReason, webAccess, capability);
   if (first.ok || !retryable || signal?.aborted) return first;
   if (!looksTransient(first)) return first;
-  return dispatchCall(call, signal, sessionId, terminalMode, confirmDeletes, modelId, onEvent, enforcementLevel, enforcementReason, webAccess);
+  return dispatchCall(call, signal, sessionId, terminalMode, confirmDeletes, modelId, onEvent, enforcementLevel, enforcementReason, webAccess, capability);
 }
 
 /**
@@ -734,6 +870,12 @@ export async function executeCalls(
   enforcementReason?: string,
   /** WEB ACCESS KILL-SWITCH: plumbs settings.webAccess into the dispatcher guard. */
   webAccess?: boolean,
+  /**
+   * THE RESOLVED 3-LAYER CAPABILITY of the running model — passed to every tool
+   * dispatch so the vision policy and the wire gate judge the same model by the
+   * same rules.
+   */
+  capability?: ResolvedModelCapability,
   /** PROBATION: the conversation's tier. At 2+ the ladder is a TOOL BAN:
    *  every non-harness call is declined with the operator's sentence — the
    *  user forbade richer denials on purpose. Harness channel tools
@@ -790,7 +932,7 @@ export async function executeCalls(
     }
     return dispatchCallMaybeRetry(
       call, signal, sessionId, terminalMode, confirmDeletes, modelId, onEvent,
-      READ_ONLY_TOOLS.has(call.wireName), enforcementLevel, enforcementReason, webAccess,
+      READ_ONLY_TOOLS.has(call.wireName), enforcementLevel, enforcementReason, webAccess, capability,
     ).then((result) => ({ call, serverName, toolName, ...result }));
   };
 
@@ -973,7 +1115,6 @@ export async function executeCalls(
     for (let start = 0; start < toRun.length; start += MAX_PARALLEL) {
       if (signal?.aborted) break;
       const chunk = toRun.slice(start, start + MAX_PARALLEL);
-      const started = Date.now();
       for (const item of chunk) {
         onEvent?.({
           type: 'tool_call',
@@ -992,36 +1133,39 @@ export async function executeCalls(
           __streamed: true,
         } as ToolLoopEvent);
       }
-      const results = await Promise.all(chunk.map((item) => runOne(item.call).then((value) => value ?? null)));
-      for (const result of results) {
-        if (!result) continue;
-        jobStore.recordCall({
-          callId: result.call.id,
-          wireName: result.call.wireName,
-          rawArgs: result.call.rawArgs,
-          ok: result.ok,
-          text: result.text,
-          ...(result.diff ? { diff: result.diff } : {}),
-          ...(result.images?.length ? { images: result.images } : {}),
-          durationMs: Date.now() - started,
-        });
-        const itemIndex = chunk.findIndex((item) => item.call === result.call);
-        const originalIndex = chunk[itemIndex]?.index;
-        if (originalIndex === undefined) continue;
-        settled[originalIndex] = {
-          call: result.call,
-          serverName: result.serverName,
-          toolName: result.toolName,
-          ok: result.ok,
-          text: result.text,
-          diff: result.diff,
-          images: result.images,
-          visual: result.visual,
-          errorCode: result.errorCode,
-          panelUrl: result.panelUrl,
-        };
-        emitResult(settled[originalIndex]!);
-      }
+      // PER-ITEM SETTLE: each tool's result is announced the moment THAT call
+      // resolves — never after the whole chunk's Promise.all. Batching here
+      // made a 10-file round dump every row at the end.
+      await Promise.all(
+        chunk.map(async (item) => {
+          const callStarted = Date.now();
+          const result = await runOne(item.call);
+          if (!result) return;
+          jobStore.recordCall({
+            callId: result.call.id,
+            wireName: result.call.wireName,
+            rawArgs: result.call.rawArgs,
+            ok: result.ok,
+            text: result.text,
+            ...(result.diff ? { diff: result.diff } : {}),
+            ...(result.images?.length ? { images: result.images } : {}),
+            durationMs: Date.now() - callStarted,
+          });
+          settled[item.index] = {
+            call: result.call,
+            serverName: result.serverName,
+            toolName: result.toolName,
+            ok: result.ok,
+            text: result.text,
+            diff: result.diff,
+            images: result.images,
+            visual: result.visual,
+            errorCode: result.errorCode,
+            panelUrl: result.panelUrl,
+          };
+          emitResult(settled[item.index]!);
+        }),
+      );
     }
   }
 

@@ -87,13 +87,24 @@ function indexPath(vaultRoot: string, sessionId: string | undefined): string {
   return path.join(sessionDir(vaultRoot, sessionId), 'index.json');
 }
 
+function isVaultEntryMeta(value: unknown): value is VaultEntryMeta {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.id === 'string' &&
+    typeof candidate.originalPath === 'string' &&
+    typeof candidate.storedPath === 'string' &&
+    typeof candidate.operation === 'string' &&
+    typeof candidate.size === 'number' &&
+    typeof candidate.createdAt === 'number'
+  );
+}
+
 function readIndex(vaultRoot: string, sessionId: string | undefined): VaultEntryMeta[] {
-  try {
-    const parsed = JSON.parse(readFileSync(indexPath(vaultRoot, sessionId), 'utf8'));
-    return Array.isArray(parsed) ? (parsed as VaultEntryMeta[]) : [];
-  } catch {
-    return [];
-  }
+  const file = indexPath(vaultRoot, sessionId);
+  if (!existsSync(file)) return [];
+  const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'));
+  return Array.isArray(parsed) ? parsed.filter(isVaultEntryMeta) : [];
 }
 
 function writeIndex(vaultRoot: string, sessionId: string | undefined, entries: VaultEntryMeta[]): void {
@@ -109,14 +120,19 @@ function writeIndex(vaultRoot: string, sessionId: string | undefined, entries: V
  */
 function vaultRoots(sessionId: string | undefined): string[] {
   const roots: string[] = [];
-  const push = (candidate: string | null | undefined) => {
+  const pushVaultDir = (candidate: string | null | undefined): void => {
     if (!candidate) return;
     const resolved = normalizedRoot(candidate);
     if (resolved && !roots.includes(resolved)) roots.push(resolved);
   };
-  push(getActiveWorkspace(sessionId)?.path);
-  for (const workspace of listWorkspaces()) push(workspace.path);
-  push(LEGACY_ROOT);
+  const pushWorkspace = (workspacePath: string | null | undefined): void => {
+    if (!workspacePath) return;
+    const resolved = normalizedRoot(workspacePath);
+    if (resolved) pushVaultDir(path.join(resolved, '.moriko', 'vault'));
+  };
+  pushWorkspace(getActiveWorkspace(sessionId)?.path);
+  for (const workspace of listWorkspaces()) pushWorkspace(workspace.path);
+  pushVaultDir(LEGACY_ROOT);
   return roots;
 }
 
@@ -152,7 +168,6 @@ export function snapshotFile(
   operation: string,
 ): SnapshotOutcome {
   if (insideAVault(absolutePath)) return { entry: null, skipped: 'path is inside a vault (not nested)' };
-  const session = safeSession(sessionId);
   let stats;
   try {
     stats = statSync(absolutePath);
@@ -188,7 +203,7 @@ export function snapshotFile(
   const entries = readIndex(root, sessionId);
   entries.push(entry);
   writeIndex(root, sessionId, entries);
-  sweepVault(session);
+  sweepVault(sessionId);
   return { entry };
 }
 
@@ -305,7 +320,6 @@ export function restoreSnapshot(
   toPath?: string,
   range?: RestoreRange,
 ): RestoreOutcome {
-  const session = safeSession(sessionId);
   const entry = findSnapshot(sessionId, snapshotId);
   if (!entry) {
     throw new Error(`No vault snapshot with id "${snapshotId}" in this session (try vault_list).`);
@@ -319,7 +333,7 @@ export function restoreSnapshot(
   let diffstat: ReturnType<typeof diffStatFromOps>;
   let previousEntryId: string | undefined;
   if (existsSync(target)) {
-    const pre = snapshotFile(session, target, 'pre-restore');
+    const pre = snapshotFile(sessionId, target, 'pre-restore');
     previousEntryId = pre.entry?.id;
   } else if (range) {
     throw new Error('Range restore needs an existing target file (a full restore would create it).');
@@ -385,7 +399,7 @@ export function purgeSnapshot(sessionId: string | undefined, snapshotId: string)
 }
 
 /** Retention: drop snapshots older than MAX_AGE_DAYS and beyond MAX_PER_FILE. */
-export function sweepVault(sessionId: string): void {
+export function sweepVault(sessionId: string | undefined): void {
   const cutoff = Date.now() - MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
   for (const root of vaultRoots(sessionId)) {
     const entries = readIndex(root, sessionId);

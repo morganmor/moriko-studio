@@ -188,10 +188,13 @@ export function computeEditBounds(before: string, after: string): EditBounds {
 function buildPostEditSummary(afterContent: string, bounds: EditBounds, newHash: string): string {
   if (!bounds.changed) return '';
   const sign = bounds.deltaLines > 0 ? '+' : '';
+  // Explicit line stats ride the summary in BOTH branches, so a detector block
+  // above them can never be the only thing the reader sees.
+  const lineStat = `(+${bounds.newSpanLines} -${bounds.oldSpanLines} lines)`;
   const shiftHeader =
     bounds.deltaLines === 0
-      ? ` Line numbers stay aligned (line ${bounds.startLine} changed; ${bounds.afterTotalLines} lines, sha256:${newHash.slice(0, 12)}).`
-      : ` Line-shift map: line numbers ≥ ${bounds.startLine + bounds.oldSpanLines} moved by ${sign}${bounds.deltaLines} ` +
+      ? `\n${lineStat} Line numbers stay aligned (line ${bounds.startLine} changed; ${bounds.afterTotalLines} lines, sha256:${newHash.slice(0, 12)}).`
+      : `\n${lineStat} Line-shift map: line numbers ≥ ${bounds.startLine + bounds.oldSpanLines} moved by ${sign}${bounds.deltaLines} ` +
         `(${bounds.beforeTotalLines} → ${bounds.afterTotalLines} lines, new sha256:${newHash.slice(0, 12)}).`;
 
   const rawLines = afterContent.replace(/\r\n/g, '\n').split('\n');

@@ -22,4 +22,5 @@ import './shader-check.js';
 import './asset-inspect.js';
 import './skills.js';
 import './sub-agent.js';
+import './interlinked.js';
 export {};

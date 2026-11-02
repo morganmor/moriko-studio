@@ -46,7 +46,7 @@ export async function enterPlanModeTool(
       '(run, exec, git except read-only subcommands, task_*, harness_reload).',
     '',
     'Use the time to READ: read_file, batch_read, grep, glob, read_symbol, context_pack, ' +
-      'deps, arch_map, lsp_symbols, tree_outline, and ask_user for anything genuinely unknown.',
+      'deps, interlinked, arch_map, lsp_symbols, tree_outline, and ask_user for anything genuinely unknown.',
     '',
     'Leave with agent__exit_plan_mode once you can state: the files you will touch, the ' +
       'approach you chose and why, and how the result will be verified.',

@@ -2,13 +2,20 @@
  * Model capability metadata from models.dev, synced at build time by
  * `scripts/sync-model-metadata.mjs` into `modelMetadata.snapshot.json`.
  *
- * The server serves the whole map to the client (`GET /api/model-metadata`)
- * and can consult it itself (e.g. gating reasoning parameters later). The
- * file is regenerated via `pnpm sync:models` and also auto-refreshed by the
- * `sync-if-stale.mjs` gate that `pnpm dev` calls before starting the servers
- * — so a missing or stale snapshot degrades to "no metadata" without
- * breaking anything, and a fresh one is pulled at most once per freshness
- * window (default 24 h).
+ * LAYER 3 OF THE CAPABILITY CASCADE — a HINT, not a verdict. The runtime
+ * authority is the user's own table in the Providers dialog (Layer 1), then
+ * whatever the provider's /models endpoint published (Layer 2); see
+ * server/modelCapability.ts. This snapshot only:
+ *   • pre-fills a capability row the user has not pinned,
+ *   • supplies the tooltip hint shown beside the model id,
+ *   • answers when neither of the higher layers knows anything.
+ *
+ * It must NEVER be consulted directly to gate image parts or to cap a context
+ * window — `imageCapableFor` and `effectiveContextLimit` go through the cascade
+ * for exactly that reason. The file is regenerated via `pnpm sync:models` and
+ * auto-refreshed by the `sync-if-stale.mjs` gate that `pnpm dev` calls before
+ * starting the servers, so a missing or stale snapshot degrades to "no hint"
+ * without breaking anything.
  */
 
 import { readFileSync } from 'node:fs';
@@ -81,6 +88,14 @@ export function lookupModelMetadata(modelId: string): ModelMeta | undefined {
 
   const map = load();
   let result: ModelMeta | undefined = map[wanted] ?? matchCatalogEntry(Object.entries(map), wanted);
+
+  if (!result) {
+    // Step 4: the id may be a fine-tune of a catalogued model — hunt its core.
+    const bare = bareModelPart(wanted);
+    const index = bareNameIndex();
+    const core = coreModelName(bare, (name) => index.has(name));
+    if (core !== bare) result = index.get(core);
+  }
 
   if (!result) {
     for (const [key, meta] of Object.entries(LOCAL_OVERRIDES)) {
@@ -156,15 +171,75 @@ export function isCataloguedProvider(providerId: string): boolean {
  */
 const wideEfforts = new Map<string, string[] | null>();
 
+/**
+ * Tokens that change what a model CAN DO. A core-name hunt may never DROP one
+ * of these — `deepseek-v4-flash` is text-only while `deepseek-v4-flash-latest`
+ * takes images, and `qwen3.5-9b` takes them while `qwen3.5-9b-base` does not.
+ * The list is derived from the catalog itself (tokens whose presence flips
+ * `imageIn` on a real base entry), not from guesswork.
+ */
+const CAPABILITY_TOKENS = new Set([
+  'vl', 'vision', 'image', 'omni', 'multimodal',
+  'audio', 'video', 'pdf', 'tts', 'transcribe',
+  'base', 'it', 'latest',
+]);
+
+/** Minimum core length: a lone token ("flash", "pro") is too weak to name a model. */
+const MIN_CORE_TOKENS = 2;
+
+/** Identity tokens of a model id; dots survive so "v4.1" stays one token. */
+function modelTokens(id: string): string[] {
+  return id
+    .split(/[^a-z0-9.]+/i)
+    .filter(Boolean)
+    .map((token) => token.toLowerCase());
+}
+
+/**
+ * The catalogued core name inside a decorated id, or the id itself when it is
+ * already catalogued. Fine-tuned releases wrap a base model with prefixes
+ * ("gabli-", "takeku-") and suffixes ("-heretic", "-abliterated",
+ * "-uncensored") that models.dev never lists, so the LONGEST contiguous token
+ * window that names a known model wins — longest first keeps
+ * "minimax-m3.1-flash" from collapsing into "minimax-m3".
+ */
+function coreModelName(bare: string, known: (name: string) => boolean): string {
+  if (known(bare)) return bare;
+  const tokens = modelTokens(bare);
+  for (let size = tokens.length - 1; size >= MIN_CORE_TOKENS; size -= 1) {
+    for (let start = 0; start + size <= tokens.length; start += 1) {
+      const dropped = tokens.filter((_, index) => index < start || index >= start + size);
+      if (dropped.some((token) => CAPABILITY_TOKENS.has(token))) continue;
+      const candidate = tokens.slice(start, start + size).join('-');
+      if (known(candidate)) return candidate;
+    }
+  }
+  return bare;
+}
+
+/** First catalogued entry per bare model name — built once, used by the core hunt. */
+let bareIndex: Map<string, ModelMeta> | null = null;
+
+function bareNameIndex(): Map<string, ModelMeta> {
+  if (bareIndex) return bareIndex;
+  bareIndex = new Map();
+  for (const [key, meta] of Object.entries(load())) {
+    const bare = bareModelPart(key.toLowerCase());
+    if (!bareIndex.has(bare)) bareIndex.set(bare, meta);
+  }
+  return bareIndex;
+}
+
 export function modelWideEfforts(modelId: string): string[] | null {
   const wanted = bareModelPart(modelId.trim().toLowerCase());
   if (!wanted) return null;
   const cached = wideEfforts.get(wanted);
   if (cached !== undefined) return cached;
 
+  const core = coreModelName(wanted, (name) => bareNameIndex().has(name));
   const union = new Set<string>();
   for (const [key, meta] of Object.entries(load())) {
-    if (bareModelPart(key.toLowerCase()) !== wanted) continue;
+    if (bareModelPart(key.toLowerCase()) !== core) continue;
     if (meta.reasoning !== true) continue;
     for (const value of meta.efforts ?? []) union.add(String(value).trim().toLowerCase());
   }
@@ -177,8 +252,9 @@ export function modelWideEfforts(modelId: string): string[] | null {
  * One tolerant pass over the whole catalog. Priority is specificity: a hit
  * on the FULL provider/model key (steps 1–2) returns immediately, while a
  * bare-model consensus hit (step 3) only counts once the whole map has been
- * scanned for an exact key. Exported for tests (tests/model-lookup.test.ts)
- * so matching rules never depend on the live snapshot's contents.
+ * scanned for an exact key. Exported for tests so matching rules never depend
+ * on the live snapshot's contents. The decorated-core hunt (step 4) lives in
+ * `lookupModelMetadata`, which has the O(1) index for it.
  */
 export function matchCatalogEntry(
   entries: Array<[string, ModelMeta]>,
@@ -245,9 +321,13 @@ export function allModelMetadata(): MetadataMap {
 }
 
 /**
- * The EFFECTIVE context limit: the model's built-in capacity is the ceiling;
- * a manual cap can only lower it (cost control), never exceed what the model
- * accepts. Mirrors the client-side `effectiveContextLimit` in src/lib/compaction.
+ * Combines a RESOLVED model context window with the user's own cost cap.
+ *
+ * `modelContext` must already be the cascade's answer (server/modelCapability),
+ * never a raw catalogue read — otherwise this comparison would re-introduce the
+ * veto the cascade exists to remove. The only shrinking that happens here is
+ * user-against-user: the user's explicit "lower context limit" versus the
+ * capacity they (or their provider) declared.
  */
 export function minLimit(
   modelContext: number | null,

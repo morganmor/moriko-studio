@@ -14,7 +14,7 @@ import { visionPolicyFor, noteVisionCall } from './vision-policy.js';
 import { callVisionModel, resolveImageSource } from '../vision.js';
 import { getVisionConfig } from '../../visionConfig.js';
 import { resolveCredentials } from '../../credentials.js';
-import { lookupModelMetadata } from '../../modelMetadata.js';
+import { resolveWithoutProvider } from '../../modelCapability.js';
 import { providerStore } from '../../store.js';
 import { boundedGet } from '../net.js';
 
@@ -53,9 +53,12 @@ export async function visionStatusTool(_args: Record<string, unknown>, _ctx: Age
 }
 
 export async function visionTool(args: Record<string, unknown>, ctx: AgentToolContext): Promise<HarnessToolResult> {
-  const meta = ctx.modelId ? lookupModelMetadata(ctx.modelId) : undefined;
+  // The 3-layer cascade, so a model the user declared vision-capable in the
+  // Providers table is treated as vision-capable here — the strict policy and
+  // the wire gate must never disagree about the same model.
+  const caps = ctx.modelId ? (ctx.capability ?? resolveWithoutProvider(ctx.modelId)) : undefined;
   const policy = visionPolicyFor(ctx.sessionId);
-  if (ctx.sessionId && meta?.imageIn && (policy?.readImages.size ?? 0) === 0) {
+  if (ctx.sessionId && caps?.imageIn && (policy?.readImages.size ?? 0) === 0) {
     return {
       ok: false,
       isError: true,

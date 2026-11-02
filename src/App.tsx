@@ -822,6 +822,11 @@ export default function App() {
             ? attachmentRefWireUrl(attachment.dataRef.hash, attachment.dataRef.mime)
             : attachment.dataUrl;
           if (url) parts.push({ type: 'image_url', image_url: { url } });
+        } else if (attachment.mime.startsWith('video/')) {
+          const url = attachment.dataRef
+            ? attachmentRefWireUrl(attachment.dataRef.hash, attachment.dataRef.mime)
+            : attachment.dataUrl;
+          if (url) parts.push({ type: 'video_url', video_url: { url } });
         } else {
           const data = attachment.dataRef
             ? attachmentRefWireUrl(attachment.dataRef.hash, attachment.dataRef.mime)

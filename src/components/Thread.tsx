@@ -54,8 +54,8 @@ import { attachmentRefUrl, openBrowserPanelOnce, renderableRefUrl } from '../lib
 import { useChatController } from '../hooks/useChatController';
 import { useStore } from '../store/useStore';
 import { brandCatSvgUrl, brandLoadingSvgUrl, brandReasoningLoopSvg } from '../lib/brandAssets';
-import { diffStat, diffStatLabel } from '../lib/diffStat';
-import { isGhostTurn } from '../lib/turns';
+import { diffStat, diffStatLabel, statFromEditArgs } from '../lib/diffStat';
+import { isGhostTurn, nextSegmentId, reasoningDisclosureOpen } from '../lib/turns';
 import { flushUiStateBeacon, storage } from '../lib/storage';
 
 /** Rotating status words for the activity ticker — calm, two seconds each. */
@@ -124,6 +124,9 @@ function PendingSteerBubble({ text, parts }: { text: string; parts?: import('../
  * only mapped to finish reasons here — one source of truth.
  */
 const FINISH_NOTES: Record<string, string> = {
+  // LEGACY: the old context-budget stop. Nothing emits it any more — the guard
+  // hands off to in-run compaction and the run continues — but old persisted
+  // threads still carry it and must keep explaining themselves.
   context_budget: MESSAGE_CATALOG['finish.contextBudget'].text,
   stalled: MESSAGE_CATALOG['finish.stalled'].text,
   tool_errors: MESSAGE_CATALOG['finish.toolErrors'].text,
@@ -456,7 +459,16 @@ export function threadStreamSignature(turns: Turn[]): string {
       [
         turn.content.length,
         turn.reasoning?.length ?? 0,
-        turn.segments?.map((segment) => (segment.type === 'tool' ? `t${segment.toolName}${segment.summary === undefined ? '!' : String((segment.summary ?? '').length)}${segment.progress ? '~' : ''}${segment.toolImages?.length ?? 0}` : String(segment.text.length))).join('+') ?? '',
+        turn.segments?.map((segment) => {
+          if (segment.type === 'tool') {
+            return `t${segment.toolName}${segment.summary === undefined ? '!' : String((segment.summary ?? '').length)}${segment.progress ? '~' : ''}${segment.toolImages?.length ?? 0}`;
+          }
+          // A compaction step carries no text — its identity is the shrink.
+          if (segment.type === 'compaction') {
+            return `c${segment.beforeTokens}>${segment.afterTokens}`;
+          }
+          return String(segment.text.length);
+        }).join('+') ?? '',
       ].join(':'),
     )
     .join('|');
@@ -499,7 +511,10 @@ export const Thread = memo(function Thread({ turns, streaming, compaction, botto
       if (!conversation) return;
       state.updateTurn(conversation.id, turnId, {
         content,
-        segments: segments && segments.length ? segments : [{ type: 'text', text: content }],
+        segments:
+          segments && segments.length
+            ? segments
+            : [{ id: nextSegmentId('text'), type: 'text', text: content }],
         error: undefined,
       });
     },
@@ -1193,6 +1208,10 @@ const MessageRow = memo(function MessageRow({
    *  Dianggap menunggu bila run streaming dan ada tool call yang belum
    *  selesai (ok === undefined) di segmen turn. */
   const pendingPermissions = useStore((state) => state.pendingPermissions);
+  /** COMPACTION IN PROGRESS for the conversation on screen — the manual
+   *  /compact path drives `compactingId`, not `genRunning`, so the checkpoint
+   *  card's live indicator keys off this instead of `streaming` alone. */
+  const compactingLive = useStore((state) => state.compactingId !== null && state.compactingId === state.activeId);
   const waitingPermission = useMemo(() => {
     if (!(isLast && streaming)) return null;
     const pendingTool = (turn.segments ?? []).some(
@@ -1226,7 +1245,7 @@ const MessageRow = memo(function MessageRow({
       <div className="w-full">
         <CompactionCard
           turn={turn}
-          live={isLast && streaming}
+          live={isLast && (streaming || compactingLive)}
           onDelete={() => onDeleteTurn(turn.id)}
         />
       </div>
@@ -1266,9 +1285,11 @@ const MessageRow = memo(function MessageRow({
       );
       const nextSegments =
         lastTextIndex === -1
-          ? [...segments, { type: 'text' as const, text: content }]
+          ? [...segments, { id: nextSegmentId('text'), type: 'text' as const, text: content }]
           : segments.map((segment, index) =>
-              index === lastTextIndex ? ({ type: 'text' as const, text: content } as const) : segment,
+              index === lastTextIndex && segment.type === 'text'
+                ? { ...segment, text: content }
+                : segment,
             );
       onEditAssistantSegments(turn.id, content, nextSegments);
     } else if (content !== turn.content) {
@@ -1540,7 +1561,29 @@ const MessageRow = memo(function MessageRow({
     );
   }
 
-  const hasReasoningSegments = turn.segments?.some((segment) => segment.type === 'reasoning') ?? false;
+  /**
+   * ONE SEGMENT LIST, whatever the turn was persisted with.
+   *
+   * Turns written before segments existed carry their thinking in the flat
+   * `turn.reasoning` string. Rendering those through a SECOND, separate block
+   * meant the two trees swapped the moment the first reasoning segment landed
+   * — unmounting the very panel that was streaming. A synthetic segment with a
+   * stable id keeps both cases on one path.
+   */
+  const segmentsView = useMemo<TurnSegment[]>(() => {
+    const segments = turn.segments ?? [];
+    if (segments.some((segment) => segment.type === 'reasoning')) return segments;
+    const reasoning = turn.reasoning?.trim();
+    if (!reasoning) return segments;
+    return [
+      { id: `turn-${turn.id}-reasoning`, type: 'reasoning', text: reasoning, status: 'done' },
+      ...segments,
+    ];
+  }, [turn.id, turn.reasoning, turn.segments]);
+  /** A run that ended in a state worth auditing keeps its thinking visible. */
+  const keepReasoningOpen =
+    Boolean(turn.error) ||
+    ['error', 'aborted', 'interrupted', 'user_stop', 'harness_stopped'].includes(turn.finishReason ?? '');
 
   const showCaret =
     isLast && streaming && !turn.content && !turn.reasoning && !turn.segments?.length;
@@ -1559,28 +1602,19 @@ const MessageRow = memo(function MessageRow({
         <InjectionGroupCard injections={turn.injections ?? []} />
       ) : null}
 
-      {turn.reasoning && !hasReasoningSegments ? (
-        <ReasoningBlock
-          text={turn.reasoning}
-          live={isLast && streaming}
-          showCat={isEffectivelyLast}
-          onDelete={!streaming ? () => onClearReasoning(turn.id) : undefined}
-        />
-      ) : null}
-
       {}
-      {}
-      {turn.segments && turn.segments.some((segment) => segment.type === 'tool' || segment.type === 'reasoning') ? (
+      {segmentsView.some((segment) => segment.type === 'tool' || segment.type === 'reasoning') ? (
         (() => {
           type PillRow =
             | { kind: 'activity'; segment: Extract<TurnSegment, { type: 'tool' | 'reasoning' }> }
             | { kind: 'interm'; segment: Extract<TurnSegment, { type: 'text' }> }
-            | { kind: 'steer'; segment: Extract<TurnSegment, { type: 'steer' }> };
+            | { kind: 'steer'; segment: Extract<TurnSegment, { type: 'steer' }> }
+            | { kind: 'compaction'; segment: Extract<TurnSegment, { type: 'compaction' }> };
 
           const turnRunning = isLast && streaming;
           const rows: PillRow[] = [];
           let finalText: Extract<TurnSegment, { type: 'text' }> | null = null;
-          turn.segments.forEach((segment) => {
+          segmentsView.forEach((segment) => {
             if (segment.type === 'text') {
               if (!segment.text) return;
               if (turnRunning) {
@@ -1595,6 +1629,10 @@ const MessageRow = memo(function MessageRow({
             finalText = null;
             if (segment.type === 'steer') {
               rows.push({ kind: 'steer', segment });
+            } else if (segment.type === 'compaction') {
+              // A HARNESS step: it belongs in the trace like a tool row, but it
+              // is never a tool the model called.
+              rows.push({ kind: 'compaction', segment });
             } else {
               rows.push({ kind: 'activity', segment });
             }
@@ -1604,8 +1642,8 @@ const MessageRow = memo(function MessageRow({
 
           const hoistedVisualSegment = (() => {
             if (turnRunning) return null;
-            for (let i = turn.segments.length - 1; i >= 0; i--) {
-              const segment = turn.segments[i];
+            for (let i = segmentsView.length - 1; i >= 0; i--) {
+              const segment = segmentsView[i];
               if (segment.type === 'tool' && segment.visual) return segment;
               if (segment.type === 'text' || segment.type === 'reasoning') continue;
               return null;
@@ -1619,7 +1657,7 @@ const MessageRow = memo(function MessageRow({
            *  while the model is still writing (ChatGPT-style). */
           const hoistedImageUrls = (() => {
             const urls: string[] = [];
-            for (const segment of turn.segments) {
+            for (const segment of segmentsView) {
               if (segment.type !== 'tool') continue;
               for (const url of localImageUrls(segment)) {
                 if (!urls.includes(url)) urls.push(url);
@@ -1631,20 +1669,23 @@ const MessageRow = memo(function MessageRow({
            *  salinan yang disupersedi masuk Set referensi ini, lalu Set-nya
            *  diteruskan ke ActivityTicker — scope komponen anak tidak bisa
            *  melihat local IIFE (akar ReferenceError sebelumnya). */
-          const lastVisualSegmentById = buildLastVisualSegmentMap(turn.segments);
+          const lastVisualSegmentById = buildLastVisualSegmentMap(segmentsView);
           const supersededVisualSegments = new Set<TurnSegment>();
-          for (const segment of turn.segments) {
+          for (const segment of segmentsView) {
             if (isSupersededVisual(segment, lastVisualSegmentById)) supersededVisualSegments.add(segment);
           }
 
           return (
             <>
-              {rows.length > 0 ? (
+              {rows.length > 0 || (isLast && streaming && turn.building !== undefined) ? (
                 <RunPill
                   activity={rows}
                   running={isLast && streaming}
                   turnId={turn.id}
+                  reasoningKeepOpen={keepReasoningOpen}
                   processingMs={turn.processingMs}
+                  building={turn.building}
+                  inFlightTool={isLast && streaming ? turn.inFlightTool : undefined}
                   stopped={turn.finishReason === 'user_stop' || turn.finishReason === 'aborted'}
                   waitingPermission={waitingPermission}
                   onClearReasoning={onClearReasoning}
@@ -1667,31 +1708,37 @@ const MessageRow = memo(function MessageRow({
             </>
           );
         })()
-      ) : turn.segments ? (
+      ) : segmentsView.length ? (
         (() => {
-          const lastVisualSegmentById = buildLastVisualSegmentMap(turn.segments);
-          return turn.segments.map((segment, index) => {
+          const lastVisualSegmentById = buildLastVisualSegmentMap(segmentsView);
+          return segmentsView.map((segment, index) => {
+            const rowKey = segment.id;
             return segment.type === 'text' ? (
               segment.text ? (
-                <div key={index} className="w-full">
+                <div key={rowKey} className="w-full">
                   <StreamText
                     text={segment.text}
-                    live={isLast && streaming && index === turn.segments!.length - 1}
+                    live={isLast && streaming && index === segmentsView.length - 1}
                   />
                 </div>
               ) : null
             ) : segment.type === 'reasoning' ? (
               <ReasoningBlock
-                key={index}
+                key={rowKey}
+                turnId={turn.id}
+                segmentId={segment.id}
                 text={segment.text}
-                live={isLast && streaming && index === turn.segments!.length - 1}
-                showCat={isEffectivelyLast && segment.type === 'reasoning' && turn.segments!.findIndex((entry) => entry.type === 'reasoning') === index}
+                live={segment.status === 'streaming'}
+                keepOpen={keepReasoningOpen}
+                showCat={isEffectivelyLast && segmentsView.findIndex((entry) => entry.type === 'reasoning') === index}
                 onDelete={!streaming ? () => onClearReasoning(turn.id) : undefined}
               />
             ) : segment.type === 'steer' ? (
               <SteerBubble key={segment.id} entry={segment} offset={0} />
+            ) : segment.type === 'compaction' ? (
+              <CompactionStepRow key={segment.id} segment={segment} />
             ) : (
-              <div key={index} className="w-full min-w-0">
+              <div key={rowKey} className="w-full min-w-0">
                 <ToolCallCard
                   call={segment}
                   running={isLast && streaming && segment.summary === undefined}
@@ -2398,13 +2445,22 @@ function ReasoningLoop({ live }: { live: boolean }) {
 }
 
 function ReasoningBlock({
+  turnId,
+  segmentId,
   text,
   live,
+  keepOpen,
   showCat,
   onDelete,
 }: {
+  turnId: string;
+  /** The block's own id (server `blockId`, or a minted one). */
+  segmentId: string;
   text: string;
+  /** The block's lifecycle says it is still streaming. */
   live: boolean;
+  /** The run ended aborted/errored/stopped — leave the strip open to audit. */
+  keepOpen?: boolean;
   /** Only the NEWEST model turn renders the cat mascot — older turns lose
    *  it automatically as newer turns arrive (the cat follows the context,
    *  it doesn't stack on every turn). */
@@ -2412,24 +2468,24 @@ function ReasoningBlock({
   /** Present only on finished turns — deletes this turn's reasoning. */
   onDelete?: () => void;
 }) {
-  const [open, setOpen] = useState(false);
+  /**
+   * DISCLOSURE LIVES IN THE STORE, NOT IN THIS COMPONENT.
+   *
+   * The strip grows inside a list that keeps appending while it streams; local
+   * state was lost every time React remounted the row, so a panel the reader
+   * had opened snapped shut mid-run. The key is `turnId:segmentId`, the value
+   * is the user's own choice — absent means the policy applies: open while the
+   * block streams or the run is still live, open after a stopped/failed run,
+   * closed once a healthy run settles.
+   */
+  const disclosureKey = `${turnId}:${segmentId}`;
+  const pinned = useStore((state) => state.reasoningOpen[disclosureKey]);
+  const setReasoningOpen = useStore((state) => state.setReasoningOpen);
+  const open = reasoningDisclosureOpen(pinned, live, keepOpen === true);
   const chunks = useMemo(() => chunkReasoningText(text), [text]);
-  const wasLive = useRef(live);
   /** In-panel follow — lihat usePanelFollowScroll. Terpisah total dari
    *  follow thread: hanya scrollbar di DALAM panel ini yang bergeser. */
   const { scrollRef, onScroll, scrollToBottom } = usePanelFollowScroll(open);
-  /**
-   * SCROLL-STABILITY GUARD: when the run ends (or errors), `live` flips false
-   * and this block used to COLLAPSE (open → false) — a reasoning box that had
-   * grown thousands of pixels shrank in one frame, the page height collapsed
-   * with it, the browser clamped scrollTop, and the next effect (jump-to-
-   * latest) then flung the view to the bottom. That combined jump is exactly
-   * the "context window flung to the top then racing down" report. Keep the
-   * block OPEN through the transition; the user closes it themselves.
-   */
-  useEffect(() => {
-    wasLive.current = live;
-  }, [live]);
 
   useEffect(() => {
     if (!open) return;
@@ -2441,7 +2497,7 @@ function ReasoningBlock({
       <div style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 4 }}>
         <button
           type="button"
-          onClick={() => setOpen((value) => !value)}
+          onClick={() => setReasoningOpen(disclosureKey, !open)}
           aria-expanded={open}
           style={{ display: 'flex', minWidth: 0, flex: 1, alignItems: 'center', gap: 10, textAlign: 'left', background: 'none', border: 0, padding: 0, color: 'inherit' }}
         >
@@ -2544,8 +2600,13 @@ const SECTION_NUM_FILLER = 2;
 
 /** One summary item: accent dot, optional lead-in chip, code/quote highlights,
  *  clamped to 3 lines with a Show more/Show less toggle when long. */
-function CompactionItem({ raw }: { raw: string }) {
+function CompactionItem({ raw, caret, live }: { raw: string; caret?: boolean; live?: boolean }) {
   const [clamped, setClamped] = useState(raw.length > 230);
+  // While the checkpoint streams the item flows open; at completion it adopts
+  // the finished card's clamp state exactly.
+  useEffect(() => {
+    if (!live) setClamped(raw.length > 230);
+  }, [live, raw.length]);
   const lead = compactionLeadIn(raw);
   const text = lead ? lead.rest : raw;
   return (
@@ -2561,6 +2622,7 @@ function CompactionItem({ raw }: { raw: string }) {
           }
           return <span key={i}>{part}</span>;
         })}
+        {caret ? <LiveCaret /> : null}
       </div>
       {raw.length > 230 ? (
         <button type="button" className="cp-more" aria-expanded={!clamped} onClick={() => setClamped((value) => !value)}>
@@ -2699,7 +2761,7 @@ function CompactionPeek({
 /** Expandable summary sections with numbered heads + item counts. Stays
  *  mounted while the card animates closed — the parent's contentMounted
  *  timer unmounts it after the grid collapse finishes. */
-function CompactionSections({ sections }: { sections: { title: string; items: string[] }[] }) {
+function CompactionSections({ sections, live }: { sections: { title: string; items: string[] }[]; live?: boolean }) {
   const [collapsed, setCollapsed] = useState<Record<number, boolean>>({});
   return (
     <div className="cp-scroll">
@@ -2722,7 +2784,12 @@ function CompactionSections({ sections }: { sections: { title: string; items: st
               <div className="col-in">
                 <ul className="cp-sec-list">
                   {section.items.map((item, itemIndex) => (
-                    <CompactionItem key={itemIndex} raw={item} />
+                    <CompactionItem
+                      key={itemIndex}
+                      raw={item}
+                      caret={live && index === sections.length - 1 && itemIndex === section.items.length - 1}
+                      live={live}
+                    />
                   ))}
                 </ul>
               </div>
@@ -2831,6 +2898,7 @@ const RUN_TOOL_VERB: Record<string, string> = {
   glob: 'Searching',
   grep: 'Searching',
   search: 'Searching',
+  interlinked: 'Mapping imports',
   write: 'Writing',
   run: 'Running',
   test_run: 'Running tests',
@@ -2862,7 +2930,53 @@ function runToolTarget(segment: Extract<TurnSegment, { type: 'tool' }>): string 
   }
   if (!args || typeof args !== 'object') return '';
   const str = (key: string): string => (typeof args[key] === 'string' ? (args[key] as string).trim() : '');
-  return str('path') || str('command') || str('pattern') || str('query') || str('url') || str('title') || str('from') || str('to') || str('prompt').slice(0, 60) || '';
+  return str('path') || str('target') || str('command') || str('pattern') || str('query') || str('url') || str('title') || str('from') || str('to') || str('prompt').slice(0, 60) || '';
+}
+
+/**
+ * IN-RUN COMPACTION STEP — a harness row inside the trace, not a tool call.
+ *
+ * It renders exactly where a `read`/`write` row would, because it happened at
+ * the same level: mid-run, while the model was still working. A big checkpoint
+ * card here would cut the work in half, so the row is one compact line and the
+ * full checkpoint text stays collapsed until the user opens it.
+ */
+function CompactionStepRow({ segment }: { segment: Extract<TurnSegment, { type: 'compaction' }> }) {
+  const [open, setOpen] = useState(false);
+  const from = formatTokenCount(segment.beforeTokens);
+  const to = formatTokenCount(segment.afterTokens);
+  const turns = segment.coveredTurns;
+  return (
+    <div className="w-full min-w-0">
+      <button
+        type="button"
+        className="tc-pill compact"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        disabled={!segment.summary}
+        style={{ cursor: segment.summary ? 'pointer' : 'default' }}
+      >
+        <span className="tc-dot" data-status="ok" aria-hidden="true" />
+        <span className="tc-name">compact</span>
+        <span className="tc-sum">
+          {`Context auto-compacted (~${from} → ~${to} tok · ${turns} turn${turns === 1 ? '' : 's'} summarized)`}
+        </span>
+      </button>
+      {open && segment.summary ? (
+        <div className="tc-body">
+          <pre className="tc-pre">{segment.summary}</pre>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Compact token label: 198_000 → '198k'. Local to this row's wording. */
+function formatTokenCount(tokens: number): string {
+  if (!Number.isFinite(tokens) || tokens <= 0) return '0';
+  if (tokens >= 1_000_000) return `${Number((tokens / 1_000_000).toFixed(1))}M`;
+  if (tokens >= 1000) return `${Math.round(tokens / 1000)}k`;
+  return String(Math.round(tokens));
 }
 
 /** Status per segmen tool, dipetakan dari field moriko yang ada. */
@@ -2872,10 +2986,66 @@ function runToolStatus(segment: Extract<TurnSegment, { type: 'tool' }>, running:
   return running ? 'run' : 'ok';
 }
 
+/**
+ * PENDING TOOL STUB — the row Halo paints on a call's FIRST fragment.
+ *
+ * It exists so answer-text → tool is INSTANT: the provider announces
+ * `function.name` long before its arguments finish, and waiting for an
+ * executable `tool_call` is what left 25 s of dead air. Name only, pulsing
+ * dot, no size — there is nothing honest to measure yet.
+ */
+function PendingToolRow({ name }: { name: string }) {
+  return (
+    <div className="call s-run pending">
+      <Loader2 className="ic spin" aria-hidden="true" />
+      <span className="cn">{name}</span>
+    </div>
+  );
+}
+
+const PAYLOAD_ENCODER = new TextEncoder();
+
+/** Payload sizes ride the UI the way the live-run header reports them:
+ *  bytes under 1 KiB stay plain ("186 B"), larger values step up to KB/MB. */
+function formatPayloadBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** UTF-8 byte size of a tool segment's visible payload — the measured result
+ *  payload once settled, the args payload while the call is still running. */
+function toolPayloadBytes(segment: Extract<TurnSegment, { type: 'tool' }>): number {
+  if (segment.payloadBytes !== undefined) return segment.payloadBytes;
+  return segment.args ? PAYLOAD_ENCODER.encode(segment.args).length : 0;
+}
+
+/**
+ * LINE STATS for an edit row — structured first, arguments as the fallback.
+ *
+ * `segment.diffstat` arrives pre-counted from the server; older turns and
+ * text-only write paths carry no diff at all. Either way the badge must report
+ * what the call changed, so a missing stat is reconstructed from the tool's own
+ * `old_string`/`new_string` (or accumulated `edits[]`).
+ *
+ * FAILED CALLS HAVE NO STATS. A refused edit (anchor mismatch, read-before-edit
+ * policy, cancelled batch, syntax-guard rollback) never touched the file, so a
+ * `+42 -25` badge beside a red error icon is a visual lie — and the argument
+ * fallback would happily compute one from the payload that was rejected. Only a
+ * SUCCESSFUL call, or one still running, reports line movement.
+ */
+function toolLineStat(segment: Extract<TurnSegment, { type: 'tool' }>): { added: number; removed: number } | null {
+  if (segment.ok === false) return null;
+  const fromDiff = segment.diffstat ?? (segment.diff ? diffStat(segment.diff) : null);
+  if (fromDiff && (fromDiff.added > 0 || fromDiff.removed > 0)) return fromDiff;
+  return statFromEditArgs(segment.toolName, segment.args) ?? fromDiff;
+}
+
 type PillRowish =
   | { kind: 'activity'; segment: Extract<TurnSegment, { type: 'tool' | 'reasoning' }> }
   | { kind: 'interm'; segment: Extract<TurnSegment, { type: 'text' }> }
-  | { kind: 'steer'; segment: Extract<TurnSegment, { type: 'steer' }> };
+  | { kind: 'steer'; segment: Extract<TurnSegment, { type: 'steer' }> }
+  | { kind: 'compaction'; segment: Extract<TurnSegment, { type: 'compaction' }> };
 
 /** Satu fase panel expand: kalimat say (interm/reasoning) + call di bawahnya. */
 type PillPhase = {
@@ -2897,12 +3067,14 @@ function buildPhases(activity: PillRowish[]): PillPhase[] {
         kind: row.kind === 'interm' ? ('text' as const) : ('reasoning' as const),
         segment: row.segment as TurnSegment,
       };
-      current = { key: `ph-${index}`, say, items: [] };
+      // Keyed by the segment's OWN id, not its position: a phase that slides
+      // down the list must not remount the reasoning strip inside it.
+      current = { key: `ph-${row.segment.id ?? index}`, say, items: [] };
       phases.push(current);
       return;
     }
     if (!current) {
-      current = { key: `ph-${index}`, say: null, items: [] };
+      current = { key: `ph-${row.segment.id ?? index}`, say: null, items: [] };
       phases.push(current);
     }
     current.items.push(row);
@@ -2935,7 +3107,8 @@ function CallRow({
   const segment = row.segment as Extract<TurnSegment, { type: 'tool' }>;
   const st = runToolStatus(segment, running);
   const target = toolTarget(segment.toolName, segment.args, workspaceName);
-  const diffstat = segment.diff && segment.ok !== false ? diffStatLabel(segment.diff) : null;
+  /** Stats survive a detector/abort result — only a failed write hides them. */
+  const stat = toolLineStat(segment);
   const hasBody = segment.args !== undefined || segment.summary !== undefined || segment.diff !== undefined;
   const progressLine = running && st === 'run' && segment.summary === undefined ? segment.progress : null;
   const StatusIcon = toolStatusIcon(segment.toolName);
@@ -2956,26 +3129,18 @@ function CallRow({
           <StatusIcon className="ic" aria-hidden="true" />
         )}
         <span className="cn">{segment.toolName}</span>
+        {(() => {
+          const bytes = toolPayloadBytes(segment);
+          return bytes > 0 ? <span className="sz">{formatPayloadBytes(bytes)}</span> : null;
+        })()}
         <span className="tg">{target ? `'${target}'` : segment.serverName ?? ''}</span>
         {progressLine ? <span className="tag">{progressLine.slice(0, 60)}</span> : null}
-        {diffstat ? (
-          (() => {
-            const [added, removed] = diffstat.split(' ');
-            return (
-              <span className="dd">
-                {added ? <em className="p">{added}</em> : null}
-                {added && removed ? ' ' : null}
-                {removed ? <em className="m">{removed}</em> : null}
-              </span>
-            );
-          })()
-        ) : null}
-        {hasBody ? (
-          <ChevronDown
-            className="chev"
-            style={{ width: 12, height: 12, flexShrink: 0, transform: open ? undefined : 'rotate(-90deg)' }}
-            aria-hidden="true"
-          />
+        {stat && (stat.added > 0 || stat.removed > 0) ? (
+          <span className="dd">
+            {stat.added > 0 ? <em className="p">+{stat.added}</em> : null}
+            {stat.added > 0 && stat.removed > 0 ? ' ' : null}
+            {stat.removed > 0 ? <em className="m">-{stat.removed}</em> : null}
+          </span>
         ) : null}
       </button>
       {segment.toolName.startsWith('browser_') ? (
@@ -3100,10 +3265,15 @@ function RunPill({
   suppressVisual,
   supersededVisualSegments,
   waitingPermission,
+  reasoningKeepOpen,
+  building,
+  inFlightTool,
 }: {
   activity: PillRowish[];
   running: boolean;
   turnId: string;
+  /** The run ended aborted/errored/stopped — keep its thinking visible. */
+  reasoningKeepOpen?: boolean;
   /** Durasi run yang sudah settle (turn.processingMs) — "Worked for Xs". */
   processingMs?: number;
   /** Run berakhir sebelum waktunya (stop/abort) — "Stopped after Xs". */
@@ -3120,8 +3290,31 @@ function RunPill({
   /** Request izin sandbox yang sedang DITUNGGU run ini — pill masuk state
    *  .waiting dan merender kotak .ask inline (desain askHTML). */
   waitingPermission?: AgentPermissionRequest | null;
-}) {
+  /**
+   * LIVE ASSEMBLY (ported from Chuze) — the arguments the model is typewriting
+   * right now, before any `tool_call` exists. Absent once the round's calls are
+   * executable or when no payload is being built.
+   */
+  building?: Turn['building'];
+  /**
+   * THE LIVE ROW — the tool this run is working on RIGHT NOW.
+   *
+   * `streaming`: the provider announced the name, arguments still arriving.
+   * `executing`: the call is running. Rendered as its own flat row below the
+   * settled ones and cleared by the controller when the result lands, at
+   * which point the permanent segment row takes the same position.
+   */
+  inFlightTool?: Turn['inFlightTool'];
+  }) {
   const [open, setOpen] = useState(false);
+  /**
+   * A LIVE RUN OPENS ITSELF. Rows exist the moment a tool is announced, but a
+   * collapsed panel hides every one of them — that is how a live run still
+   * looked like one frozen chip while the work happened.
+   */
+  useEffect(() => {
+    if (running) setOpen(true);
+  }, [running]);
   const [wordIndex, setWordIndex] = useState(0);
   const [contentMounted, setContentMounted] = useState(false);
   /** In-panel follow — lihat usePanelFollowScroll. Ref + handler nempel di
@@ -3135,7 +3328,11 @@ function RunPill({
   }, [running]);
 
   const word = ACTIVITY_WORDS[wordIndex % ACTIVITY_WORDS.length];
-  const canExpand = activity.length > 0;
+  /** The assembly strip owns the footer while a payload is being typewritten:
+   *  it is the only thing that moves, and it replaces the generic status line
+   *  rather than competing with it. */
+  const buildingNow = running && building !== undefined && building.tools.length > 0 ? building : null;
+  const canExpand = activity.length > 0 || buildingNow !== null;
   /** Desain: waiting → border kuning + head "Waiting for your approval". */
   const waiting = Boolean(waitingPermission);
 
@@ -3166,6 +3363,17 @@ function RunPill({
   const doneLabel = !running && callCount > 0
     ? `${stopped ? 'Stopped after' : 'Worked for'}${durLabel ? ` ${durLabel}` : ''}${errCount ? ` · ${errCount} error${errCount === 1 ? '' : 's'} recovered` : ''}`
     : word;
+  /**
+   * IN-RUN COMPACTION MARKER on the step bar itself.
+   *
+   * A compaction that shrinks the context mid-run is a fact about the run, so
+   * it is announced even when the trace is collapsed — otherwise the only trace
+   * of it lives behind a disclosure the user may never open.
+   */
+  const compactCount = activity.filter((row) => row.kind === 'compaction').length;
+  const compactMarker = compactCount > 0
+    ? ` · ${compactCount === 1 ? '1 compaction' : `${compactCount} compactions`}`
+    : '';
 
   {}
   const workspaceName = useStore(
@@ -3183,14 +3391,7 @@ function RunPill({
    *  angka +N/−N yang sama dengan yang tampil di baris call. */
   const runFiles = toolRows
     .map((row) => {
-      const stat = row.segment.diffstat
-        ?? (row.segment.diff ? (() => {
-          const label = diffStatLabel(row.segment.diff);
-          if (!label) return null;
-          const [added, removed] = label.split(' ');
-          const num = (token?: string) => (token ? Math.abs(parseInt(token.replace(/[^\d-]/g, ''), 10) || 0) : 0);
-          return { added: num(added), removed: num(removed) };
-        })() : null);
+      const stat = toolLineStat(row.segment);
       if (!stat || (!stat.added && !stat.removed)) return null;
       const target = runToolTarget(row.segment);
       if (!target) return null;
@@ -3225,6 +3426,36 @@ function RunPill({
 
   /** Fase ala desain phasesHTML: say memisahkan fase; call mengerucut. */
   const phases = useMemo(() => buildPhases(activity), [activity]);
+
+  /**
+   * THE NEWEST UNFINISHED CALL already pushed as a segment — the executing row
+   * whose result has not landed yet. Its own `CallRow` is already on screen, so
+   * it must never also be painted as a live stub.
+   */
+  const executingSegment = (() => {
+    const lastPhase = phases[phases.length - 1];
+    if (!running || !lastPhase) return null;
+    const tools = lastPhase.items
+      .filter((row) => row.kind === 'activity' && row.segment.type === 'tool')
+      .map((row) => row.segment as Extract<TurnSegment, { type: 'tool' }>);
+    const tail = tools[tools.length - 1];
+    return tail && tail.summary === undefined ? tail : null;
+  })();
+  /**
+   * THE ONE LIVE NAME — the single source for the in-flight stub.
+   *
+   * Three states, one row, in this order:
+   *   1. a call already pushed as a segment paints its OWN row (`CallRow`), so
+   *      nothing is added here — otherwise the same call renders twice;
+   *   2. otherwise the controller's live name (arguments still arriving);
+   *   3. otherwise the assembling snapshot's newest name.
+   */
+  const liveToolRow = (() => {
+    if (executingSegment) return null;
+    if (inFlightTool) return inFlightTool.name;
+    if (buildingNow) return buildingNow.tools[buildingNow.tools.length - 1]?.name ?? null;
+    return null;
+  })();
 
   {}
   /** Separator fase kini informatif: label = teks fase + jumlah step di
@@ -3288,10 +3519,20 @@ function RunPill({
     return () => window.clearTimeout(timer);
   }, [open]);
 
+  // FOLLOW THE GROWING TAIL — the active reasoning/text block gains lines
+  // WITHOUT changing activity.length; keying the follow-scroll on its text
+  // length keeps the newest line above the fold instead of clipped by the
+  // panel's bottom frame.
+  const tailSegment = activity[activity.length - 1]?.segment;
+  const tailLength =
+    tailSegment && (tailSegment.type === 'reasoning' || tailSegment.type === 'text')
+      ? tailSegment.text.length
+      : 0;
+
   useEffect(() => {
     if (!open) return;
     scrollToBottom();
-  }, [open, activity.length, running, scrollToBottom]);
+  }, [open, activity.length, running, tailLength, scrollToBottom]);
 
 
   return (
@@ -3331,7 +3572,7 @@ function RunPill({
                 </>
               )
             ) : (
-              <b>{doneLabel}</b>
+              <b>{`${doneLabel}${compactMarker}`}</b>
             )}
           </span>
 
@@ -3391,7 +3632,7 @@ function RunPill({
           <div className={cx('col activity-panel', !open && 'shut')} aria-hidden={!open}>
             <div className="col-in">
               {contentMounted ? (
-                <div ref={scrollRef} onScroll={onScroll} className="activity-panel-scroll inner-scroll" style={{ maxHeight: 420, overflowY: 'auto', padding: 0 }}>
+                <div ref={scrollRef} onScroll={onScroll} className="activity-panel-scroll inner-scroll" style={{ maxHeight: 420, overflowY: 'auto', padding: '0 0 4px' }}>
                   {(() => {
                     const isSuppressed = (row: { toolCallId?: string }): boolean =>
                       suppressVisual !== undefined
@@ -3415,8 +3656,11 @@ function RunPill({
                                 </div>
                               ) : (
                                 <ReasoningBlock
+                                  turnId={turnId}
+                                  segmentId={(phase.say.segment as Extract<TurnSegment, { type: 'reasoning' }>).id}
                                   text={(phase.say.segment as Extract<TurnSegment, { type: 'reasoning' }>).text}
-                                  live={running && phase.say.segment === activity[activity.length - 1]?.segment}
+                                  live={(phase.say.segment as Extract<TurnSegment, { type: 'reasoning' }>).status === 'streaming'}
+                                  keepOpen={reasoningKeepOpen}
                                   showCat={false}
                                   onDelete={!running ? () => onClearReasoning(turnId) : undefined}
                                 />
@@ -3460,6 +3704,21 @@ function RunPill({
                             ))}
                           </li>
                         ))}
+                        {/*
+                          * ONE LIVE ROW, OUTSIDE THE PHASES.
+                          *
+                          * Two bugs lived here. Rendered INSIDE `phases.map`, a turn
+                          * with three phases printed three identical spinners — the
+                          * row count followed the phase count. And once the call was
+                          * pushed as a segment, `CallRow` AND this stub both painted
+                          * it. `liveToolRow` resolves both: one name, one row, and
+                          * nothing at all when the call already owns a segment row.
+                          */}
+                        {liveToolRow ? (
+                          <li className="phs">
+                            <PendingToolRow name={liveToolRow} />
+                          </li>
+                        ) : null}
                       </ol>
                     );
                   })()}
@@ -3562,6 +3821,14 @@ function toolTarget(toolName: string, argsJson: string | undefined, workspaceNam
       return str('url') || null;
     case 'websearch':
       return str('query') || null;
+    case 'interlinked': {
+      const many = Array.isArray(args.targets)
+        ? args.targets.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+        : [];
+      const all = [str('target'), ...many].filter((entry, index, list) => entry && list.indexOf(entry) === index);
+      if (all.length === 0) return workspaceName ?? 'workspace root';
+      return all.length === 1 ? all[0] : `${all[0]} +${all.length - 1}`;
+    }
     case 'goal_create':
       return str('title') || null;
     case 'goal_update':
@@ -3609,6 +3876,8 @@ function toolStatusIcon(toolName: string): typeof Check {
     case 'find':
     case 'rg':
       return Search;
+    case 'interlinked':
+      return Waypoints;
     case 'run':
     case 'git':
     case 'exec':
@@ -3683,20 +3952,23 @@ function ToolCallCard({
           {progressLine ? <span style={{ marginLeft: 8, fontSize: 10.5, color: 'var(--muted)' }}>{progressLine.slice(0, 80)}</span> : null}
         </span>
         {}
-        {call.diff && call.ok !== false ? (
-          (() => {
-            const label = diffStatLabel(call.diff);
-            if (!label) return null;
-            const [added, removed] = label.split(' ');
-            return (
-              <span style={{ marginLeft: 8, flexShrink: 0, fontFamily: 'var(--f-mono)', fontSize: 10.5, lineHeight: 1 }}>
-                {added ? <span style={{ color: 'rgb(var(--c-ok))' }}>{added}</span> : null}
-                {added && removed ? <span style={{ color: 'var(--faint)' }}> </span> : null}
-                {removed ? <span style={{ color: 'rgb(var(--c-danger))' }}>{removed}</span> : null}
-              </span>
-            );
-          })()
-        ) : null}
+        {(() => {
+          // FAILED CALLS NEVER REPORT LINE MOVEMENT — the file on disk is
+          // untouched, so a badge here would be a lie. Mirrors toolLineStat.
+          if (call.ok === false) return null;
+          const stat = call.diffstat ?? (call.diff ? diffStat(call.diff) : null);
+          const resolved = stat && (stat.added > 0 || stat.removed > 0)
+            ? stat
+            : statFromEditArgs(call.toolName, call.args) ?? stat;
+          if (!resolved || (!resolved.added && !resolved.removed)) return null;
+          return (
+            <span style={{ marginLeft: 8, flexShrink: 0, fontFamily: 'var(--f-mono)', fontSize: 10.5, lineHeight: 1 }}>
+              {resolved.added > 0 ? <span style={{ color: 'rgb(var(--c-ok))' }}>+{resolved.added}</span> : null}
+              {resolved.added > 0 && resolved.removed > 0 ? <span style={{ color: 'var(--faint)' }}> </span> : null}
+              {resolved.removed > 0 ? <span style={{ color: 'rgb(var(--c-danger))' }}>-{resolved.removed}</span> : null}
+            </span>
+          );
+        })()}
         {hasBody ? (
           <ChevronDown
             className="chev tc-chev"
@@ -3932,7 +4204,7 @@ function CompactionCard({ turn, live, onDelete }: { turn: Turn; live: boolean; o
 
   return (
     <div className="cp-wrap" style={{ width: '100%' }} data-open={open}>
-      <article className="cp-card">
+      <article className="cp-card" data-live={live || undefined}>
         <CompactionHead
           title={live ? 'Compacting conversation…' : 'Compaction checkpoint'}
           sub="Summary of previous context"
@@ -3951,15 +4223,10 @@ function CompactionCard({ turn, live, onDelete }: { turn: Turn; live: boolean; o
           <div className="col-in">
             {turn.content ? (
               <div className="cp-body-in" id={`${bodyId}-body`}>
-                {live ? (
-                  <div className="cp-scroll">
-                    <pre style={{ margin: 0, whiteSpace: 'pre-wrap', overflowWrap: 'break-word', fontFamily: 'var(--f-mono)', fontSize: 11.5, lineHeight: 1.7, color: 'var(--muted)' }}>
-                      {turn.content}
-                    </pre>
-                  </div>
-                ) : (
-                  <CompactionSections sections={sections} />
-                )}
+                {/* Checkpoint layout from the FIRST streamed word — the summary
+                    text is parsed into sections live, never dumped as a raw
+                    pre block and re-styled after the fact. */}
+                <CompactionSections sections={sections} live={live} />
               </div>
             ) : null}
           </div>

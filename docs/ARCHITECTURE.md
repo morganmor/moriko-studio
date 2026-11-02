@@ -255,13 +255,14 @@ silent count; the guard folds when either of two containment tracks observes
 Both tracks feed the same `record(signatures, usage, addedTokens, outcomes)`
 call in every adapter; `outcomes` carries each executed result's
 `wireName` + stable `errorCode`. The hard cap (`MAX_TOOL_ITERATIONS = 40`,
-safety valve only) and the **context budget** (last round's prompt > 85% of
-the model's models.dev window) remain unchanged. When the guard trips, the
-tools are NOT quietly stripped — the next request omits them AND carries an
-explicit wrap-up instruction (`wrapUpInstruction`); the model closes with a
-summary and the `done` event reports the real reason
-(`context_budget` | `stalled` | `tool_iteration_cap`), which the client
-renders as a visible note on the turn.
+safety valve only) remains. The **context guard no longer stops a run**: when the
+projected next request reaches `CONTEXT_COMPACT_RATIO` (0.85) the guard emits
+`context_compaction_request` and the adapter ends the stream with
+`finishReason: 'context_compaction'`. The client compacts with the main Moriko
+engine and AUTO-RESUMES the same run on the shrunk context — tools stay enabled,
+no wrap-up summary is requested, and the step appears as an inline `compact` row
+in the run trace. Only a genuine spin (`stalled`) still closes a run with
+`wrapUpInstruction`. `context_budget` survives solely on old persisted threads.
 
 **Audit fidelity**: every harness call lands in the per-session JSONL
 (`~/.moriko/audit/`) with `argsLen` + `argsTruncated` (explicit, non-silent

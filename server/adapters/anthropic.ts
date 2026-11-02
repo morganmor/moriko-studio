@@ -1,6 +1,14 @@
 import type { ChatMessage } from '../contracts.js';
 import { parseDataUrl } from '../contracts.js';
-import { anthropicThinkingBudget, anthropicMaxOutput, createThinkingScrubState, flushThinkingScrub, scrubInlineThinkingFragment, ALL_THINK_TAGS } from '../reasoning.js';
+import {
+  anthropicThinkingBudget,
+  anthropicMaxOutput,
+  createReasoningBlockEmitter,
+  createThinkingScrubState,
+  flushNativeReasoning,
+  flushThinkingScrub,
+  scrubThinkingFragment,
+} from '../reasoning.js';
 import { coerceText } from '../textUtil.js';
 import { assertOk, iterateSse, type StreamHandler, type StreamParams } from '../sse.js';
 import { idle, STREAM_IDLE_MS } from '../liveness.js';
@@ -9,6 +17,7 @@ import { drainSteers, steerTextOf, steersToUserParts } from '../steer.js';
 import { drainInjections, injectionText } from '../addons/inject.js';
 import { buildSystemSegments } from './openai.js';
 import { gateToolImages, imageCapableFor, separateImageParts, IMAGE_OMITTED_NOTE } from './visionGate.js';
+import { ToolBuildTracker } from './toolCallProgress.js';
 import {
   createLoopGuard,
   estimateTokensFromChars,
@@ -18,6 +27,7 @@ import {
   wrapUpInstruction,
   type LoopStopReason,
 } from '../mcp/loop.js';
+import { createContextMeter, type ContextMeter } from '../mcp/contextMeter.js';
 
 /** Marks the END of a reusable prefix (Anthropic prompt caching). */
 type CacheControl = { type: 'ephemeral' };
@@ -69,6 +79,11 @@ function toAnthropicContent(content: ChatMessage['content']): string | Anthropic
   for (const part of content) {
     if (part.type === 'text') {
       if (part.text) blocks.push({ type: 'text', text: part.text });
+      continue;
+    }
+    if (part.type === 'video_url') {
+      // Anthropic has no video block — say so instead of sending nothing.
+      blocks.push({ type: 'text', text: '[Attachment not readable by this provider: video]' });
       continue;
     }
     const dataUrl = part.type === 'image_url' ? part.image_url.url : part.file.file_data;
@@ -182,6 +197,22 @@ function thinkingConfig(
 export async function streamAnthropic(params: StreamParams, onEvent: StreamHandler): Promise<void> {
   const { baseUrl, apiKey, model, messages, settings, signal } = params;
   const thinking = thinkingConfig(settings.thinkingLevel, model, baseUrl);
+  /**
+   * THE PER-SECOND METER: prices the exact request with the SHARED estimator,
+   * then grows the buckets from every streamed delta.
+   */
+  const meter: ContextMeter = createContextMeter({
+    systemInstruction: '',
+    systemSegments: [],
+    toolDefsChars: 0,
+    messages,
+  });
+  {
+    const { stable, volatile } = buildSystemSegments(params);
+    meter.addSystemSegments([stable, volatile].filter(Boolean).join('\n\n'));
+  }
+  // Anthropic's tool messages are user-role frames: re-price them into `tools`.
+  meter.repriceToolMessages(messages.filter((message) => message.role === 'tool').length);
 
   const prepared = await prepareTools(settings, (tools) =>
     tools.map((tool) => ({
@@ -192,7 +223,7 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
   );
 
   const convo: Array<{ role: 'user' | 'assistant'; content: string | AnthropicBlock[] }> = [];
-  const imageCapable = imageCapableFor(params.model);
+  const imageCapable = await imageCapableFor(params.model, params.providerId, params.capability);
   for (const message of messages) {
     if (message.role === 'tool') {
       const gated = gateToolImages(
@@ -258,11 +289,17 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
     convo.push({ role: message.role, content: base });
   }
 
-  const guard = createLoopGuard(params.contextLimit);
+  const guard = createLoopGuard(params.contextLimit, params.compactGuard);
   let forcedStop: LoopStopReason | null = null;
+  /** In-run compaction handoff: the run resumes after the client compacts. */
+  let compactRequested = false;
+  /** One lifecycle for the whole run: block ids stay stable across rounds. */
+  const reasoningBlocks = createReasoningBlockEmitter(onEvent);
 
   if (prepared.count > 0 && prepared.defs) {
-    onEvent({ type: 'context_tools', chars: JSON.stringify(prepared.defs).length });
+    const defsChars = JSON.stringify(prepared.defs).length;
+    onEvent({ type: 'context_tools', chars: defsChars });
+    meter.addToolChars(defsChars);
   }
 
   /** Summed across tool rounds — MUST share the cadence of sumCacheReadTokens. */
@@ -367,6 +404,7 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
     }
 
     let text = '';
+    const nativeScrub = createThinkingScrubState('native');
     let stopReason: string | undefined;
     let usage: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | undefined;
     const contentScrub = createThinkingScrubState();
@@ -374,6 +412,8 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
       number,
       { id: string; name: string; arguments: string; opened: boolean }
     >();
+    /** LIVE ASSEMBLY — same contract as the OpenAI adapter (Chuze port). */
+    const buildTracker = new ToolBuildTracker();
 
     for await (const payload of iterateSse(response.body, () => streamIdle.reset())) {
       let event: AnthropicEvent;
@@ -405,22 +445,34 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
           if (delta?.type === 'thinking_delta') {
             const thinking = coerceText(delta.thinking);
             if (thinking) {
-              const clean = thinking.replace(ALL_THINK_TAGS, '');
-              if (clean) onEvent({ type: 'reasoning', delta: clean });
+              // The native thinking channel: verbatim, never split by a tag the
+              // model happens to write inside its own thought.
+              meter.addReasoningChars(thinking.length);
+              meter.maybeEmit(onEvent);
+              const routed = scrubThinkingFragment(thinking, nativeScrub);
+              if (routed.reasoning) reasoningBlocks.push(routed.reasoning);
             }
           } else if (delta?.type === 'input_json_delta' && event.index !== undefined) {
+            reasoningBlocks.end();
             const block = toolBlocks.get(event.index);
             if (block) {
               const partial = coerceText(delta.partial_json);
               if (partial) block.arguments += partial;
+              // Publish the growing payload: first fragment forces the frame.
+              const isFirst = !buildTracker.sawAnyFragment;
+              buildTracker.ingest(event.index, isFirst ? block.name : '', partial ?? '');
+              buildTracker.maybeEmit(onEvent, isFirst);
             }
           } else if (delta?.text !== undefined) {
             const textDelta = coerceText(delta.text);
             if (textDelta) {
-              const scrubbed = scrubInlineThinkingFragment(textDelta, contentScrub);
-              if (scrubbed.reasoning) onEvent({ type: 'reasoning', delta: scrubbed.reasoning });
+              reasoningBlocks.end();
+              const scrubbed = scrubThinkingFragment(textDelta, contentScrub);
+              if (scrubbed.reasoning) reasoningBlocks.push(scrubbed.reasoning);
               if (scrubbed.text) {
                 text += scrubbed.text;
+                meter.addOutputChars(scrubbed.text.length);
+                meter.maybeEmit(onEvent);
                 onEvent({ type: 'text', delta: scrubbed.text });
               }
             }
@@ -444,6 +496,9 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
       }
     }
 
+    const nativeTail = flushNativeReasoning(nativeScrub);
+    if (nativeTail) reasoningBlocks.push(nativeTail);
+    reasoningBlocks.end();
     const contentTail = flushThinkingScrub(contentScrub);
     if (contentTail) {
       text += contentTail;
@@ -481,6 +536,10 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
       }
       assistantBlocks.push({ type: 'tool_use', id: block.id, name: block.name, input });
     }
+    // The tool CALLS the model just made ride the wire in `tools` too.
+    meter.addToolChars(
+      assistantBlocks.reduce((sum, block) => (block.type === 'tool_use' ? sum + block.name.length + JSON.stringify(block.input).length : sum), 0),
+    );
     convo.push({ role: 'assistant', content: assistantBlocks });
 
     if (signal?.aborted) {
@@ -503,6 +562,7 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
         : undefined,
       params.settings.enforcement?.message ?? params.settings.lockdown?.message,
       params.settings.webAccess,
+      params.capability,
       params.settings.trust?.level,
     );
     for (const event of executed.events) {
@@ -562,7 +622,30 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
         errorCode: output.errorCode as string | undefined,
       })),
     );
+    // The round's tool outputs now ride the wire: price them into `tools`.
+    meter.addToolChars(
+      executed.followUp.reduce((sum, output) => sum + String(output.text ?? '').length, 0),
+    );
+    meter.recordUsage(usage ? { promptTokens: usage.input_tokens, completionTokens: usage.output_tokens } : undefined);
     forcedStop = guard.stopReason();
+
+    // TELEMETRY: the guard's own arithmetic, so the chip cannot disagree.
+    {
+      const telemetry = guard.telemetry();
+      onEvent({ type: 'context_telemetry', ...telemetry });
+      meter.flush(onEvent);
+      if (forcedStop === 'compact') {
+        const snap = meter.snapshot();
+        onEvent({
+          type: 'context_compaction_request',
+          liveContextTokens: snap.liveContextTokens,
+          contextLimit: null,
+          trigger: 'context-limit',
+        });
+        forcedStop = null;
+        compactRequested = true;
+      }
+    }
 
     if (forcedStop) {
       resultBlocks.push({ type: 'text', text: wrapUpInstruction(forcedStop) });
@@ -575,8 +658,12 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
     if (steered.length > 0) {
       const blocks = toAnthropicContent(steerParts);
       if (typeof blocks === 'string') {
-        if (blocks) resultBlocks.push({ type: 'text', text: blocks });
+        if (blocks) {
+          meter.addInputChars(blocks.length);
+          resultBlocks.push({ type: 'text', text: blocks });
+        }
       } else {
+        meter.addInputChars(JSON.stringify(blocks).length);
         resultBlocks.push(...blocks);
       }
     }
@@ -584,10 +671,19 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
     const injections = drainInjections(params.sessionId ?? undefined);
     for (const entry of injections) {
       onEvent({ type: 'steer', id: `addon-inject-${entry.id}`, text: `[${entry.addonId}] ${injectionText(entry)}` });
-      resultBlocks.push({ type: 'text', text: `System notice from the ${entry.addonId} addon:\n${injectionText(entry)}` });
+      const notice = `System notice from the ${entry.addonId} addon:\n${injectionText(entry)}`;
+      meter.addInputChars(notice.length);
+      resultBlocks.push({ type: 'text', text: notice });
     }
 
     convo.push({ role: 'user', content: resultBlocks });
+    // IN-RUN COMPACTION HANDOFF: end the stream, not the task.
+    if (compactRequested) {
+      flushUsage();
+      meter.flush(onEvent);
+      onEvent({ type: 'done', finishReason: 'context_compaction' });
+      return;
+    }
     } finally {
       streamIdle.clear();
     }

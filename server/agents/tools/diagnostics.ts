@@ -87,14 +87,14 @@ async function diagnosticsTool(args: Record<string, unknown>, ctx: AgentToolCont
   return {
     ok: false,
     isError: true,
-    text: truncateOutput(`# diagnostics — ${total} issue(s) across ${sections.length} file(s)\n\n${sections.join('\n\n')}\n\nNext: fix top issues, or run agent__verify quick at the end.`),
+    text: truncateOutput(`# diagnostics — ${total} issue(s) across ${sections.length} file(s)\n\n${sections.join('\n\n')}`),
   };
 }
 
 export const diagnosticsSpec = defineTool({
   def: {
     wireName: 'agent__diagnostics',
-    description: 'TypeScript diagnostics per file (fast, in-process); scope "touched" = files edited this session.',
+    description: 'In-process per-file TypeScript diagnostics in milliseconds (scope "touched" checks session-edited files; run ONLY when verification is explicitly requested by the user).',
     inputSchema: {
       type: 'object',
       properties: {

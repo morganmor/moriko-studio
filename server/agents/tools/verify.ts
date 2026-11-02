@@ -112,7 +112,7 @@ async function verifyTool(args: Record<string, unknown>, ctx: AgentToolContext):
 export const verifySpec = defineTool({
   def: {
     wireName: 'agent__verify',
-    description: 'End-of-task verification gate (call ONCE at the end): quick = diagnostics+review; full = +typecheck+arch rules.',
+    description: 'Verification gate (run ONLY when explicitly requested by the user): quick = diagnostics + review_diff; full adds typecheck + arch_rules.',
     inputSchema: {
       type: 'object',
       properties: {

@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import type { ProviderKind } from './contracts.js';
+import type { ProviderKind, ProviderModelConfig, ProviderModelHint } from './contracts.js';
+import { PINNABLE_FIELDS } from './contracts.js';
 import { apiKeysFile, morikoHome, providersFile } from './paths.js';
 
 export interface StoredProvider {
@@ -11,6 +12,18 @@ export interface StoredProvider {
   kind: ProviderKind;
   baseUrl: string;
   models: string[];
+  /**
+   * LAYER 1 CAPABILITY TABLE — the user's per-model authority grid, keyed by
+   * model id. Sparse: a model with no row resolves through Layers 2/3. `models`
+   * above stays the membership list, so a row can never resurrect a removed id.
+   */
+  modelConfigs?: Record<string, ProviderModelConfig>;
+  /**
+   * LAYER 2 HINTS — what the provider's own /models endpoint published, kept
+   * separate from Layer 1 on purpose: re-fetching rewrites these without ever
+   * touching a field the user pinned.
+   */
+  modelHints?: Record<string, ProviderModelHint>;
   /** Optional image-generation routing (see server/adapters/images). */
   imageAdapter?: string;
   imageConfig?: Record<string, unknown>;
@@ -43,6 +56,14 @@ interface ProvidersFile {
    * curated defaults — the catalogue always reflects the provider today.
    */
   builtInLiveModels?: Record<string, string[]>;
+  /**
+   * LAYER 1 tables for BUILT-IN providers, keyed by provider id and then by
+   * model id. Built-in definitions are immutable, but their capability grid is
+   * entirely the user's to control — a preset model is still the user's model.
+   */
+  builtInModelConfigs?: Record<string, Record<string, ProviderModelConfig>>;
+  /** LAYER 2 hints for BUILT-IN providers (see builtInModelConfigs). */
+  builtInModelHints?: Record<string, Record<string, ProviderModelHint>>;
 }
 
 interface ApiKeysFile {
@@ -80,7 +101,13 @@ export class ProviderStore {
       const parsed = JSON.parse(raw) as Partial<ProvidersFile>;
       this.providersCache = {
         version: 1,
-        providers: Array.isArray(parsed.providers) ? parsed.providers : [],
+        // MIGRATION: a legacy record carries only `models: string[]`. Reading it
+        // normalizes each model into a Layer-1-eligible row so the capability
+        // table opens populated instead of blank — no separate migration pass,
+        // no half-written state on disk until the next real write.
+        providers: Array.isArray(parsed.providers)
+          ? parsed.providers.map((provider) => normalizeStoredProvider(provider))
+          : [],
         builtInModels:
           parsed.builtInModels && typeof parsed.builtInModels === 'object'
             ? parsed.builtInModels
@@ -89,6 +116,8 @@ export class ProviderStore {
           parsed.builtInLiveModels && typeof parsed.builtInLiveModels === 'object'
             ? parsed.builtInLiveModels
             : {},
+        builtInModelConfigs: normalizeConfigMapOfMaps(parsed.builtInModelConfigs),
+        builtInModelHints: normalizeHintMapOfMaps(parsed.builtInModelHints),
       };
     } catch {
       this.providersCache = structuredClone(EMPTY_PROVIDERS);
@@ -170,6 +199,10 @@ export class ProviderStore {
       kind: input.kind,
       baseUrl: input.baseUrl,
       models: input.models,
+      // An OMITTED table keeps the stored one (a rename or key edit must never
+      // wipe the capability grid); an explicit object replaces it wholesale.
+      modelConfigs: input.modelConfigs ?? existing?.modelConfigs,
+      modelHints: input.modelHints ?? existing?.modelHints,
       imageAdapter: input.imageAdapter,
       imageConfig: input.imageConfig,
       createdAt: input.createdAt ?? existing?.createdAt ?? new Date().toISOString(),
@@ -178,12 +211,7 @@ export class ProviderStore {
     const providers = [...store.providers];
     if (existingIndex >= 0) providers[existingIndex] = record;
     else providers.push(record);
-    await this.persistProviders({
-      version: 1,
-      providers,
-      builtInModels: store.builtInModels ?? {},
-      builtInLiveModels: store.builtInLiveModels ?? {},
-    });
+    await this.persistProviders({ ...store, providers });
 
     const currentKey = (await this.loadKeys()).keys[record.id];
     if (input.apiKey !== undefined) {
@@ -200,12 +228,7 @@ export class ProviderStore {
     const store = await this.load();
     const providers = store.providers.filter((provider) => provider.id !== id);
     if (providers.length === store.providers.length) return false;
-    await this.persistProviders({
-      version: 1,
-      providers,
-      builtInModels: store.builtInModels ?? {},
-      builtInLiveModels: store.builtInLiveModels ?? {},
-    });
+    await this.persistProviders({ ...store, providers });
     await this.clearKey(id);
     return true;
   }
@@ -263,12 +286,7 @@ export class ProviderStore {
     const clean = [...new Set(models.map((model) => model.trim()).filter(Boolean))];
     if (clean.length > 0) builtInModels[id] = clean;
     else delete builtInModels[id];
-    await this.persistProviders({
-      version: 1,
-      providers: store.providers,
-      builtInModels,
-      builtInLiveModels: store.builtInLiveModels ?? {},
-    });
+    await this.persistProviders({ ...store, builtInModels });
   }
 
   /** The live-fetched model list for a built-in provider, if any. */
@@ -284,18 +302,186 @@ export class ProviderStore {
     const clean = [...new Set(models.map((model) => model.trim()).filter(Boolean))];
     if (clean.length > 0) builtInLiveModels[id] = clean;
     else delete builtInLiveModels[id];
-    await this.persistProviders({
-      version: 1,
-      providers: store.providers,
-      builtInModels: store.builtInModels ?? {},
-      builtInLiveModels,
-    });
+    await this.persistProviders({ ...store, builtInLiveModels });
   }
+
+  /**
+   * LAYER 1 for a built-in provider. Built-ins have no StoredProvider record,
+   * so their capability grid lives in its own map — but it is the SAME table
+   * semantics: the user's pins win over everything below.
+   */
+  async getBuiltInModelConfigs(id: string): Promise<Record<string, ProviderModelConfig>> {
+    const store = await this.load();
+    return store.builtInModelConfigs?.[id] ?? {};
+  }
+
+  /** Replaces the Layer-1 grid for a built-in (an empty map clears it). */
+  async setBuiltInModelConfigs(
+    id: string,
+    configs: Record<string, ProviderModelConfig>,
+  ): Promise<void> {
+    const store = await this.load();
+    const builtInModelConfigs = { ...(store.builtInModelConfigs ?? {}) };
+    if (Object.keys(configs).length > 0) builtInModelConfigs[id] = configs;
+    else delete builtInModelConfigs[id];
+    await this.persistProviders({ ...store, builtInModelConfigs });
+  }
+
+  /** LAYER 2 hints for a built-in provider. */
+  async getBuiltInModelHints(id: string): Promise<Record<string, ProviderModelHint>> {
+    const store = await this.load();
+    return store.builtInModelHints?.[id] ?? {};
+  }
+
+  /** Merges fresh Layer-2 hints for a built-in (never removing older ones). */
+  async mergeBuiltInModelHints(
+    id: string,
+    hints: Record<string, ProviderModelHint>,
+  ): Promise<void> {
+    const store = await this.load();
+    const current = store.builtInModelHints?.[id] ?? {};
+    const builtInModelHints = {
+      ...(store.builtInModelHints ?? {}),
+      [id]: { ...current, ...hints },
+    };
+    await this.persistProviders({ ...store, builtInModelHints });
+  }
+
+  /**
+   * Writes ONE custom provider's Layer-1 grid, leaving every other record
+   * untouched. Separate from `upsert` because saving the table must not
+   * require echoing the whole definition back (a stale client copy would
+   * otherwise overwrite a newer baseUrl or label).
+   */
+  async setModelConfigs(
+    id: string,
+    configs: Record<string, ProviderModelConfig>,
+  ): Promise<StoredProvider | undefined> {
+    const store = await this.load();
+    const index = store.providers.findIndex((provider) => provider.id === id);
+    if (index < 0) return undefined;
+    const providers = [...store.providers];
+    providers[index] = { ...providers[index], modelConfigs: configs };
+    await this.persistProviders({ ...store, providers });
+    return providers[index];
+  }
+
+  /** Merges fresh Layer-2 hints into ONE custom provider. */
+  async mergeModelHints(
+    id: string,
+    hints: Record<string, ProviderModelHint>,
+  ): Promise<StoredProvider | undefined> {
+    const store = await this.load();
+    const index = store.providers.findIndex((provider) => provider.id === id);
+    if (index < 0) return undefined;
+    const providers = [...store.providers];
+    const merged = { ...(providers[index].modelHints ?? {}), ...hints };
+    providers[index] = { ...providers[index], modelHints: merged };
+    await this.persistProviders({ ...store, providers });
+    return providers[index];
+  }
+
 }
 
 /** Keeps an existing endpoint when a new one isn't supplied. */
 function currentBaseUrlFallback(existing: StoredKey | undefined): { baseUrl?: string } {
   return existing?.baseUrl ? { baseUrl: existing.baseUrl } : {};
+}
+
+/**
+ * LEGACY MIGRATION of one provider record. The historical shape carried only
+ * `models: string[]`; this folds it into the capability-table world WITHOUT
+ * inventing values.
+ *
+ * The migrated rows are built with `pinned: []` and `source: 'default'`,
+ * meaning "no user opinion and no evidence yet" — so the cascade keeps
+ * resolving them through Layer 2/3 at read time, and a later "Fetch from
+ * provider" fills them in. Inventing `imageIn: false` here would be the exact
+ * silent downgrade this whole change exists to remove.
+ */
+function normalizeStoredProvider(raw: StoredProvider): StoredProvider {
+  const models = Array.isArray(raw.models)
+    ? [...new Set(raw.models.map((id) => String(id).trim()).filter(Boolean))]
+    : [];
+  const configs = normalizeConfigMap(raw.modelConfigs);
+  const hints = normalizeHintMap(raw.modelHints);
+  return {
+    ...raw,
+    models,
+    ...(Object.keys(configs).length > 0 ? { modelConfigs: configs } : {}),
+    ...(Object.keys(hints).length > 0 ? { modelHints: hints } : {}),
+  };
+}
+
+/** Drops rows for models that no longer exist and repairs truncated rows. */
+function normalizeConfigMap(
+  raw: Record<string, ProviderModelConfig> | undefined,
+): Record<string, ProviderModelConfig> {
+  const out: Record<string, ProviderModelConfig> = {};
+  for (const [id, row] of Object.entries(raw ?? {})) {
+    if (!row || typeof row !== 'object') continue;
+    const pinned = Array.isArray(row.pinned) ? row.pinned.filter(isPinnableField) : [];
+    out[id] = {
+      id,
+      imageIn: row.imageIn === true,
+      audioIn: row.audioIn === true,
+      videoIn: row.videoIn === true,
+      pdfIn: row.pdfIn === true,
+      tools: row.tools === true,
+      reasoning: row.reasoning === true,
+      imageOut: row.imageOut === true,
+      context: typeof row.context === 'number' && row.context > 0 ? row.context : null,
+      maxOut: typeof row.maxOut === 'number' && row.maxOut > 0 ? row.maxOut : null,
+      source: isCapabilitySource(row.source) ? row.source : 'default',
+      pinned,
+    };
+  }
+  return out;
+}
+
+function normalizeHintMap(
+  raw: Record<string, ProviderModelHint> | undefined,
+): Record<string, ProviderModelHint> {
+  const out: Record<string, ProviderModelHint> = {};
+  for (const [id, hint] of Object.entries(raw ?? {})) {
+    if (!hint || typeof hint !== 'object') continue;
+    out[id] = hint;
+  }
+  return out;
+}
+
+function normalizeConfigMapOfMaps(
+  raw: Record<string, Record<string, ProviderModelConfig>> | undefined,
+): Record<string, Record<string, ProviderModelConfig>> | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const out: Record<string, Record<string, ProviderModelConfig>> = {};
+  for (const [providerId, map] of Object.entries(raw)) {
+    const normalized = normalizeConfigMap(map);
+    if (Object.keys(normalized).length > 0) out[providerId] = normalized;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function normalizeHintMapOfMaps(
+  raw: Record<string, Record<string, ProviderModelHint>> | undefined,
+): Record<string, Record<string, ProviderModelHint>> | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const out: Record<string, Record<string, ProviderModelHint>> = {};
+  for (const [providerId, map] of Object.entries(raw)) {
+    const normalized = normalizeHintMap(map);
+    if (Object.keys(normalized).length > 0) out[providerId] = normalized;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function isPinnableField(value: unknown): value is keyof ProviderModelConfig & string {
+  return typeof value === 'string' && PINNABLE_FIELDS.has(value);
+}
+
+const CAPABILITY_SOURCES = new Set<string>(['user', 'provider', 'models.dev', 'default']);
+
+function isCapabilitySource(value: unknown): value is ProviderModelConfig['source'] {
+  return typeof value === 'string' && CAPABILITY_SOURCES.has(value);
 }
 
 /**

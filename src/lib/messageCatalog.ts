@@ -80,8 +80,18 @@ export const MESSAGE_CATALOG = {
   },
   'attachments.tooMany': { text: 'At most {max} attachments per message.', tone: 'error', surface: 'notice' },
   'attachments.imageNotSupported': {
-    text: '{model} may not accept image input (models.dev).',
+    text: '{model} is not marked as accepting image input — tick Vision in Providers → Models if it does.',
     tone: 'info',
+    surface: 'notice',
+  },
+  'attachments.videoNotSupported': {
+    text: '{name}: {model} has no video input, so the video cannot be sent. Pick a video-capable model (Video in Providers → Models), or attach still frames instead — a video path is useless to text tools.',
+    tone: 'error',
+    surface: 'notice',
+  },
+  'attachments.videoRejected': {
+    text: 'Video attached but {model} has no video input. Switch to a video-capable model — the file was NOT sent as a path.',
+    tone: 'error',
     surface: 'notice',
   },
   'attachments.tooLarge': {
@@ -415,6 +425,11 @@ export const MESSAGE_CATALOG = {
   'compact.skippedBusy': {
     text: 'Skipped auto-compact — a compaction is already running.',
     tone: 'info',
+    surface: 'notice',
+  },
+  'compact.configFailed': {
+    text: 'Compaction settings could not reach the server — the running loop keeps its previous values until a successful push.',
+    tone: 'warn',
     surface: 'notice',
   },
   'compact.busy': { text: 'A compaction is already running — one at a time.', tone: 'info', surface: 'notice' },

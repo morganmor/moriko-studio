@@ -1,14 +1,14 @@
 /**
- * listAgentToolDefs() — the catalogue of built-in agent tools.
+ * listAgentToolDefs() — the single authoritative catalogue of built-in agent tools.
  *
- * TERSE BY DESIGN: the harness prompt ("System prompt · Agent harness") already
- * documents every workflow (Rules / Reading / Editing / Search / Browser /
- * Orchestrator sections) and this catalogue is inlined right below them.
- * Keep each description to ONE line and parameter hints short — do NOT restate
- * prompt guidance here; every duplicate line costs tokens on each request.
+ * SINGLE SOURCE OF TOOL DOCUMENTATION: the harness System Prompt carries ONLY
+ * general policy, discipline, and execution gates — every tool's function,
+ * modes, parameters, and technical usage rules live HERE and are rendered once
+ * under `## Built-in tools`.
  */
 import type { AgentToolDef } from './shared.js';
 import { listAddonToolDefs } from '../../addons/registry.js';
+import { builtinAddonIds } from '../../addons/seed.js';
 import { registeredTools } from './registry.js';
 import './registered.js';
 
@@ -16,7 +16,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
   const defs: AgentToolDef[] = [
     {
       wireName: 'agent__list',
-      description: 'List a folder in the workspace; mode "touched" audits the session footprint (EDITED/STALE/READ/MISSING).',
+      description: 'List a workspace folder (recursive, glob, sort name|modified, sizes, git status badges); mode "touched" audits session footprint (EDITED/STALE/READ/MISSING — re-read STALE files and audit before closing a task).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -33,7 +33,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__grep',
-      description: 'Regex content search ("path:line: text"); context/wholeLines enable receipt mode (editable windows).',
+      description: 'Regex content search ("path:line: text"; pattern or patterns[] in one walk). context: 0-10 or wholeLines: true returns whole-line windows WITH edit read receipts (edit directly without read_file). Scope FIRST via subpath/subpaths and glob/globs (follow concentration hints in footer; anchor broad keywords with \\b); supports caseSensitive, maxResults (100), sort "path"|"density" ("density" is not paginable), continueFrom "g:file:line".',
       inputSchema: {
         type: 'object',
         properties: {
@@ -54,7 +54,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__read_file',
-      description: 'Read a numbered window of a file (sha256 + read receipt); modes outline/fold. See Reading rules.',
+      description: 'Read a file with whole lines, sha256 + read# receipt footer (opens workspace/attachment images inline for vision-capable models). Modes: "window" (default, 400 lines, max 1000; pass footer next:"r:…" verbatim as continueFrom), "outline" (line-numbered symbol map — NOT an edit receipt), "fold" (signature tree with collapsed bodies — NOT an edit receipt). Extras: ranges [[from,to],...] (max 6, 2000 lines), line: N (one full line), showWhitespace: true. Repeated reads of an unchanged file return an automatic stub unless refresh: true.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -74,7 +74,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__read_all',
-      description: 'Whole file as a fold signature tree; NOT a read receipt. See Reading rules.',
+      description: 'Read whole file as a folded signature tree (bodies collapsed as ⋯ N lines; maxDepth default 2, max 8); structural map only — NOT an edit read receipt.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -86,7 +86,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__edit_file',
-      description: 'DEFAULT edit: anchor replace (oldString/newString); replaceAll, lineHint, dryRun, expectedReadHash, preserveEol, verifySyntax.',
+      description: 'DEFAULT single-region edit: replace exact unique oldString (copied from receipted read output) with newString; supports replaceAll, lineHint (disambiguate multi-match), dryRun (preview; pass pre-edit hash as expectedReadHash on apply), expectedReadHash (blocks if file changed), preserveEol (default true), verifySyntax (default true, rolls back broken .json/.js/.ts), wordLevel diff.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -106,7 +106,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__write',
-      description: 'Create a new file/document (refuses to overwrite unless overwrite: true + read first).',
+      description: 'Create a brand-new file (refuses to overwrite existing files unless overwrite: true + prior read receipt); supports dryRun and verifySyntax (default true).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -121,7 +121,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__multi_edit',
-      description: 'Atomic multi-edit: edits[] all-or-nothing; every nth verified against the n-1th result.',
+      description: 'Atomic batch edit on one read file: edits[] (max 50) applied all-or-nothing with every nth edit verified against the (n-1)th result; supports dryRun, expectedReadHash, preserveEol, verifySyntax.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -149,7 +149,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__edit_lines',
-      description: 'Replace a READ line range { from, to } with newString (1-based, inclusive).',
+      description: 'Replace a receipted 1-based inclusive line range { from, to } with newString; supports dryRun, expectedReadHash, preserveEol, verifySyntax.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -167,7 +167,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__edit_between',
-      description: 'Replace between two UNIQUE anchors { start, end }; includeAnchors keeps them.',
+      description: 'Replace content between two UNIQUE anchors { start, end } (for regions in flux); includeAnchors: false (default) keeps both anchors, includeAnchors: true replaces them too.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -185,7 +185,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__insert_at_line',
-      description: 'Insert newString BEFORE a line (insertAtLine) or at EOF (append: true).',
+      description: 'Insert newString BEFORE 1-based line insertAtLine or at EOF (append: true) on a read file; supports dryRun, expectedReadHash, verifySyntax.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -214,7 +214,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__move',
-      description: 'Move a file/folder to a new path (destination must not exist).',
+      description: 'Move a file/folder to a new path (never overwrites — delete destination first if replacing).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -226,7 +226,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__copy',
-      description: 'Copy a file/folder (destination must not exist).',
+      description: 'Copy a file/folder to a new path (never overwrites — delete destination first if replacing).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -238,7 +238,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__delete',
-      description: 'Delete a file/folder (dirs need recursive: true; vaulted first).',
+      description: 'Delete a file/folder (non-empty dirs need recursive: true; vaulted first; refused on addons-src/ which is user-only).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -384,7 +384,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__vault_list',
-      description: 'List vault snapshots (pre-edit/pre-delete).',
+      description: 'List pre-edit/pre-delete vault snapshots (workspace files live in <workspace>/.moriko/vault/<session>/, others in home vault; mention vault to the user only when asked about undo).',
       inputSchema: {
         type: 'object',
         properties: { query: { type: 'string', description: 'Path substring filter.' } },
@@ -392,7 +392,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__vault_diff',
-      description: 'Diff a vault snapshot against the current file (no changes written).',
+      description: 'Preview unified diff between a vault snapshot (snapshotId) and the current file (or "to" path) without writing.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -404,7 +404,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__vault_restore',
-      description: 'Restore a vault snapshot — full file (default) or a line range (rangeFrom/rangeTo). Pre-restore snapshot taken if target exists.',
+      description: 'Restore a vault snapshot — full file (default) or surgical line splice (rangeFrom..rangeTo, 1-based inclusive); snapshots existing target first ("pre-restore"), dryRun previews.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -419,7 +419,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__run',
-      description: 'Run a shell command in the workspace (self-destruction commands blocked; use task_stop).',
+      description: 'Run a blocking shell command in the workspace for quick commands (self-destruction commands blocked; use agent__task_start for dev servers/long builds and agent__task_stop to stop them).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -463,7 +463,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__vision',
-      description: 'Delegate an image to the configured multimodal model (text-only models only; imageIn models must use read_file).',
+      description: 'Delegate an image to the configured multimodal model (text-only models ONLY; vision-capable models must open images directly via agent__read_file). Output is secondhand — always attribute ("<model> reports…"), never claim "I see…".',
       inputSchema: {
         type: 'object',
         properties: {
@@ -513,7 +513,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__explain_error',
-      description: 'Annotate a pasted stack trace; workspace frames come back with read receipts.',
+      description: 'Call once on a pasted stack trace to resolve, read, and annotate matching workspace frames with edit read receipts.',
       inputSchema: {
         type: 'object',
         properties: { error: { type: 'string', description: 'Full error text.' } },
@@ -522,7 +522,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__search',
-      description: 'Lexical BM25 search (camelCase-aware) by keywords/meaning; follow with read_file.',
+      description: 'Lexical camelCase-aware BM25 search by keywords/meaning (limit default 10, max 30; cached index auto-invalidated on edits). Use when exact identifier is unknown, then follow with agent__read_file.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -557,7 +557,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__checkpoint',
-      description: 'Snapshot all session-edited files (+ Layout IR) into a named checkpoint.',
+      description: 'Snapshot all session-edited files (and freeze Layout IR) into a named checkpoint.',
       inputSchema: {
         type: 'object',
         properties: { label: { type: 'string', description: 'Checkpoint name.' } },
@@ -566,7 +566,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__undo',
-      description: 'Atomic checkpoint restore (latest if no label); undoable itself, reports spatial drift.',
+      description: 'Atomic checkpoint restore (latest if label omitted; undo is itself undoable). Inspect reported spatial drift and reintroduced collision candidates before finishing.',
       inputSchema: {
         type: 'object',
         properties: { label: { type: 'string', description: 'Checkpoint label.' } },
@@ -579,7 +579,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__apply_patch',
-      description: 'Multi-file unified diff, atomic (any hunk fails = nothing written).',
+      description: 'Multi-file git-style unified diff (---/+++ headers + @@ -oldStart,oldLines +newStart,newLines @@ coordinates; bare @@ rejected), atomic (any hunk fails = nothing written), read-window enforced, vaulted before write; use for cross-file refactors.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -591,7 +591,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__deps',
-      description: 'Import graph for one file: imports, dependents, blast radius (≤3).',
+      description: 'Import graph for one file: direct imports, dependents, and blast radius (≤3 hops). Check before renaming, moving, or changing signatures of shared files.',
       inputSchema: {
         type: 'object',
         properties: { path: { type: 'string', description: 'File to inspect.' } },
@@ -600,7 +600,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__glob',
-      description: 'Flat file-path finder by glob (OR across patterns; heavy dirs skipped).',
+      description: 'Flat file-path finder by pattern or patterns[] (OR), scoped via subpath, sorted by name|modified, maxResults default 200 (max 1000; heavy dirs skipped).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -614,7 +614,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__typecheck',
-      description: 'Run pnpm typecheck (or custom command) with parsed, grouped errors.',
+      description: 'Run pnpm typecheck (or custom command) with parsed, grouped errors (run ONLY when explicitly requested by the user).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -639,7 +639,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__backend',
-      description: 'SQLite layer (inert until opened): open/exec/query/fork/discard/list/seed/contract_lint/contract_check.',
+      description: 'SQLite & OpenAPI contract tool (inert until a DB is opened). Modes: "open" ({ name } ephemeral in-memory SQLite, or { name, filePath } file-backed), "exec"/"query" (bounded SQL, max 500 rows, bound params[]), "fork" ({ name, forkName } clones schema+data for risky migrations without touching source), "discard", "list", "seed" (deterministic rows from table spec — kinds int/pick/name/email…, seed default 42), "contract_lint" (OpenAPI unresolved $refs / missing responses via spec or specPath), "contract_check" (validate request body against schema).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -660,7 +660,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__spatial',
-      description: 'Layout IR: map (static candidates) | check (gate) | diff | runtime (browser ground truth) | mockup (design intent).',
+      description: 'Layout IR & UI geometry analyzer (prefer flow/flex/grid over magic-number absolute px). Modes: "map" (static layout candidates; snapshot:true returns raw JSON baseline), "check" (overlap candidates), "diff" (compare before/after baselines — only target regions may move, no new collisions), "runtime" ({ url } measures real DOM boxes in headless browser: hard overlaps, viewport overflow, tiny touch targets, screenshot; saveBaseline:true before UI edits; compareStatic:true shows source-vs-render drift), "mockup" ({ path|url|dataUrl } converts a design image into an estimated target Layout IR).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -680,7 +680,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__layout_edit',
-      description: 'UI edit by relation (move-right-of / move-below / swap / resize-relative / align); compiler computes coordinates.',
+      description: 'Preferred declarative UI layout editor: apply a relation (move-right-of | move-below | swap | resize-relative | align) between target and reference region ids; compiler computes coordinates and vaults the file before write (dryRun to preview).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -699,7 +699,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__test_run',
-      description: 'Run tests (auto-detects vitest/jest/pytest/cargo/go, default node --test) with parsed per-file results.',
+      description: 'Run existing project tests (auto-detects vitest/jest/pytest/cargo/go, default node --test) with parsed per-file results (run ONLY when explicitly requested by the user; never author manual self-test scripts).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -713,7 +713,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__task_start',
-      description: 'Start a background process, returns taskId.',
+      description: 'Start a non-blocking background process (dev servers, long builds), returns taskId (48 KB rolling buffer, max 10 in-memory tasks).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -725,7 +725,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__task_output',
-      description: 'Read a background task buffer + status.',
+      description: 'Read a background task output buffer and status (running/exited); optional waitMs (max 30000).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -737,7 +737,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__task_stop',
-      description: 'Kill a background task.',
+      description: 'Kill and remove a background task by taskId.',
       inputSchema: {
         type: 'object',
         properties: { taskId: { type: 'string', description: 'Task id.' } },
@@ -746,7 +746,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__lsp_symbols',
-      description: 'TS Language Service: definition / references / symbols / rename / hover / diagnostics / implementations / type_definition / call_hierarchy.',
+      description: 'TS Language Service query (definition | references | symbols | rename | hover | diagnostics | implementations | type_definition | call_hierarchy). Use before renaming or changing shared symbols to find semantic references grep misses.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -763,7 +763,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__ask_user',
-      description: 'Ask the user 1..N questions in one card; pauses until answered.',
+      description: 'Ask the user 1..8 concrete, one-sentence questions in one card ("text" free-form or "choice" with 2-8 options and optional allowCustom) for genuine ambiguity, design decisions, or missing info instead of guessing. Pauses until answered; if skipped/timed out, proceed with a sensible default, state the assumption, offer to revisit, and never re-block on the same question.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -791,7 +791,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__tree_outline',
-      description: 'ASCII outline of the realtime project-structure index; use FIRST to orient.',
+      description: 'ASCII outline of the in-memory realtime project-structure index (depth 1-8 default 3, filter, maxEntries); use FIRST to orient.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -803,15 +803,15 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__tree_refresh',
-      description: 'Force one rebuild of the realtime structure index.',
+      description: 'Force rebuild of the realtime structure index (e.g. after mass generation or git checkout).',
       inputSchema: { type: 'object', properties: {} },
     },
     {
       wireName: 'agent__render_visual',
       description:
-        'Render a standalone HTML visual inline for the user (sandboxed, inline everything). ' +
-        'Pass "id" of an earlier render_visual to UPDATE that card in place; pass "variants" (1..3) for a frontend preview. ' +
-        'libs: ["three","pixi","matter","moriko-gl"] injects a local vendor library into the iframe.',
+        'Render an inline live visual from a COMPLETE standalone HTML document (source ≤256 KB, height 120-2000 default 360; sandboxed: no network, no host access, no CDNs — inline all data/assets, or inject local vendor libs ["three","three-addons-orbit","pixi","matter","moriko-gl"]; payload never re-enters context). ' +
+        'EDIT IN PLACE: pass the returned visual "id" on subsequent calls to replace that live card in place (only omit "id" for a genuinely new artifact). ' +
+        'FRONTEND PREVIEW: pass "variants": [{ source, title?, height? }, ...] (1..3 complete candidates in one card); user selection arrives as a steer ("User picked <id>…"), then refine only that chosen "id" in place.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -843,7 +843,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__browser_open',
-      description: 'Navigate the active tab (persistent profile; panel screencast + harness cursor).',
+      description: 'Navigate the active tab (http(s) only; persistent profile, live panel + harness cursor; Google search via https://www.google.com/search?q=<encoded>). Always follow with agent__browser_wait before reading.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -867,7 +867,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__browser_screenshot',
-      description: 'PNG screenshot (vision gate; needs a vision-capable model).',
+      description: 'PNG screenshot (vision gate; needs a vision-capable model — prefer agent__browser_snapshot for page inspection).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1277,7 +1277,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__browser_request_approval',
-      description: 'Ask the user before a destructive action; timeout/abort = denied.',
+      description: 'Ask user approval BEFORE a destructive browser action (delete, payment, settings); timeout/abort = denied — never retry past a denial.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1451,7 +1451,13 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__addon_manage',
-      description: 'Manage Moriko addons — the Addon Manager. Builtin addons are authored in addons-src/<id>/ (always agent-accessible; full file tools also work on addons-src/... paths). Actions: list | read { id, file? } | write { id, file, content } | enable/disable { id } | install { id, name?, description?, registerCode?, clientCode? } | edit { id, ...same fields } | remove { id } (USER-ONLY — always refused for the agent; user removes via the Addon Hub) | reload. read/write/install/edit target the addons-src source for builtin ids (change goes live on the Hub Disable/Reload reseed) and the runtime root for third-party addons (hot-reload). Addon authoring: register.ts exports register(on, $) — on(event, matcher?, handler) hooks with ($, e, next) middleware; $ API: $.tool.register (dynamic tools), $.ui.draw(site, element) for widgets (sites: thread-sidebar, composer-band, right-dock, floating), $.command.register, $.store, $.http, $.fs (addon root), $.workspace (ACTIVE workspace root), $.bus.publish/subscribe (cross-session realtime + browser SSE), $.context.provide(title, lines) (inject live context into EVERY session system prompt), $.clock. Widget component: client/index.tsx, default-export React; realtime via EventSource("/api/addons/events").',
+      description:
+        `Manage Moriko addons — the Addon Manager. Builtin addons live in addons-src/<id>/ (always agent-accessible; full file tools also work on addons-src/... paths; builtin ids: ${builtinAddonIds().join(', ')}). ` +
+        'Actions: list | read { id, file? } | write { id, file, content } | enable/disable { id } | install { id, name?, description?, version?, registerCode?, clientCode? } | edit { id, ...same fields } | remove { id } (USER-ONLY — always refused; user removes via Addon Hub) | reload. ' +
+        'For builtin ids, read/write/install/edit operate on addons-src/<id>/ and go live when the user clicks Disable/Reload in the Addon Hub (tell the user when done); third-party addons live under ~/.moriko-studio/addons/<id>/ and hot-reload immediately (fix loadError by reading/rewriting register.ts). ' +
+        'Authoring pattern (register.ts): export register(on, $); register hooks via on(event, matcher?, async ($, e, next) => ...) on events "tool.call" {tool,args}, "tool.result" {tool,result}, "turn.start"/"turn.end", "session.open", "command.run" {command,args}, "ui.render" {site} — return next(e) to observe, next({ ...e, ... }) to rewrite, or { deny: "reason" } without next to block (.catch(fn) fails closed per hook). ' +
+        '$ API: $.tool.register({ name, description, inputSchema, execute }) / $.tool.call(wireName, args), $.ui.draw(site, { type: "widget", component: "./client/index.tsx" }) (sites: thread-sidebar, composer-band, right-dock, floating) + $.ui.log/toast, $.command.register({ name, description }), $.store (get/set/delete), $.http.fetch, $.fs (addon-root scoped), $.workspace (ACTIVE workspace jailed read/write/list/exists), $.bus.publish/subscribe (cross-session pub/sub + SSE /api/addons/events), $.context.provide(title, lines)/revoke(title) (live system-prompt block across sessions), $.clock.every/after/sleep. ' +
+        'Widget (client/index.tsx): self-contained default-export React component (import only react; subscribe via EventSource("/api/addons/events") for realtime updates).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1470,7 +1476,11 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__exec',
-      description: 'Tool-call orchestrator: one JS program composing tools.* calls in a sandboxed vm. See Orchestrator rules.',
+      description:
+        'Tool-call orchestrator: run ONE JS program (top-level await supported) composing multiple tools in a Node vm sandbox with zero model round-trips; nested calls still pass all harness gates (schema, read/spatial gates, workspace jail, approvals, audit). ' +
+        'Use for 3+ parallel reads/searches (Promise.allSettled), conditional chains, or paging/retry loops; skip for 1-2 sequential calls, and yield to the model before visual judgment steps. ' +
+        'Sandbox globals ONLY: tools.<shortName>(args) (e.g. tools.read_file, tools.grep — each returns { ok, isError, text }), text(out) (ONLY text() output re-enters model context — filter aggressively), store(k,v)/load(k) (persist across exec calls in session), notify(msg), exit(), setTimeout/clearTimeout, JS intrinsics (no Node, require, process, fs, or network). ' +
+        'Limits: timeout 30s default (max 120s via timeoutMs), max 200 nested calls, 48k chars output.',
       inputSchema: {
         type: 'object',
         properties: {

@@ -7,7 +7,8 @@ import type { ProviderKind, ProviderPublic } from './contracts.js';
  * it is stored per built-in id (see `ProviderStore.setBuiltInKey`); an env
  * var override is also honored for headless setups. Anything else the user
  * adds as a custom provider (stored in `.data`): any OpenAI-compatible vendor
- * via `kind: 'openai'`, while `gemini` / `anthropic` keep their own adapters.
+ * via `kind: 'openai'`, while `gemini` / `anthropic` / `mistral` keep their
+ * own adapters.
  */
 export interface ProviderDefinition extends Omit<ProviderPublic, 'hasServerKey' | 'userSuppliedKey' | 'builtIn'> {
   /** Environment variable holding the credential, if any. */
@@ -59,6 +60,20 @@ export const BUILT_IN_PROVIDERS: ProviderDefinition[] = [
       'Image models (Nano Banana) generate and edit images here too.',
   },
   {
+    id: 'mistral',
+    label: 'Mistral AI',
+    kind: 'mistral',
+    baseUrl: 'https://api.mistral.ai/v1',
+    envKey: 'MISTRAL_API_KEY',
+    envBaseUrl: 'MISTRAL_BASE_URL',
+    models: [],
+    docsUrl: 'https://docs.mistral.ai/',
+    note:
+      'Own adapter. Reasoning replays inside content chunk lists (ThinkChunk/TextChunk) — ' +
+      'Mistral rejects `reasoning_content` with HTTP 422. reasoning_effort is a root-level parameter. ' +
+      'Use “Fetch from provider” to load your model list.',
+  },
+  {
     id: 'comfyui',
     label: 'ComfyUI (Local)',
     kind: 'openai',
@@ -80,5 +95,10 @@ export function findBuiltIn(id: string): ProviderDefinition | undefined {
 }
 
 export function isProviderKind(value: unknown): value is ProviderKind {
-  return value === 'openai' || value === 'gemini' || value === 'anthropic';
+  return (
+    value === 'openai' ||
+    value === 'gemini' ||
+    value === 'anthropic' ||
+    value === 'mistral'
+  );
 }
