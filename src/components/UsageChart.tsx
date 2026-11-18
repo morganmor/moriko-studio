@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 
-/** One calendar day of the server usage ledger (local day, zeros pre-filled). */
+
 export interface UsageDay {
   date: string;
   requests: number;
@@ -20,8 +20,7 @@ interface Bucket {
   cacheRead: number;
 }
 
-/** 12.4M / 340K / 2.5K / 950 — compact axis + tooltip numbers. Dynamic
- *  scales land on 2.5× steps, so non-integer values print exactly. */
+
 function compact(value: number): string {
   if (value >= 1e9) return `${+(value / 1e9).toFixed(1)}B`;
   if (value >= 1e6) return `${+(value / 1e6).toFixed(value >= 1e7 ? 0 : 1)}M`;
@@ -32,12 +31,7 @@ function compact(value: number): string {
   return Number.isInteger(value) ? String(value) : String(+value.toFixed(1));
 }
 
-/**
- * DYNAMIC axis: a clean step (1/2/2.5/5/10×10^k) ≈ peak/5, then 3–5 grid
- * lines at exact multiples of it. The ceiling hugs whatever the busiest
- * bucket holds — a 222M peak renders against a 250M axis instead of a fixed
- * niceMax 500M — and shrinks back automatically on quiet windows.
- */
+
 function niceScale(peak: number): { step: number; lines: number } {
   if (peak <= 0) return { step: 0, lines: 4 };
   const target = Math.max(peak / 5, 1);
@@ -52,10 +46,7 @@ function shortDate(iso: string): string {
   return new Date(`${iso}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-/**
- * Bucket long ranges so bars stay readable: ≤30 rows → per day,
- * ≤180 → per week, beyond → per month. Returns the aggregation unit label.
- */
+
 function bucketize(days: UsageDay[]): { buckets: Bucket[]; unit: string } {
   const size = days.length <= 30 ? 1 : days.length <= 180 ? 7 : 30;
   const unit = size === 1 ? 'day' : size === 7 ? 'week' : 'month';
@@ -77,21 +68,7 @@ function bucketize(days: UsageDay[]): { buckets: Bucket[]; unit: string } {
   return { buckets, unit };
 }
 
-/**
- * Daily token bar chart in the design dashboard's chart mechanism
- * (design/moriko-design-1-panel-dashboard.html): .chart grid with the .yax
- * labels, .plot holding .gridl grid lines and .bars whose `.bar i` grow from
- * the baseline with a 35ms stagger (animation:grow), .xax labels below, and
- * the hover tooltip with the prompt/output/cache split.
- *
- * Tooltip placement: the plot is a fixed 220px (.chart) and the pill ~105px
- * (5 lines with Cache) + 6px gap ⇒ a bar up to ~49% of the plot still fits
- * the pill ABOVE its top — 45% leaves margin. Taller bars flip the pill
- * BELOW the bar top (over the bar itself), clamped so the pill never spills
- * past the plot's bottom edge. The pill's near edge is anchored with NO
- * y-translate: a -translate-y-full would lift it a second full height
- * upward, out of the chart box and into the card's overflow-hidden clip.
- */
+
 const FLIP_ABOVE_MAX_PCT = 45;
 const FLIP_BELOW_CLAMP_PX = 110;
 export function UsageChart({ days }: { days: UsageDay[] }) {
@@ -104,7 +81,7 @@ export function UsageChart({ days }: { days: UsageDay[] }) {
   const rawMax = Math.max(...totals);
   const { step, lines } = niceScale(rawMax);
   const max = step * lines;
-  /** Bar/tooltip height; 0 when the window is empty (grid then reads all 0). */
+  
   const pct = (value: number): number => (max > 0 ? (value / max) * 100 : 0);
   const peakIndex = totals.indexOf(rawMax);
   const hovered = hover !== null ? buckets[hover] : null;
@@ -114,7 +91,7 @@ export function UsageChart({ days }: { days: UsageDay[] }) {
       : hovered
         ? shortDate(hovered.date)
         : '';
-  /** Label every Nth bar so the axis never crowds (design prints sparse labels). */
+  
   const labelEvery = Math.max(1, Math.ceil(buckets.length / 8));
 
   return (

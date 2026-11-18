@@ -6,22 +6,7 @@ import { atomicWriteJson } from '../atomicWrite.js';
 import { chatDirFor } from '../conversationStore.js';
 import { appDataDir, detachedGoalsDir } from '../paths.js';
 
-/**
- * GOALS / PLANS / TODOS store for the agent harness (Context Injection).
- *
- * Goals live per conversation session (keyed by the conversation id the
- * client sends with every chat request). The AGENT manages them through the
- * `goal_*` harness tools; the USER manages them through the Goals panel
- * (REST in routes.ts). Each session's goals persist NEXT TO ITS CHAT —
- * `.data/conversation/<chat-…>/goals-plan.json` — so a chat folder carries
- * everything about that conversation: its record and its plan. Sessions with
- * no archived chat (synthetic/test ids) fall back to
- * `.data/conversation/detached/<session>.json`.
- *
- * A goal is the PARENT of its plan text and its todo checklist. Status is
- * bookkeeping surfaced to the agent and the user — nothing auto-continues
- * the conversation; the user drives the next message.
- */
+
 
 export type GoalStatus = 'running' | 'paused' | 'done';
 
@@ -29,11 +14,11 @@ export interface GoalTodo {
   id: string;
   text: string;
   done: boolean;
-  /** Optional nested checklist ("checklist dalam checklist"), one level deep. */
+  
   subtasks?: GoalSubtask[];
-  /** Priority level — defaults to 'medium' for older entries. */
+  
   priority?: 'low' | 'medium' | 'high';
-  /** Optional longer-form detail. */
+  
   notes?: string;
 }
 
@@ -46,25 +31,17 @@ export interface GoalSubtask {
 export interface Goal {
   id: string;
   title: string;
-  /** The plan: how the agent intends to reach the goal. */
+  
   plan: string;
   status: GoalStatus;
   todos: GoalTodo[];
   createdAt: number;
   updatedAt: number;
-  /** How many automatic continuation rounds this goal has consumed. */
+  
   loopCount: number;
-  /**
-   * MODEL-OWNED round budget (goal_update): how many auto-continuation rounds
-   * the model allows itself. Undefined = the harness default cap; 0 = the
-   * model opted out of auto rounds entirely.
-   */
+  
   maxRounds?: number;
-  /**
-   * MODEL-OWNED injection cadence (goal_update): re-inject the FULL goal
-   * context after every N completed todos (top-level + subtasks). The
-   * client defaults to 3 when unset.
-   */
+  
   injectEveryTodos?: number;
 }
 
@@ -74,10 +51,10 @@ const MAX_TODO_TEXT = 300;
 const MAX_TODOS = 100;
 const MAX_GOALS_PER_SESSION = 20;
 
-/** Pre-restructure single-file store (sessions with no chat folder kept here too). */
+
 const LEGACY_GOALS_FILE = path.join(appDataDir, 'goals.json');
 
-/** session → goals. Lazily loaded per session, written through on change. */
+
 const store = new Map<string, Goal[]>();
 let legacySplit = false;
 
@@ -85,7 +62,7 @@ function safeSession(sessionId: string): string {
   return sessionId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) || 'default';
 }
 
-/** Where this session's goals live on disk (chat folder first, detached else). */
+
 function goalsFileFor(sessionId: string): string {
   const chatDir = chatDirFor(sessionId);
   if (chatDir) return path.join(chatDir, 'goals-plan.json');
@@ -103,10 +80,7 @@ function isGoal(value: unknown): value is Goal {
   );
 }
 
-/**
- * One-time split of the legacy `.data/goals.json` (Record<session, Goal[]>)
- * into the per-chat files. The original is parked as `.migrated`.
- */
+
 function splitLegacyGoals(): void {
   if (legacySplit) return;
   legacySplit = true;
@@ -141,7 +115,7 @@ function loadSession(sessionId: string): Goal[] {
   return goals;
 }
 
-/** Best-effort persist of ONE session's goals into its own file. */
+
 function persistSession(sessionId: string): void {
   try {
     const file = goalsFileFor(sessionId);
@@ -164,7 +138,7 @@ function normalizePriority(value: unknown): 'low' | 'medium' | 'high' | undefine
   return undefined;
 }
 
-/** Accepts a plain string or a rich todo object; strings become medium todos. */
+
 function normalizeTodoInput(entry: unknown): GoalTodo | null {
   if (typeof entry === 'string') {
     const text = cleanText(entry, MAX_TODO_TEXT);
@@ -217,18 +191,18 @@ export interface GoalPatch {
   title?: unknown;
   plan?: unknown;
   status?: unknown;
-  /** Todo checkoff by id: { id, done }. */
+  
   todos?: unknown;
-  /** Todo patch by id: { id, priority?, notes? }. */
+  
   setTodoMeta?: unknown;
-  /** Add a subtask: { todoId, text }. */
+  
   addSubtask?: unknown;
-  /** Subtask checkoff by id: { id, done } — ids are unique across the goal. */
+  
   setSubtask?: unknown;
   loopCount?: unknown;
-  /** Model-owned: auto-continuation round budget (0 = no auto rounds). */
+  
   maxRounds?: unknown;
-  /** Model-owned: full goal-context re-injection cadence in completed todos. */
+  
   injectEveryTodos?: unknown;
 }
 
@@ -322,7 +296,7 @@ export function deleteGoal(sessionId: string, goalId: string): boolean {
   return true;
 }
 
-/** Renders the goal state for the model's context injection. */
+
 export function renderGoalsForContext(goals: Goal[]): string {
   return goals
     .map((goal) => {

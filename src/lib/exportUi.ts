@@ -1,15 +1,4 @@
-/**
- * exportUi — serializes the LIVE Moriko UI into ONE self-contained HTML file
- * that stays INTERACTIVE for redesign work by humans or other agents:
- *   • every <style> + <link rel=stylesheet> is consolidated into one block
- *   • same-origin fonts/images (CSS url() + <img>) become data: URIs
- *   • app <script>s are stripped — a static, fully editable snapshot
- *   • panels/pages are HARVESTED at export time: every opener is clicked once,
- *     its open-state DOM is stored as <template data-demo-panel|view>, then
- *     closed again — a small vanilla shim re-opens them on click in the file
- *   • HTML/CSS are pretty-printed for hand editing
- * Saved to ui-exports/ on the server AND downloaded by the browser.
- */
+
 import { useStore } from '../store/useStore';
 
 export interface UiExportStats {
@@ -17,16 +6,16 @@ export interface UiExportStats {
   styles: number;
   inlined: number;
   external: string[];
-  /** Harvested panels (popovers, menus, sheets, drawers). */
+  
   panels: number;
-  /** Harvested pages (sidebar views swapped into #workspace). */
+  
   views: number;
 }
 
-/** Overlay surfaces that can be harvested (conditional or hidden-until-open). */
+
 const OVERLAY_SEL =
   '[role="menu"],[role="dialog"],[role="listbox"],[data-sheet],div.fixed.inset-0,[data-demo-dock]';
-/** Composer wrappers whose FIRST button is the popover trigger. */
+
 const PANEL_WRAPPERS =
   '[data-plus-popover],[data-tools-popover],[data-model-popover],[data-context-popover]';
 
@@ -52,19 +41,14 @@ function nameKey(el: Element): string {
   return ((el.getAttribute('aria-label') || el.textContent) || '').replace(/\s+/g, ' ').trim();
 }
 
-/** One host can serve several panels — accumulate space-separated keys. */
+
 function markHost(host: Element | null, key: string): void {
   if (!host) return;
   const keys = (host.getAttribute('data-demo-host') ?? '').split(/\s+/).filter(Boolean);
   if (!keys.includes(key)) host.setAttribute('data-demo-host', [...keys, key].join(' '));
 }
 
-/**
- * Page = sidebar nav button that switches #workspace content. Excludes groups
- * (aria-expanded), "New Chat/New Session" (side effects), and everything after
- * the Workspace / Recent Chat sections (those switch workspace or the active
- * conversation — never clicked). Dashboard (footer) is always allowed.
- */
+
 function viewAnchor(root: ParentNode): Element | null {
   for (const b of Array.from(root.querySelectorAll('nav[aria-label="Main"] button'))) {
     if (/^(workspace|recent chat)\b/i.test((b.textContent || '').trim())) return b;
@@ -142,7 +126,7 @@ async function waitWorkspaceStable(host: Element, ms = 2600): Promise<void> {
 }
 
 
-/** Close anything open + expand collapsed nav sections (baseline = rich, neutral). */
+
 async function prepareLiveState(): Promise<void> {
   for (const el of collectOpeners(document)) {
     if (el.getAttribute('aria-expanded') === 'true') el.click();
@@ -166,7 +150,7 @@ async function prepareLiveState(): Promise<void> {
   await settle(400);
 }
 
-/** Click one opener, return outerHTML of overlays it made visible (open state). */
+
 async function harvestPanel(el: HTMLElement): Promise<Element[]> {
   const before = new Map<Element, string>();
   for (const n of overlayNodes(document)) before.set(n, overlaySig(n));
@@ -181,7 +165,7 @@ async function harvestPanel(el: HTMLElement): Promise<Element[]> {
   return outermost(made);
 }
 
-/** Escape → aria-expanded re-click → last-resort toggle, so nothing stays open. */
+
 async function closePanel(el: HTMLElement): Promise<void> {
   escapeClose();
   await settle(90);
@@ -206,10 +190,7 @@ async function closePanel(el: HTMLElement): Promise<void> {
 }
 
 
-/**
- * Vanilla interactivity for the exported file. NO backticks / ${ / </script
- * sequences allowed inside this string (it is inlined into a <script>).
- */
+
 const DEMO_SHIM = `(function () {
   var live = {};
   function qa(s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); }
@@ -380,7 +361,7 @@ export async function inlineImagesIn(
   }
 }
 
-/** Parse a harvested HTML string: tag its openers + inline images, return html. */
+
 async function finalizeTemplate(
   html: string,
   cache: Map<string, string>,
@@ -446,9 +427,7 @@ const VOID_TAGS = new Set([
   'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
   'link', 'meta', 'param', 'source', 'track', 'wbr',
 ]);
-/** Whitespace-significant or code-bearing elements — copied through untouched.
- * `template` too: pretty-printing injected a newline as its first child, and
- * the shim's first-child setAttribute() then crashed on that text node. */
+
 const RAW_TAGS = new Set(['pre', 'textarea', 'script', 'style', 'template']);
 
 function prettyHtml(html: string): string {
@@ -688,7 +667,7 @@ export async function buildUiExportHtml(): Promise<{ html: string; stats: UiExpo
   return { html, stats };
 }
 
-/** Full flow: busy notice → build → save into ui-exports/ → download → notice. */
+
 export async function exportUi(): Promise<void> {
   const { showNotice } = useStore.getState();
   try {

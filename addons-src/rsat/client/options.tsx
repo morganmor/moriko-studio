@@ -1,9 +1,4 @@
-/**
- * RSA/T Options — port 1:1 dari design/split/rsat-panel-options.html.
- * Versi backend: guard mode & TTL via rpc (persist), export via rpc exportDoc,
- * import via rpc importDoc (dry-run + apply di server), danger zone rpc deletePrd.
- * confirm() browser DILARANG → konfirmasi hapus PRD inline two-step.
- */
+
 import { useRef, useState, type ReactNode } from 'react';
 import { setToastsEnabled, toast } from './toast.tsx';
 import { tr } from './shared.tsx';
@@ -11,7 +6,7 @@ import { Ic } from './icon.tsx';
 import { rpc } from './shared.tsx';
 import { deletePrd, importDoc, setGuard, setIlQuality, setLang, setTtl, useRsat } from './store.tsx';
 
-/** seg-ctl desain (baris 117): grup tombol bertekanan. */
+
 function Seg({ vals, cur, onPick, label }: { vals: Array<[string, string]>; cur: string; onPick: (v: string) => void; label: string }) {
   return (
     <span className="seg-ctl" role="group" aria-label={label}>
@@ -28,7 +23,7 @@ function Sw({ on, label, onToggle }: { on: boolean; label: string; onToggle: () 
   return <button className="switch" type="button" role="switch" aria-checked={on} aria-label={label} onClick={onToggle} />;
 }
 
-/** Baris .set desain (baris 80): label kiri + kontrol kanan. */
+
 function SetRow({ label, desc, note, control }: { label: ReactNode; desc: string; note?: string; control: ReactNode }) {
   return (
     <div className="set">
@@ -48,7 +43,7 @@ function SetRow({ label, desc, note, control }: { label: ReactNode; desc: string
   );
 }
 
-/** Ekspor PRD: rpc exportDoc (server simpan ke .moriko/rsat/exports/) + unduhan. */
+
 function exportPrd() {
   void (async () => {
     try {
@@ -66,7 +61,7 @@ function exportPrd() {
   })();
 }
 
-/** Kartu Danger zone (desain baris 126) — armed = konfirmasi inline (ganti confirm() browser). */
+
 function DangerCard({ lang, hasPrd }: { lang: string; hasPrd: boolean }) {
   const t = (k: string) => tr(lang, k);
   const [armed, setArmed] = useState(false);

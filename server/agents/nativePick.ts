@@ -1,22 +1,6 @@
 import { spawn } from 'node:child_process';
 
-/**
- * NATIVE folder picker — the DEVICE'S OWN dialog, always in FRONT and
- * comfortably sized.
- *
- * Primary path (pwsh 7 / .NET 8+): Microsoft.Win32.OpenFolderDialog — the
- * modern Vista-style folder dialog: large, user-resizable (Windows remembers
- * the size), with search and the Explorer left pane. An invisible TOPMOST
- * host window owns the dialog, so it can never open behind other windows.
- *
- * Fallback (powershell.exe 5.1, when pwsh is unavailable or too old): the
- * classic FolderBrowserDialog, also owned by an invisible TopMost form.
- *
- * Resolves the absolute path, or null when the user cancels. The dialog
- * belongs to the server process (the local proxy on the user's machine), so
- * the selected path is directly usable as an agent workspace. A 5-minute cap
- * only guards against a zombie dialog.
- */
+
 
 const MODERN_EXIT_UNAVAILABLE = 3;
 
@@ -66,15 +50,15 @@ function legacyScript(): string {
   ].join('\n');
 }
 
-/** UTF-16LE base64 for PowerShell's -EncodedCommand (no quoting hell). */
+
 function encoded(script: string): string {
   return Buffer.from(script, 'utf16le').toString('base64');
 }
 
 interface PickerOutcome {
-  /** Picked path; null on cancel or when nothing was output. */
+  
   path: string | null;
-  /** Process exit code — lets the caller detect a missing modern dialog. */
+  
   code: number | null;
 }
 

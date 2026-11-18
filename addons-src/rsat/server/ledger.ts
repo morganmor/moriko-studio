@@ -1,29 +1,21 @@
-/**
- * RSA/T file ledger (R5) — every workspace fs.change lands in the ledger of
- * the achievement that owns the path (holder first, else the covering scope),
- * plus a one-line "agent summary" for the board's Files tab.
- *
- * fs.change events carry relative paths inside the workspace; shell tools
- * (unknown:true) are recorded as "untracked command" entries so the board
- * stays honest about what the guard cannot see.
- */
+
 
 import { inScope } from './model.js';
 import { loadDoc, appendLedger } from './store.js';
 import { pushActivity } from './platform.js';
 import { agentBySession } from './agents.js';
 
-/** loadDoc yang tidak pernah melempar (workspace salah/corrupt → null). */
+
 function tryLoad(api, sessionId) {
   try { return loadDoc(api, sessionId); } catch { return null; }
 }
 
-/** loadDoc dari workspace PENULIS file (sessionId), fallback ke pinned ws. */
+
 function docForWrite(api, sessionId) {
   return (sessionId ? tryLoad(api, sessionId) : null) ?? tryLoad(api, undefined);
 }
 
-/** Aktor ledger: registry binding menang — ledger menunjukkan agent siapa. */
+
 function ledgerActor(api, sessionId) {
   let rec = null;
   try { rec = agentBySession(api, sessionId); } catch { rec = null; }
@@ -32,12 +24,7 @@ function ledgerActor(api, sessionId) {
     : { kind: 'agent', sessionId };
 }
 
-/**
- * Create the fs.change observer. Events fire per file (batched by the host).
- * Attribution: the fs.change entry carries the WRITING session's id — resolve
- * the doc from THAT session's workspace (per-session binding), falling back
- * to the addon's pinned workspace when the writer has none (user writes).
- */
+
 export function createLedger(api) {
   return async function ledgerHook($, event) {
     const sessionId = event?.sessionId;

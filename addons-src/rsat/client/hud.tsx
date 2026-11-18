@@ -1,8 +1,4 @@
-/**
- * RSA/T HUD — port 1:1 dari design/split/rsat-panel-hud.html.
- * .hud = .xpw (level + XP bar 24 segmen) + .hotbar.pn (7 slot view, kbd 1-7, badge).
- * Tooltip title desain diganti aria-label (aturan workspace: dilarang tooltip native).
- */
+
 import { type KeyboardEvent } from 'react';
 import { Ic } from './icon.tsx';
 import { eff, useRsat } from './store.tsx';

@@ -1,11 +1,4 @@
-/**
- * RSA/T addon entry (v2 module — activate(ctx), R0).
- *
- * Wires: 11 agent tools (R2), the scope guard (R3), the fs ledger (R5), the
- * prompt fragment + presence + injection (R4), RPC for the board UI (R6),
- * commands, settings defaults and a README pointer. Everything registers
- * through the platform's disposable surface — reloads never leak.
- */
+
 
 import { toolDefs } from './tools.js';
 import { createGuard, createGuardResult } from './guard.js';

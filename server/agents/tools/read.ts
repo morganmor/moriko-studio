@@ -1,15 +1,4 @@
-/**
- * agent__read_all — read the WHOLE file and get it FOLDED: a signature tree
- * of every block (VSCode fold-all). One call maps a 3000-line file.
- *
- * agent__read_file — read a numbered slice of a file. Lines render WHOLE (no
- * silent truncation). Three modes: window (default), outline, fold. Supports
- * ranges, single-line, showWhitespace, and continuation tokens (continueFrom).
- * A repeated request on an unchanged file answers with an "unchanged" stub
- * automatically (no lastHash needed); `refresh: true` forces a re-render.
- * Binary/image files are detected by
- * magic bytes and returned inline as image parts for multimodal models.
- */
+
 import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { HarnessToolResult, AgentToolContext, ToolImage } from './shared.js';
@@ -31,16 +20,10 @@ import { fuzzyHint } from '../fuzzy.js';
 import { normalizeHashInput } from './edit-core.js';
 import { noteImageRead } from './vision-policy.js';
 
-/** Own budget for this tool — the shared constant was removed (2026-10-22). */
+
 const READ_BUDGET_CHARS = 48_000;
 
-/**
- * Deterministic signature of a read_file request. Two calls share a scope only
- * when they ask for the SAME window with the SAME options — the redundant
- * re-read the automatic stub exists to kill. Any difference (mode, offset,
- * ranges, continuation token, whitespace view) is a DIFFERENT request and must
- * render.
- */
+
 function readScopeKey(args: Record<string, unknown>): string {
   return [
     str(args, 'mode').trim().toLowerCase() || 'window',
@@ -54,7 +37,7 @@ function readScopeKey(args: Record<string, unknown>): string {
   ].join('|');
 }
 
-/** Human label for the stub message — what exactly was already rendered. */
+
 function readScopeLabel(args: Record<string, unknown>): string {
   const mode = str(args, 'mode').trim().toLowerCase();
   if (mode === 'outline' || mode === 'fold') return `mode "${mode}"`;
@@ -66,10 +49,7 @@ function readScopeLabel(args: Record<string, unknown>): string {
   return `lines ${offset}–${offset + max - 1}`;
 }
 
-/**
- * Shared fold renderer for agent__read_all AND read_file { mode: "fold" } —
- * one source of truth so both spellings always produce identical output.
- */
+
 export function foldModeResult(content: string, relative: string, maxDepthRaw: unknown): HarnessToolResult {
   const result = foldContent(content, relative);
   const rawDepth = typeof maxDepthRaw === 'number' && Number.isFinite(maxDepthRaw) ? maxDepthRaw : undefined;
@@ -371,7 +351,6 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
     };
   }
 
-  // refresh: true is the ONLY way to force a render once a scope was seen.
   const refresh = bool(args, 'refresh');
   const scopeKey = readScopeKey(args);
   const markScope = (): void => {
@@ -391,8 +370,6 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
     }
     if (contentHash.startsWith(lastHash)) {
       const existing = getReadEntry(ctx.sessionId, absolute);
-      // Re-affirm the span the model already holds: recordRead merges it into
-      // the existing union, so this only bumps the revision (a fresh receipt).
       const refreshed = existing
         ? recordRead(ctx.sessionId, absolute, content, stats.mtimeMs, existing.fromLine, existing.toLine)
         : undefined;
@@ -407,10 +384,6 @@ export async function readFileTool(args: Record<string, unknown>, ctx: AgentTool
     }
   }
 
-  // AUTOMATIC unchanged stub — no lastHash required. Fires only when the model
-  // repeats the EXACT same request on a file whose receipt is still current, so
-  // the content it would receive is already in its context. A rebuilt context
-  // (post-compaction) clears the receipt and the read renders again.
   if (!refresh) {
     const previous = getRenderedScope(ctx.sessionId, absolute);
     if (

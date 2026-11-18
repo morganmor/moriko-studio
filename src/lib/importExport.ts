@@ -12,13 +12,7 @@ import type {
 } from '../types';
 import { DEFAULT_SETTINGS } from '../store/useStore';
 
-/**
- * Validation for imported bundles.
- *
- * An export file is untrusted input: it may have been hand-edited, produced by
- * an older build, or crafted. Everything is coerced into the current shape, and
- * anything unparseable is dropped rather than trusted.
- */
+
 
 function asString(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback;
@@ -66,7 +60,7 @@ function sanitizeSettings(value: unknown): ChatSettings {
     agentWorkflow: typeof raw.agentWorkflow === 'string' ? raw.agentWorkflow : '',
     terminalMode:
       raw.terminalMode === 'off' || raw.terminalMode === 'ask' ? raw.terminalMode : 'auto',
-    confirmDeletes: raw.confirmDeletes === true,
+    confirmDeletes: raw.confirmDeletes !== false,
     fetchWeb: raw.fetchWeb === true ||
       typeof (raw as { urlContext?: unknown }).urlContext === 'string',
     webAccess: raw.webAccess === true,
@@ -160,7 +154,6 @@ function sanitizeSegments(value: unknown): TurnSegment[] | undefined {
           id: asString((raw as { id?: unknown }).id) || `imported_reasoning_${out.length}`,
           type: 'reasoning',
           text,
-          // An imported transcript is history: nothing is still streaming.
           status: 'done',
         });
       }
@@ -267,7 +260,7 @@ function sanitizeSegments(value: unknown): TurnSegment[] | undefined {
   return out.length > 0 ? out : undefined;
 }
 
-/** Mid-run steer notes recorded on a turn (the wire-rebuild source). */
+
 function sanitizeSteers(value: unknown): Turn['steers'] {
   if (!Array.isArray(value)) return undefined;
   const out: NonNullable<Turn['steers']> = [];
@@ -427,6 +420,36 @@ function sanitizeCompaction(value: unknown): ConversationCompaction | undefined 
     raw.trigger === 'threshold' || raw.trigger === 'context-limit' || raw.trigger === 'manual'
       ? raw.trigger
       : 'manual';
+  const checkpoints = Array.isArray(raw.checkpoints)
+    ? raw.checkpoints.flatMap((cp, index) => {
+        if (!cp || typeof cp !== 'object') return [];
+        const entry = cp as Partial<NonNullable<ConversationCompaction['checkpoints']>[number]>;
+        const cpSummary = asString(entry.summary);
+        if (!cpSummary) return [];
+        const cpTrigger =
+          entry.trigger === 'threshold' || entry.trigger === 'context-limit' || entry.trigger === 'manual'
+            ? entry.trigger
+            : trigger;
+        return [
+          {
+            id: asString(entry.id) || `checkpoint-${index + 1}`,
+            index: asNumber(entry.index, index + 1),
+            summary: cpSummary,
+            coveredTurnIds: Array.isArray(entry.coveredTurnIds)
+              ? entry.coveredTurnIds.filter((id): id is string => typeof id === 'string')
+              : [],
+            trigger: cpTrigger,
+            createdAt: asNumber(entry.createdAt, asNumber(raw.createdAt, Date.now())),
+            ...(typeof entry.summaryTokens === 'number' && entry.summaryTokens > 0
+              ? { summaryTokens: entry.summaryTokens }
+              : {}),
+            ...(typeof entry.sourceTokens === 'number' && entry.sourceTokens > 0
+              ? { sourceTokens: entry.sourceTokens }
+              : {}),
+          },
+        ];
+      })
+    : undefined;
   return {
     summary,
     coveredTurnIds: Array.isArray(raw.coveredTurnIds)
@@ -434,6 +457,7 @@ function sanitizeCompaction(value: unknown): ConversationCompaction | undefined 
       : [],
     trigger,
     createdAt: asNumber(raw.createdAt, Date.now()),
+    ...(checkpoints && checkpoints.length > 0 ? { checkpoints } : {}),
   };
 }
 
@@ -504,7 +528,7 @@ function sanitizeHarnessContext(value: unknown): Conversation['harnessContext'] 
   };
 }
 
-/** Coerces an array of unknown records into valid conversations. */
+
 export function sanitizeConversations(input: unknown[]): Conversation[] {
   const seen = new Set<string>();
   const output: Conversation[] = [];
@@ -542,7 +566,7 @@ export function sanitizeConversations(input: unknown[]): Conversation[] {
   return output;
 }
 
-/** Coerces one unknown record (a single-conversation export) into a valid Conversation. */
+
 export function sanitizeConversation(input: unknown): Conversation | null {
   if (!input || typeof input !== 'object') return null;
   const [conversation] = sanitizeConversations([input]);

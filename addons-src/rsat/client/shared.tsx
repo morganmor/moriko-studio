@@ -1,7 +1,4 @@
-/**
- * RSA/T client state — rebuild dari nol (menggantikan shared.tsx lama yang dihapus).
- * State board live via host (fetch sekali + invalidasi SSE), RPC, dan i18n mini.
- */
+
 import { useCallback } from 'react';
 import { invoke, useAddonState } from '@moriko/host';
 
@@ -18,12 +15,12 @@ export interface RsatState {
 
 const EMPTY: RsatState = { displayName: 'Rizky', presence: [], language: '' };
 
-/** State board RSA/T yang hidup (SSE invalidation dari server addon). */
+
 export function useBoard(): RsatState {
   return useAddonState<RsatState>('rsat', EMPTY, useCallback(() => null, []));
 }
 
-/** RPC addon (server membungkus {result}|{error}). */
+
 export async function rpc(name: string, body: Record<string, unknown> = {}): Promise<unknown> {
   return invoke('rsat', name, body);
 }
@@ -201,12 +198,12 @@ const L: Record<string, Record<string, string>> = {
   },
 };
 
-/** Terjemahan key sederhana (peta L dari desain topbar). */
+
 export function tr(lang: string | undefined, key: string): string {
   return (lang && L[lang]?.[key]) || L.en[key] || key;
 }
 
-/** CSS UI RSA/T — port 1:1 design/split (self-contained, di-inject board.tsx). */
+
 export const RSAT_CSS = `
 .rsat{--al:234 88 12;--ad:249 115 22;
   --f-px:"Moriko Pixel","Silkscreen","Pixelify Sans",ui-monospace,"Cascadia Code",Consolas,monospace;

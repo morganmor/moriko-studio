@@ -1,13 +1,9 @@
-/**
- * RSA/T dock — port 1:1 dari design/split/rsat-panel-dock.html.
- * aside.dock = 3 dock-card: status PRD (+seg done), Live sessions (presence
- * server), Latest feed. Semua dari store bersama (useRsat) — data backend.
- */
+
 import { Spr, sa } from './sprites.tsx';
 import { Ic } from './icon.tsx';
 import { AgentFace } from './agentstore.tsx';
 import { eff, useRsat, who, type Ach } from './store.tsx';
-/** 5 hati: i<n terisi (danger), sisanya .off (locked). */
+
 function Hearts({ n }: { n: number }) {
   return (
     <span className="hearts" role="img" aria-label="Heartbeat">
@@ -18,7 +14,7 @@ function Hearts({ n }: { n: number }) {
   );
 }
 
-/** Wajah holder: logo agent custom bila ada (AgentFace), selain itu sprite. */
+
 function Face({ by, ag }: { by: string; ag?: string | null }) {
   return <AgentFace by={by} ag={ag} />;
 }

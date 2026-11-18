@@ -1,31 +1,4 @@
-/**
- * TAB_CAPTURE_SCRIPT — the in-page WebRTC peer (runs INSIDE the harness browser).
- *
- * Injected into every page via context addInitScript (manager.attachSignaling).
- * The ACTIVE tab captures ITSELF via getDisplayMedia and runs an
- * RTCPeerConnection in its own JS context; Node never touches media bytes —
- * it only relays SDP/ICE between this page and the panel over the panel WS
- * (webrtc.ts). GPU hardware encode happens inside Chromium itself.
- *
- * Signaling OUT (page → Node): window.__morikoRtcSignal(msg) — a Playwright
- *   exposeFunction binding installed by manager.attachSignaling.
- * Signaling IN (Node → page): page.evaluate('window.__morikoRtc.<fn>(...)')
- *   driven by webrtc.ts.
- *
- * API on window.__morikoRtc:
- *   start()          — acquire capture, build peer, emit {type:'offer', sdp}
- *   accept(sdp)      — apply the panel's answer
- *   addIce(candidate)— apply a remote ICE candidate
- *   stop()           — tear down peer + tracks (tab switch / last panel left)
- *   setStreamId(id)  — future extension hook (chromeMediaSourceId capture)
- *
- * Acquisition order (first success wins):
- *   1. streamId set via setStreamId (extension-provided source)
- *   2. getDisplayMedia preferCurrentTab (Chromium ≥ 107)
- *   3. getDisplayMedia plain
- *
- * NO CDP screencast exists in this transport — by design there is NO fallback.
- */
+
 export const TAB_CAPTURE_SCRIPT = String.raw`
 (() => {
   if (window !== window.top) return;
@@ -39,10 +12,60 @@ export const TAB_CAPTURE_SCRIPT = String.raw`
   let pc = null;
   let stream = null;
   let iceQueue = [];
-  let statsTimer = null;
-  let lastBytes = 0;
+  let desiredWidth = 0;
+  let desiredHeight = 0;
+
+  function setTargetSize(w, h) {
+    if (typeof w === 'number' && Number.isFinite(w) && w > 0) {
+      desiredWidth = Math.min(3840, Math.max(320, Math.round(w) & ~1));
+    }
+    if (typeof h === 'number' && Number.isFinite(h) && h > 0) {
+      desiredHeight = Math.min(2160, Math.max(240, Math.round(h) & ~1));
+    }
+  }
+
+  function currentTargetSize() {
+    const targetW = desiredWidth > 0 ? desiredWidth : Math.max(320, (window.innerWidth || 1280) & ~1);
+    const targetH = desiredHeight > 0 ? desiredHeight : Math.max(240, (window.innerHeight || 720) & ~1);
+    return { targetW, targetH };
+  }
+
+  async function applyTrackConstraints(track) {
+    if (!track || track.readyState !== 'live') return null;
+    track.contentHint = 'detail';
+    const { targetW, targetH } = currentTargetSize();
+    try {
+      await track.applyConstraints({
+        width: { ideal: targetW },
+        height: { ideal: targetH },
+        frameRate: { ideal: 30, max: 30 },
+      });
+    } catch {}
+    try {
+      return typeof track.getSettings === 'function' ? track.getSettings() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function getSettings() {
+    const track = stream && stream.getVideoTracks ? stream.getVideoTracks()[0] : null;
+    if (!track || track.readyState !== 'live' || typeof track.getSettings !== 'function') {
+      return { active: false, width: 0, height: 0 };
+    }
+    try {
+      const s = track.getSettings();
+      return { active: true, width: Number(s.width) || 0, height: Number(s.height) || 0 };
+    } catch {
+      return { active: false, width: 0, height: 0 };
+    }
+  }
 
   async function acquire() {
+    if (!navigator.mediaDevices) {
+      throw new Error('navigator.mediaDevices is unavailable in this page context.');
+    }
+    const { targetW, targetH } = currentTargetSize();
     const tries = [];
     if (window.__morikoRtcStreamId) {
       tries.push(() => navigator.mediaDevices.getUserMedia({
@@ -50,6 +73,8 @@ export const TAB_CAPTURE_SCRIPT = String.raw`
           mandatory: {
             chromeMediaSource: 'desktop',
             chromeMediaSourceId: window.__morikoRtcStreamId,
+            maxWidth: targetW,
+            maxHeight: targetH,
             maxFrameRate: 30,
           },
         },
@@ -57,14 +82,14 @@ export const TAB_CAPTURE_SCRIPT = String.raw`
       }));
     }
     tries.push(() => navigator.mediaDevices.getDisplayMedia({
-      // Capture follows the tab's native render resolution (no fixed downscale).
-      video: { frameRate: 30 },
+      // Capture follows the tab's active viewport dimensions at 30fps.
+      video: { width: { ideal: targetW }, height: { ideal: targetH }, frameRate: { ideal: 30, max: 30 } },
       preferCurrentTab: true,
       selfBrowserSurface: 'include',
       audio: false,
     }));
     tries.push(() => navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: 30 },
+      video: { width: { ideal: targetW }, height: { ideal: targetH }, frameRate: { ideal: 30, max: 30 } },
       audio: false,
     }));
     // Each attempt is hard-capped: getDisplayMedia can hang forever on a
@@ -78,7 +103,7 @@ export const TAB_CAPTURE_SCRIPT = String.raw`
       log('acquire attempt ' + (i + 1) + '/' + tries.length);
       const p = tries[i]();
       try {
-        const s = await cap(p, 6000);
+        const s = await cap(p, 1800);
         const track = s.getVideoTracks()[0];
         const settings = track ? track.getSettings() : {};
         const surface = settings.displaySurface || 'unknown';
@@ -103,19 +128,15 @@ export const TAB_CAPTURE_SCRIPT = String.raw`
     throw lastError || new Error('getDisplayMedia failed — no acceptable surface');
   }
 
-  async function start() {
+  async function start(w, h) {
+    setTargetSize(w, h);
     log('start() requested');
     await stop();
     signal({ type: 'acquiring' });
     const s = await acquire();
     stream = s;
     for (const track of stream.getVideoTracks()) {
-      track.contentHint = 'detail';
-      // Pin the encoder to the capture resolution — without this Chromium may
-      // downscale the frame under bandwidth pressure and text turns to mush.
-      try {
-        void track.applyConstraints({ degradationPreference: 'maintain-resolution' }).catch(() => {});
-      } catch {}
+      await applyTrackConstraints(track);
       track.addEventListener('ended', () => signal({ type: 'rtc-ended' }));
     }
     pc = new RTCPeerConnection({ iceServers: [] });
@@ -125,32 +146,20 @@ export const TAB_CAPTURE_SCRIPT = String.raw`
     pc.onconnectionstatechange = () => {
       signal({ type: 'state', state: pc ? pc.connectionState : 'closed' });
     };
-    for (const track of stream.getTracks()) pc.addTrack(track, stream);
+    for (const track of stream.getTracks()) {
+      const sender = pc.addTrack(track, stream);
+      try {
+        if (sender && typeof sender.getParameters === 'function' && typeof sender.setParameters === 'function') {
+          const params = sender.getParameters();
+          params.degradationPreference = 'maintain-resolution';
+          void sender.setParameters(params).catch(() => {});
+        }
+      } catch {}
+    }
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     log('offer created (' + pc.localDescription.sdp.length + ' bytes sdp) — sending to panel');
     signal({ type: 'offer', sdp: pc.localDescription.sdp });
-    if (statsTimer) clearInterval(statsTimer);
-    statsTimer = setInterval(async () => {
-      if (!pc || pc.connectionState !== 'connected') return;
-      try {
-        const stats = await pc.getStats();
-        let fps = null, kbps = null, width = null, height = null;
-        for (const entry of stats.values()) {
-          if (entry.type === 'outbound-rtp' && entry.kind === 'video') {
-            fps = typeof entry.framesPerSecond === 'number' ? Math.round(entry.framesPerSecond) : fps;
-            if (typeof entry.bytesSent === 'number') {
-              kbps = Math.round((entry.bytesSent - lastBytes) * 8 / 5000);
-              lastBytes = entry.bytesSent;
-            }
-          }
-          if (entry.type === 'track' && entry.frameWidth) {
-            width = entry.frameWidth; height = entry.frameHeight;
-          }
-        }
-        signal({ type: 'stats', fps, kbps, width, height });
-      } catch {}
-    }, 5000);
   }
 
   async function accept(sdp) {
@@ -168,8 +177,12 @@ export const TAB_CAPTURE_SCRIPT = String.raw`
   }
 
   async function stop() {
-    if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
-    if (pc) { try { pc.close(); } catch {} pc = null; }
+    if (pc) {
+      pc.onicecandidate = null;
+      pc.onconnectionstatechange = null;
+      try { pc.close(); } catch {}
+      pc = null;
+    }
     if (stream) {
       for (const track of stream.getTracks()) { try { track.stop(); } catch {} }
       stream = null;
@@ -177,6 +190,21 @@ export const TAB_CAPTURE_SCRIPT = String.raw`
     iceQueue = [];
   }
 
-  window.__morikoRtc = { start, accept, addIce, stop, setStreamId: (id) => { window.__morikoRtcStreamId = id; } };
+  async function resize(w, h) {
+    setTargetSize(w, h);
+    if (!stream) return { active: false, width: 0, height: 0 };
+    let lastSettings = null;
+    for (const track of stream.getVideoTracks()) {
+      const s = await applyTrackConstraints(track);
+      if (s) lastSettings = s;
+    }
+    const settings = lastSettings || getSettings();
+    const width = Number(settings && settings.width) || 0;
+    const height = Number(settings && settings.height) || 0;
+    log('resize applied: requested=' + desiredWidth + 'x' + desiredHeight + ' track=' + width + 'x' + height);
+    return { active: Boolean(stream), width, height };
+  }
+
+  window.__morikoRtc = { start, accept, addIce, stop, resize, getSettings, setStreamId: (id) => { window.__morikoRtcStreamId = id; } };
 })();
 `;

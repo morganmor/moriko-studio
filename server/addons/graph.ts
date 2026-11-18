@@ -1,8 +1,4 @@
-/**
- * Addon v2 dependency graph (A2) — topological activation order + semver-lite
- * range checks + conflict detection. Cycles and version mismatches mark the
- * addon Blocked with a reason ( surfaced in the Hub), never crash the host.
- */
+
 
 export interface GraphNode {
   id: string;
@@ -12,13 +8,13 @@ export interface GraphNode {
 }
 
 export interface GraphResult {
-  /** Activation order (dependencies first). Addons with problems are omitted. */
+  
   order: string[];
-  /** id → reason it cannot activate. */
+  
   blocked: Record<string, string>;
 }
 
-/** Compare two semvers: -1 | 0 | 1. Tolerates pre-release tails (ignored). */
+
 export function cmpVersion(a: string, b: string): number {
   const pa = a.split(/[.-]/).map((n) => Number.parseInt(n, 10) || 0);
   const pb = b.split(/[.-]/).map((n) => Number.parseInt(n, 10) || 0);
@@ -29,7 +25,7 @@ export function cmpVersion(a: string, b: string): number {
   return 0;
 }
 
-/** Minimal range check: ^, ~, >=, =, exact. Returns false for garbage. */
+
 export function rangeSatisfies(range: string, version: string): boolean {
   const r = range.trim();
   if (r === '*' || r === '') return true;
@@ -53,8 +49,7 @@ function minorBump(v: string): string {
   return `${a}.${Number.parseInt(b, 10) + 1}.0`;
 }
 
-/** Resolve activation order for the given addon set. `moriko-core` is the
- *  harness API itself — its version is supplied by the caller. */
+
 export function resolveGraph(nodes: GraphNode[], coreVersion = '2.0.0'): GraphResult {
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const blocked: Record<string, string> = {};

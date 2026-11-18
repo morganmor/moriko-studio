@@ -1,11 +1,4 @@
-/**
- * Moco Canvas — foreign HTML perception (P4, plan §8.4).
- *
- * IMPORT IS READ-ONLY: foreign code is perceived as a scene outline + measured
- * facts, never converted into an editable scene. Editing foreign code stays
- * with the regular tools / layout_edit. A pure regex/html parser with no DOM
- * and no browser; anything heavy belongs to measureHtml.
- */
+
 
 import { parseAt, formatAt, type Scene } from '../client/scene.ts';
 
@@ -14,13 +7,12 @@ interface ForeignNode {
   id: string | null;
   cls: string | null;
   text: string | null;
-  /** inline style declarations (top-level only) */
+  
   style: Record<string, string>;
   children: ForeignNode[];
 }
 
-/** Tiny tolerant parser: nested tag + inline-style extraction. No entities,
- *  no scripting, no self-closing edge cases beyond void tags. */
+
 function parseFragment(html: string): ForeignNode {
   const voidTags = new Set(['img', 'br', 'hr', 'input', 'meta', 'link', 'source']);
   const root: ForeignNode = { tag: '#root', id: null, cls: null, text: null, style: {}, children: [] };
@@ -48,7 +40,6 @@ function parseFragment(html: string): ForeignNode {
         }
       }
       top.children.push(node);
-      // text directly inside this node (up to its closing tag — approximation)
       if (!voidTags.has(node.tag)) stack.push(node);
     }
     if (after && !closing) {
@@ -61,7 +52,7 @@ function parseFragment(html: string): ForeignNode {
   return root;
 }
 
-/** Absolute px size → nearest grid cell band (perception hint, not intent). */
+
 function pxToCell(px: number, unit: number): number {
   return Math.max(1, Math.round(px / unit));
 }
@@ -72,8 +63,6 @@ function styleCell(style: Record<string, string>): { at: string | null; source: 
   const width = parseFloat(style.width ?? '');
   const height = parseFloat(style.height ?? '');
   if (!Number.isFinite(left) || !Number.isFinite(top)) return { at: null, source: 'grid' };
-  // Assume a 12-col lattice over ~1440px design width; row unit 44px (same
-  // estimate the intent geometry uses — documented, honest).
   const colW = 1440 / 12;
   const c1 = pxToCell(left, colW);
   const c2 = Number.isFinite(width) ? Math.min(12, c1 + pxToCell(width, colW) - 1) : c1;
@@ -96,10 +85,7 @@ function outlineNode(node: ForeignNode, depth: number, lines: string[], stats: {
   for (const child of node.children) outlineNode(child, depth + 1, lines, stats);
 }
 
-/**
- * Perceive foreign HTML against the CURRENT scene: returns a compact read-only
- * outline with cell-address GUESSES. Never mutates the scene.
- */
+
 export function importHtml(scene: Scene, html: string): string {
   const trimmed = html.slice(0, 200_000);
   const root = parseFragment(trimmed);

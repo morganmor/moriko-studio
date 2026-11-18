@@ -1,8 +1,4 @@
-/**
- * RSA/T i18n (P0a) — English + Bahasa Indonesia. The default is English and
- * the board stays behind a LangGate until the user explicitly picks
- * (settings.language), matching the privacy/localization rule.
- */
+
 
 const BUNDLES = {
   en: {
@@ -113,7 +109,7 @@ export function bundle(lang) {
   return BUNDLES[lang === 'id' ? 'id' : 'en'];
 }
 
-/** t(bundle, 'toast.claimed', { id: 'A-001', who: 'Agent A' }) */
+
 export function t(b, key, vars) {
   let out = key.split('.').reduce((node, part) => (node && node[part] !== undefined ? node[part] : null), b);
   if (typeof out !== 'string') return key;

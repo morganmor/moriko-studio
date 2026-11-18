@@ -1,12 +1,4 @@
-/**
- * DiffPanel — the 4th right-dock panel (Config | Tree | Addons | Diff).
- *
- * Clicking a turn's ±Lines badge opens this panel scoped to that turn. It
- * lists every file the agent created / edited / deleted (derived from the
- * tool segments' persisted diffs), shows the change SIDE-BY-SIDE (SplitDiff),
- * and lets the user restore ONE file to an earlier turn's state via the file
- * vault (DiffRestoreModal) — never a blind full-conversation rollback.
- */
+
 import { useEffect, useMemo, useState } from 'react';
 
 import { RotateCcw } from './icons';
@@ -28,12 +20,11 @@ export interface FileChangeRow {
   status: FileStatus;
   added: number;
   removed: number;
-  /** Full unified diff string of the segment (SplitDiff filters per path). */
+  
   diff?: string;
 }
 
-/** Thread numbering replica: user turns count up; the assistant turn that
- *  answers carries the same number (see Thread turnNumbers). */
+
 function turnNumberAt(turns: Turn[], index: number): number {
   let counter = 0;
   for (let i = 0; i <= index; i += 1) {
@@ -44,7 +35,7 @@ function turnNumberAt(turns: Turn[], index: number): number {
   return counter;
 }
 
-/** Derives the per-file change list from persisted tool segments. */
+
 export function collectFileChanges(turns: Turn[]): FileChangeRow[] {
   const rows: FileChangeRow[] = [];
   turns.forEach((turn, index) => {

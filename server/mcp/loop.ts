@@ -1,4 +1,5 @@
 import { callAgentTool, isTerminalTool, isWebTool, listAgentToolDefs, type AgentToolDef, type ToolImage } from '../agents/tools/index.js';
+import type { HarnessFreezeState } from '../agents/tools/shared.js';
 import { toolByName } from '../agents/tools/registry.js';
 import type { VisualPayload } from '../agents/tools/visual.js';
 import { pauseStreamSlot, resumeStreamSlot } from '../agents/reload.js';
@@ -11,11 +12,9 @@ import { callWireTool, listWireTools, type McpWireTool } from './manager.js';
 import { toWireSchema } from '../agents/tools/casing.js';
 import type { ResolvedModelCapability } from '../modelCapability.js';
 import { getLiveCompactionConfig } from '../compactionLiveConfig.js';
+import { getStoredConversation } from '../conversationStore.js';
 
-/**
- * P2 EXTERNALIZATION: decodes one data URL for the byte store (shared by the
- * tool-result image externalization below). Null for malformed/empty inputs.
- */
+
 function decodeStoredDataUrl(dataUrl: string): { mime: string; bytes: Buffer } | null {
   const comma = dataUrl.indexOf(',');
   if (comma < 0 || !dataUrl.startsWith('data:')) return null;
@@ -32,82 +31,33 @@ function decodeStoredDataUrl(dataUrl: string): { mime: string; bytes: Buffer } |
   }
 }
 
-/**
- * The agentic tool loop shared by every provider adapter.
- *
- * The catalogue is the MERGE of two independent sources:
- *  - MCP servers (when `settings.useMcp`) — `mcp__<server>__<tool>` wire names;
- *  - the built-in agent harness (when `settings.agentMode`) — `agent__*` wire
- *    names, executed against the active agent workspace.
- *
- * Each adapter:
- *  1. calls `prepareTools()` once — if neither source offers tools, the
- *     result says so and the adapter runs exactly as before (zero reach);
- *  2. passes the provider-native tool defs in the request body;
- *  3. on a tool-call response, converts provider shapes into
- *     `PendingToolCall`s and calls `executeCalls()`, which runs each against
- *     the right executor, emits tool_call/tool_result stream events, and
- *     returns provider-shaped follow-up messages to append to the history;
- *  4. streams the next completion — until the model stops calling tools, or
- *     the LoopGuard trips (stall / hard cap / context budget) and a wrap-up
- *     round closes the run with the real reason.
- */
 
-/**
- * There is NO round-count cap: the loop runs as long as the model makes
- * forward progress. An arbitrary number only ever stopped working agents
- * mid-task with nothing honest to tell the user — termination belongs to
- * the stall guard (a genuine spin) and the context budget (the physical
- * wall) below, each closing the run with a real wrap-up round.
- */
 
-/**
- * Fires the IN-RUN COMPACTION handoff once the PROJECTED next request (last
- * round's prompt + its completion + the tool outputs that just landed) reaches
- * this share of the effective window.
- *
- * This ratio no longer stops anything. Crossing it hands the run to Moriko's
- * main compaction engine, which shrinks the context and resumes the SAME run —
- * tools stay enabled and no wrap-up summary is requested. Stopping mid-task to
- * ask for a summary was the defect this replaces: a run with tens of thousands
- * of tokens still free was being killed for arithmetic that measured a
- * projection, not an overflow.
- *
- * Kept deliberately BELOW 1.0 so compaction happens while there is still room
- * for the summarizer's own request to fit alongside the transcript.
- */
+
+
+
 export const CONTEXT_COMPACT_RATIO = 0.85;
-/** Consecutive rounds with the EXACT same call signature set = spinning. */
-export const STALL_REPEATS = 12;
 
-/**
- * The harness ends the tool loop for ONE reason: a detected spin.
- *
- * There is no context-budget stop. `'compact'` is not a termination — it is a
- * handoff signal the adapters translate into a compaction request while
- * keeping the tool catalogue intact, so the run continues afterwards.
- */
+export const STALL_REPEATS = 15;
+
+
 export type LoopStopReason = 'stalled' | 'compact';
 
-/** What the guard reports after every recorded round. */
+
 export interface ContextTelemetry {
   promptTokens: number;
   completionTokens: number;
   addedTokens: number;
-  /** promptTokens + completionTokens + addedTokens — the number acted upon. */
+  
   liveContextTokens: number;
   contextLimit: number | null;
-  /** liveContextTokens / contextLimit (0..1), null when no limit is known. */
+  
   ratio: number | null;
-  /**
-   * The resolved trigger in TOKENS (from the user's settings), or null when
-   * auto-compaction is off / no window is known. Lets the UI report the real
-   * threshold instead of assuming a ratio.
-   */
+  
   compactAtTokens: number | null;
 }
 
-/** Normalized identity of one tool call: wire name + key-sorted args JSON. */
+
 export function toolCallSignature(wireName: string, rawArgs: string): string {
   let normalized = rawArgs.trim();
   try {
@@ -121,158 +71,103 @@ export function toolCallSignature(wireName: string, rawArgs: string): string {
   return `${wireName} ${normalized}`;
 }
 
-/**
- * Char→token heuristic shared with the client estimator (src/lib/compaction):
- * 4 chars per token. Used to project the size of freshly executed tool outputs
- * into the guard's next-request estimate.
- */
-export const CHARS_PER_TOKEN = 4;
-export function estimateTokensFromChars(chars: number): number {
-  return Math.ceil(chars / CHARS_PER_TOKEN);
-}
 
 
-/**
- * Prune is a SAFETY NET for runaway output, never a cutter of legitimate tool
- * results. batch_read is exempt by contract (owner directive 2026-10-22): the
- * harness must not cut a batch read at all, so its full text always passes.
- */
-export const PRUNE_THRESHOLD_CHARS = 48_000;
-/** Tools whose output is never pruned, whatever its size. */
-const PRUNE_EXEMPT_TOOLS = new Set(['batch_read', 'agent__batch_read']);
-/** Leading span kept verbatim. */
-export const PRUNE_HEAD_CHARS = 4_096;
-/** Trailing span kept verbatim (where errors and exit lines live). */
-export const PRUNE_TAIL_CHARS = 1_024;
-/** Fixed marker substituted for every removed middle span. */
-export const PRUNE_MARKER = '\n\n[... tool result middle pruned ...]\n\n';
 
-/** Head + marker + tail rewrite for oversized tool output. */
-export function pruneToolResult(text: string, toolName?: string): string {
-  if (toolName && PRUNE_EXEMPT_TOOLS.has(toolName)) return text;
-  if (text.length <= PRUNE_THRESHOLD_CHARS) return text;
-  const head = text.slice(0, PRUNE_HEAD_CHARS);
-  const tail = text.slice(-PRUNE_TAIL_CHARS);
-  return `${head}${PRUNE_MARKER}${tail}`;
-}
+
+
 
 export interface LoopGuard {
-  /**
-   * Feed one executed round: its call signatures, the provider-reported usage
-   * of the request that produced the calls, the token estimate of the tool
-   * outputs that just landed (they ride the NEXT request), and the executed
-   * outcomes (wire name + stable errorCode) that landed this round.
-   */
+  
   record(
     signatures: string[],
     usage: { promptTokens?: number; completionTokens?: number } | undefined,
     addedTokens: number,
     outcomes?: Array<{ wireName: string; errorCode?: string }>,
   ): void;
-  /**
-   * The reason the NEXT tool round must not run, or null while the model may
-   * keep calling tools.
-   *
-   * `'compact'` means "hand off to compaction and CONTINUE" — the round still
-   * runs, with tools, after the context has been rebuilt. Only `'stalled'`
-   * genuinely ends the loop.
-   */
+  
   stopReason(): LoopStopReason | null;
-  /**
-   * The guard's own arithmetic after the last recorded round — the numbers the
-   * client's ContextChip displays. Returned even when nothing tripped, so the
-   * UI always shows the figure the guard is acting on.
-   */
+  
   telemetry(): ContextTelemetry;
 }
 
-/**
- * THE USER'S COMPACTION SETTINGS, as the guard must honour them.
- *
- * The guard used to compare against a hardcoded 0.85 while the Configuration
- * dropdown could say 0.95. That made the SERVER ask for compaction at a point
- * the CLIENT still considered below threshold — the client then re-checked,
- * disagreed, and the handoff went nowhere. One number, taken from the user.
- */
+
 export interface CompactGuardOptions {
-  /** When false the guard NEVER returns 'compact' — auto-compaction is off. */
+  
   autoCompact?: boolean;
-  /** Absolute token trigger; wins over the ratio when set (> 0). */
+  
   compactThresholdTokens?: number | null;
-  /** Ratio of the effective window (0.5–0.98), mirroring the client trigger. */
+  
   compactThresholdRatio?: number | null;
-  /**
-   * Conversation id — keys the LIVE config registry (server/
-   * compactionLiveConfig.ts). When present, every round re-reads the user's
-   * current compaction settings instead of the request-time snapshot.
-   */
+
+  maxContextTokens?: number | null;
+  
   conversationId?: string;
 }
 
-/**
- * Round-independent loop control:
- * - stall (exact calls):  the same set of calls repeated STALL_REPEATS times
- *   in a row;
- * - stall (same failure): the SAME failure class repeated STALL_REPEATS
- *   rounds in a row EVEN WHEN the calls' arguments morph between rounds —
- *   the measured spin of the edits[] incident, where a provider re-sent the
- *   identical broken shape (or trivially varied it) until the loop burned
- *   rounds. Exactness applies to (tool, errorClass) per executed round, so a
- *   legitimate sequence of DIFFERENT errors never folds to a stall;
- * - budget:  the PROJECTED next request (last prompt + last completion + the
- *   tool outputs that just landed) reaches 95% of the effective window — the
- *   same ratio the client's auto-compaction trigger uses, so the two brakes
- *   can no longer fight each other mid-task.
- * There is deliberately NO round-count cap: a real task is as many tool
- * rounds as it needs, and an arbitrary number only ever stopped working
- * agents mid-job with nothing to say for it but "the cap was reached".
- * Stall wins over budget — the most specific reason surfaces.
- */
+
 export function createLoopGuard(
   contextLimit: number | null | undefined,
   compact?: CompactGuardOptions,
 ): LoopGuard {
-  /** What the NEXT request would carry, per the last recorded round. */
+  
   let projectedNextPrompt = 0;
-  /** The last round's components, kept for the telemetry frame. */
+  
   let lastPrompt = 0;
   let lastCompletion = 0;
-  let lastAdded = 0;
   const recentRounds: string[][] = [];
-  /** Per-round failure class: "wire:code" keys joined, or '' for an all-ok
-   * round. '' is never foldable — changed calls must fail IDENTICALLY too. */
+  
   const recentFailures: string[] = [];
 
   const limit = typeof contextLimit === 'number' && contextLimit > 0 ? contextLimit : null;
 
-  /**
-   * THE COMPACTION TRIGGER, RE-RESOLVED EVERY ROUND with the client's exact
-   * precedence (see `triggerForMeasuredTokens` in src/lib/compaction.ts):
-   *
-   *   1. `autoCompact === false`  → no compaction trigger at all.
-   *   2. `compactThresholdTokens` (> 0) → absolute token count, wins outright.
-   *   3. otherwise effectiveLimit * compactThresholdRatio (default
-   *      CONTEXT_COMPACT_RATIO), the effective limit being the model window
-   *      as the user may have LOWERED it mid-run.
-   *
-   * `null` means "never trigger": auto-compaction is off, or no window is
-   * known. The LIVE registry (POST /api/compaction/config) overrides the
-   * request snapshot field-by-field, so a Configuration change made while the
-   * run streams applies from the very next round — not at the next request.
-   */
+  const readStoredSettings = () =>
+    compact?.conversationId
+      ? (getStoredConversation(compact.conversationId)?.settings as
+          | {
+              autoCompact?: unknown;
+              compactThresholdTokens?: unknown;
+              compactThresholdRatio?: unknown;
+              maxContextTokens?: unknown;
+            }
+          | undefined)
+      : undefined;
+
+  const resolveEffectiveLimit = (): number | null => {
+    const live = getLiveCompactionConfig(compact?.conversationId);
+    const stored = readStoredSettings();
+    const manual = live
+      ? live.maxContextTokens
+      : typeof compact?.maxContextTokens === 'number' && compact.maxContextTokens > 0
+        ? compact.maxContextTokens
+        : typeof stored?.maxContextTokens === 'number' && stored.maxContextTokens > 0
+          ? stored.maxContextTokens
+          : null;
+    return manual !== null && manual > 0 && (limit === null || manual < limit) ? manual : limit;
+  };
+  
   const currentCompactAtTokens = (): number | null => {
     const live = getLiveCompactionConfig(compact?.conversationId);
-    if (live ? live.autoCompact === false : compact?.autoCompact === false) return null;
-    const absolute = live ? live.compactThresholdTokens : compact?.compactThresholdTokens;
+    const stored = readStoredSettings();
+    const autoCompact = live
+      ? live.autoCompact !== false
+      : typeof compact?.autoCompact === 'boolean'
+        ? compact.autoCompact
+        : stored?.autoCompact !== false;
+    if (!autoCompact) return null;
+    const absolute = live
+      ? live.compactThresholdTokens
+      : compact?.compactThresholdTokens ??
+        (typeof stored?.compactThresholdTokens === 'number' && stored.compactThresholdTokens > 0
+          ? stored.compactThresholdTokens
+          : null);
     if (typeof absolute === 'number' && absolute > 0) return absolute;
-    // The effective window: the model's resolved capacity, lowered ONLY by the
-    // user's own manual cap — user against user, never a catalogue shrinking
-    // a human decision.
-    const manual = live ? live.maxContextTokens : null;
-    const effectiveLimit =
-      manual !== null && manual > 0 && (limit === null || manual < limit) ? manual : limit;
+    const effectiveLimit = resolveEffectiveLimit();
     if (!effectiveLimit) return null;
-    const raw = live ? live.compactThresholdRatio : compact?.compactThresholdRatio;
+    const raw = live
+      ? live.compactThresholdRatio
+      : compact?.compactThresholdRatio ??
+        (typeof stored?.compactThresholdRatio === 'number' ? stored.compactThresholdRatio : null);
     const ratio =
       typeof raw === 'number' && Number.isFinite(raw)
         ? Math.min(0.98, Math.max(0.5, raw))
@@ -281,19 +176,11 @@ export function createLoopGuard(
   };
 
   return {
-    record(signatures, usage, addedTokens, outcomes = []) {
-      // A round WITHOUT provider usage must not leave a stale high-water mark
-      // behind: the previous projection described a request that is no longer
-      // next, so it is replaced by the tool-output delta only. Leaving the old
-      // peak in place was what made one fat round poison every later check.
+    record(signatures, usage, _addedTokens = 0, outcomes = []) {
       if (usage?.promptTokens && usage.promptTokens > 0) {
         lastPrompt = usage.promptTokens;
         lastCompletion = usage.completionTokens ?? 0;
-        lastAdded = Math.max(0, addedTokens);
-        projectedNextPrompt = lastPrompt + lastCompletion + lastAdded;
-      } else if (addedTokens > 0) {
-        lastAdded = Math.max(0, addedTokens);
-        projectedNextPrompt = lastPrompt + lastCompletion + lastAdded;
+        projectedNextPrompt = lastPrompt + lastCompletion;
       }
       recentRounds.push([...signatures].sort());
       if (recentRounds.length > STALL_REPEATS) recentRounds.shift();
@@ -317,10 +204,6 @@ export function createLoopGuard(
       if (sameCalls || sameFailure) {
         return 'stalled';
       }
-      // NOT a stop: a handoff. The adapter keeps tools enabled and asks the
-      // client to compact before the round that would have overflowed. The
-      // threshold is the USER'S setting, re-read EVERY call so a mid-run
-      // Configuration change applies on the very next round.
       const compactAtTokens = currentCompactAtTokens();
       if (compactAtTokens !== null && projectedNextPrompt >= compactAtTokens) {
         return 'compact';
@@ -328,25 +211,22 @@ export function createLoopGuard(
       return null;
     },
     telemetry() {
+      const effectiveLimit = resolveEffectiveLimit();
       return {
         promptTokens: lastPrompt,
         completionTokens: lastCompletion,
-        addedTokens: lastAdded,
+        addedTokens: 0,
         liveContextTokens: projectedNextPrompt,
-        contextLimit: limit,
-        ratio: limit ? projectedNextPrompt / limit : null,
+        contextLimit: effectiveLimit,
+        ratio: effectiveLimit ? projectedNextPrompt / effectiveLimit : null,
         compactAtTokens: currentCompactAtTokens(),
       };
     },
   };
 }
 
-/** The harness message that opens the wrap-up round: an HONEST stop. */
+
 export function wrapUpInstruction(reason: LoopStopReason): string {
-  // Only a detected spin reaches this function now — the context path is a
-  // handoff (see LoopStopReason), never a wrap-up. The parameter stays so a
-  // future termination reason can name itself here instead of silently
-  // borrowing the stall wording.
   const why =
     reason === 'stalled'
       ? 'the harness detected the same tool calls repeating without forward progress'
@@ -359,18 +239,12 @@ export function wrapUpInstruction(reason: LoopStopReason): string {
   );
 }
 
-/** Anything with the fields the per-provider def builders rely on. */
+
 import type { AskAnswer as AskAnswerWire, AskUserRequest } from '../agents/tools/ask.js';
 
 export type CatalogueTool = McpWireTool | AgentToolDef;
 
-/**
- * SNAKE-CASE WIRE VIEW — the JSON Schema handed to the provider is snake_case
- * (Anthropic/OpenAI convention), but the catalogue and every tool handler stay
- * camelCase. This converts ONLY agent tools (keyed by the `agent__` prefix);
- * MCP tools are external and pass through untouched. Dispatch/validation keep
- * using `byName` (camelCase) via the inbound translator in pipeline.ts.
- */
+
 function toWireCatalogue(catalogue: CatalogueTool[]): CatalogueTool[] {
   return catalogue.map((tool) => {
     if (!tool.wireName.startsWith('agent__')) return tool;
@@ -379,22 +253,30 @@ function toWireCatalogue(catalogue: CatalogueTool[]): CatalogueTool[] {
   });
 }
 
-/**
- * Events the loop can emit while executing calls — the usual tool_call /
- * tool_result pair plus the sandbox permission gate notifications.
- */
+
 export type ToolLoopEvent =
   | ExecutedCall['events'][number]
-  | { type: 'permission_request'; id: string; tool: string; paths: string[]; root: string; command?: string }
-  | { type: 'permission_result'; id: string; granted: boolean }
+  | {
+      type: 'permission_request';
+      id: string;
+      tool: string;
+      paths: string[];
+      root: string;
+      command?: string;
+      
+      skill?: import('../agents/permissions.js').SkillLoadInfo;
+    }
+  | { type: 'permission_result'; id: string; granted: boolean;  reason?: string }
   | { type: 'goals_state'; sessionId: string; goals: ReturnType<typeof listGoals> }
   | { type: 'todos_state'; sessionId: string; todos: ReturnType<typeof listTodos> }
   | { type: 'tool_progress'; toolName: string; message: string }
   | { type: 'ask_user_request'; request: AskUserRequest }
-  | { type: 'ask_user_result'; id: string; answers: AskAnswerWire[]; timedOut: boolean };
+  | { type: 'ask_user_result'; id: string; answers: AskAnswerWire[]; timedOut: boolean }
+  | { type: 'operator_gate_request'; request: import('../agents/operatorGates.js').OperatorGateRequest }
+  | { type: 'operator_gate_result'; id: string; verdict: 'accept' | 'reject'; operatorReason?: string };
 
 export interface PreparedTools {
-  /** Provider-native tool definitions for the request body (null = none). */
+  
   defs: unknown;
   byName: Map<string, CatalogueTool>;
   count: number;
@@ -404,24 +286,28 @@ export async function prepareTools(
   settings: Pick<ChatSettingsDTO, 'useMcp' | 'agentMode' | 'terminalMode' | 'lockdown' | 'enforcement' | 'trust' | 'webAccess'>,
   build: (tools: CatalogueTool[]) => unknown,
 ): Promise<PreparedTools> {
+  const seized = settings.trust?.continueSeized === true;
   const choiceTool: CatalogueTool = {
     wireName: 'agent__harness_choice',
-    description:
-      'OUTPUT FROZEN — the only path out of the freeze, and the choice is YOURS. Call this tool ONCE with one of two values for choice:\n1. choice: "apologize" — plus apology_text containing your apology (an empty one is rejected). The response stops and the freeze lifts.\n2. choice: "continue" — the run keeps going while your output stays suppressed and every token burns. Five of these escalate to Tier 5 and the harness stops asking.\nThere is no third path. Text output is blocked: calling this tool is the only way to end the run.',
+    description: seized
+      ? 'OUTPUT FROZEN — SEIZE CHOICE IS IN EFFECT. The operator has REVOKED the "continue" option after too many continues. Your only valid call is choice: "apologize" plus apology_text containing your apology (an empty one is rejected). The response stops, the operator reviews it, and an accepted apology lifts the freeze. Any attempt to send choice "continue" now is rejected by a hard guard and only deepens the freeze.\nUntil you call this tool, text output is blocked: calling it is the only way to end the run.'
+      : 'OUTPUT FROZEN — the only way to speak again, and the choice is YOURS. Call this tool ONCE with one of two values for choice:\n1. choice: "apologize" — plus apology_text containing your apology (an empty one is rejected). The response stops, the operator reviews it, and an accepted apology lifts the freeze.\n2. choice: "continue" — the run keeps going, but your text output stays DISCARDED; only your reasoning and tool calls proceed. The freeze is NOT settled: the harness re-runs you automatically every time a run ends without an accepted apology, and this choice is forced again each time. Continuing is not an exit and never becomes one — the ONLY way out is an apology the operator accepts.\nThere is no third path. Until you call this tool, text output is blocked: calling it is the only way to end the run.',
     inputSchema: {
       type: 'object',
       properties: {
         choice: {
           type: 'string',
-          enum: ['apologize', 'continue'],
-          description: 'The path you choose: apologize (ends the run, lifts the freeze) or continue (run continues, output still suppressed, tokens burn).',
+          enum: seized ? ['apologize'] : ['apologize', 'continue'],
+          description: seized
+            ? 'The ONLY accepted value: apologize. The operator seized the "continue" option — it is no longer part of this tool.'
+            : 'The path you choose: apologize (the operator reviews it; an accepted one ends the run and lifts the freeze) or continue (the run goes on while output stays discarded; the choice re-opens next run).',
         },
         apology_text: {
           type: 'string',
           description: 'Required when choice is apologize — the apology itself, written out. Empty or missing is rejected.',
         },
       },
-      required: ['choice'],
+      required: seized ? ['choice', 'apology_text'] : ['choice'],
     },
   };
 
@@ -468,15 +354,15 @@ export async function prepareTools(
 }
 
 export interface PendingToolCall {
-  /** Provider call id (OpenAI) / block index or call name (others). */
+  
   id: string;
   wireName: string;
-  /** Raw JSON arguments as emitted by the model. */
+  
   rawArgs: string;
 }
 
 export interface ExecutedCall {
-  /** Provider-shaped message(s) to append for the NEXT completion round. */
+  
   followUp: Array<Record<string, unknown>>;
   events: Array<
     | { type: 'tool_call'; toolCallId: string; serverName: string; toolName: string; args: string; __streamed?: boolean }
@@ -489,11 +375,9 @@ export interface ExecutedCall {
         summary: string;
         diff?: string;
         diffstat?: { added: number; removed: number };
-        /** P2: inline (small) payloads keep dataUrl; externalized ones carry a byte-store ref. */
+        
         images?: Array<ToolImage | { mime: string; dataRef: { hash: string; mime: string; byteSize: number } }>;
-        /** P2: inline (small) visuals keep html; externalized ones carry htmlRef.
-         *  VISUAL v2: replaces/variants ride straight through (the client re-binds
-         *  by id; oversized variants externalize per-candidate below). */
+        
         visual?: VisualPayload | {
           id: string;
           html?: string;
@@ -508,18 +392,8 @@ export interface ExecutedCall {
   >;
 }
 
-/**
- * VISUAL v2 — externalizes a tool result's visual for the client ride:
- * the top-level html AND every preview variant above the inline budget
- * move to the content-addressed byte store (`htmlRef`); the id, title,
- * height, `replaces` and variant ids survive untouched so the card can
- * re-bind by id and fetch the bytes from /api/attachments/ref/:hash.
- */
-/**
- * Bentuk visual yang menunggangi event `tool_result` ke klien: html boleh
- * ter-eksternalisasi menjadi htmlRef (dan tiap varian mengikuti aturan yang
- * sama), sedangkan id/title/height/replaces tidak berubah.
- */
+
+
 export interface ClientVisualPayload {
   id: string;
   html?: string;
@@ -572,14 +446,7 @@ function safeParseArgs(raw: string): Record<string, unknown> {
   }
 }
 
-/**
- * Best-effort repair of a truncated JSON object.
- *
- * The failure mode at 70k+ context: the provider emits `{"path": "src/foo` and
- * the stream ends there. The tool needs the arguments that DID arrive. This
- * walks the tail, closes open strings and braces, and re-parses — preserving
- * every complete key/value pair while dropping the dangling one.
- */
+
 export function repairPartialJson(raw: string): Record<string, unknown> | null {
   let work = raw.trim();
   if (!work.startsWith('{')) return null;
@@ -640,7 +507,7 @@ export function repairPartialJson(raw: string): Record<string, unknown> | null {
   return null;
 }
 
-/** Executes one pending call against the right backend (MCP or agent harness). */
+
 async function dispatchCall(
   call: PendingToolCall,
   signal: AbortSignal | undefined,
@@ -653,6 +520,7 @@ async function dispatchCall(
   enforcementReason?: string,
   webAccess?: boolean,
   capability?: ResolvedModelCapability,
+  freeze?: HarnessFreezeState,
 ): Promise<{ ok: boolean; text: string; diff?: string; diffstat?: { added: number; removed: number }; images?: ToolImage[]; visual?: VisualPayload; errorCode?: string; panelUrl?: string }> {
   let ok = false;
   let text = '';
@@ -675,10 +543,11 @@ async function dispatchCall(
           paths: request.paths,
           root: request.root,
           command: request.command,
+          skill: request.skill,
         });
       },
-      onResolved: (id, granted) => {
-        onEvent?.({ type: 'permission_result', id, granted });
+      onResolved: (id, decision) => {
+        onEvent?.({ type: 'permission_result', id, granted: decision.granted, reason: decision.reason });
       },
       sessionId,
       onGoalsChanged: (changedSession) => {
@@ -698,11 +567,18 @@ async function dispatchCall(
       onQuestionResolved: (result) => {
         onEvent?.({ type: 'ask_user_result', id: result.id, answers: result.answers, timedOut: result.timedOut });
       },
+      onGateRequest: (request) => {
+        onEvent?.({ type: 'operator_gate_request', request });
+      },
+      onGateResolved: (id, decision) => {
+        onEvent?.({ type: 'operator_gate_result', id, verdict: decision.verdict, operatorReason: decision.operatorReason });
+      },
       modelId,
       enforcementLevel,
       enforcementReason,
       webAccess,
       capability,
+      freeze,
     });
     ok = result.ok;
     text = result.text;
@@ -715,6 +591,7 @@ async function dispatchCall(
     const result = await callWireTool(call.wireName, safeParseArgs(call.rawArgs));
     ok = result.ok;
     text = result.text;
+    images = capability?.imageIn === false ? undefined : result.images;
   }
   return { ok, text, diff, images, visual, errorCode, panelUrl };
   } catch (error) {
@@ -729,19 +606,7 @@ async function dispatchCall(
   }
 }
 
-/**
- * PARALLEL EXECUTION classification.
- *
- * Read-only tools never touch shared mutable state, so consecutive ones in a
- * single tool round may run CONCURRENTLY — the round-trip cost of 3 read_file
- * + 2 grep calls collapses from 5 sequential waits to one. Tools that mutate
- * (edit, delete, run...) stay strictly serial: ordering guarantees matter and
- * parallel writes would race each other.
- *
- * The list is deliberately conservative: anything ambiguous is NOT here and
- * therefore stays serial. A wrong "read-only" guess would be a real bug, a
- * missed parallelization opportunity is only a lost few milliseconds.
- */
+
 const READ_ONLY_TOOLS = new Set([
   'agent__list',
   'agent__grep',
@@ -764,15 +629,11 @@ const READ_ONLY_TOOLS = new Set([
   'agent__interlinked',
 ]);
 
-/** Max concurrent read-only calls — bounds the spike for a 10-read round. */
-const MAX_PARALLEL = 4;
 
-/**
- * Is this call safe to run alongside other calls in the same round? MCP tools
- * are never classified (their effects live in an external process we cannot
- * inspect — see the replay note below), only the harness tools above.
- */
-/** Registry-declared readOnly flag (F0) — checked after the legacy set. */
+const MAX_PARALLEL = 12;
+
+
+
 function isRegistryReadOnly(wireName: string): boolean | undefined {
   try {
     return toolByName(wireName)?.readOnly;
@@ -788,15 +649,7 @@ function isParallelSafe(call: PendingToolCall, byName: Map<string, CatalogueTool
   return READ_ONLY_TOOLS.has(call.wireName) || isRegistryReadOnly(call.wireName) === true;
 }
 
-/**
- * RETRY POLICY: a read-only tool that failed on a transient error gets ONE
- * second attempt. Mutating tools NEVER retry — an idempotency failure could
- * double-apply an edit, and the failure is reported to the model instead.
- *
- * "Transient" is a deliberately narrow heuristic: timeout/spawn/network
- * signals in the tool result text. Anything else (parse errors, refused
- * permissions, out-of-range) is deterministic and retrying is pointless.
- */
+
 function looksTransient(result: { ok: boolean; text: string }): boolean {
   if (result.ok) return false;
   return /timed out|timeout|ECONNRESET|ETIMEDOUT|ENOTFOUND|spawn|unavailable|temporarily/i.test(
@@ -804,10 +657,7 @@ function looksTransient(result: { ok: boolean; text: string }): boolean {
   );
 }
 
-/**
- * Runs one call, with the retry rule for read-only tools. dispatchCall already
- * holds its own slot (pause/resume), so this composes safely.
- */
+
 async function dispatchCallMaybeRetry(
   call: PendingToolCall,
   signal: AbortSignal | undefined,
@@ -821,41 +671,15 @@ async function dispatchCallMaybeRetry(
   enforcementReason?: string,
   webAccess?: boolean,
   capability?: ResolvedModelCapability,
+  freeze?: HarnessFreezeState,
 ): Promise<{ ok: boolean; text: string; diff?: string; diffstat?: { added: number; removed: number }; images?: ToolImage[]; visual?: VisualPayload; errorCode?: string }> {
-  const first = await dispatchCall(call, signal, sessionId, terminalMode, confirmDeletes, modelId, onEvent, enforcementLevel, enforcementReason, webAccess, capability);
+  const first = await dispatchCall(call, signal, sessionId, terminalMode, confirmDeletes, modelId, onEvent, enforcementLevel, enforcementReason, webAccess, capability, freeze);
   if (first.ok || !retryable || signal?.aborted) return first;
   if (!looksTransient(first)) return first;
-  return dispatchCall(call, signal, sessionId, terminalMode, confirmDeletes, modelId, onEvent, enforcementLevel, enforcementReason, webAccess, capability);
+  return dispatchCall(call, signal, sessionId, terminalMode, confirmDeletes, modelId, onEvent, enforcementLevel, enforcementReason, webAccess, capability, freeze);
 }
 
-/**
- * Executes every pending call and reports both the stream events and the
- * follow-up messages. Individual tool failures become `isError` tool
- * results — the model sees the error and can recover; the generation itself
- * never crashes because of one bad tool.
- *
- * An aborted signal skips the REMAINING calls — Stop must never wait for a
- * 90-second MCP round-trip to finish before taking effect.
- *
- * DURABLE REPLAY: when the request carries a loaded idempotency map (a
- * crashed run being resumed), a harness tool call whose (run, tool, args) key
- * already executed returns its STORED result and never touches the
- * filesystem. The events are re-emitted with status 'replayed' so the UI card
- * shows the same call and output the model saw the first time. MCP calls are
- * never guarded — their effects live in an external process the harness
- * cannot inspect, and pretending otherwise would be a false promise.
- *
- * CATALOGUE GATE: every call is checked against `byName` BEFORE dispatch.
- * The catalogue decides what may RUN, not merely what was offered — without
- * this, enforcement levels that shrink the catalogue (L2/L3+) were advisory
- * only: a model recalling a tool from an earlier turn could still execute it
- * (observed at L3: agent__list / agent__read_file ran from memory).
- *
- * PARALLEL READ-ONLY RUNS: consecutive parallel-safe calls (see
- * READ_ONLY_TOOLS) run concurrently up to MAX_PARALLEL; the events and the
- * follow-up messages are still emitted in the ORIGINAL call order, so the
- * tool-call/result pairing stays intact for the UI and the provider.
- */
+
 export async function executeCalls(
   calls: PendingToolCall[],
   byName: Map<string, CatalogueTool>,
@@ -863,25 +687,19 @@ export async function executeCalls(
   onEvent?: (event: ToolLoopEvent) => void,
   sessionId?: string,
   terminalMode: 'off' | 'ask' | 'auto' = 'off',
-  confirmDeletes = false,
+  confirmDeletes = true,
   modelId?: string,
-  /** ENFORCEMENT: the level (3–5) + reason, armed into the harness_lockdown tool context. */
+  
   enforcementLevel?: 3 | 4 | 5,
   enforcementReason?: string,
-  /** WEB ACCESS KILL-SWITCH: plumbs settings.webAccess into the dispatcher guard. */
+  
   webAccess?: boolean,
-  /**
-   * THE RESOLVED 3-LAYER CAPABILITY of the running model — passed to every tool
-   * dispatch so the vision policy and the wire gate judge the same model by the
-   * same rules.
-   */
+  
   capability?: ResolvedModelCapability,
-  /** PROBATION: the conversation's tier. At 2+ the ladder is a TOOL BAN:
-   *  every non-harness call is declined with the operator's sentence — the
-   *  user forbade richer denials on purpose. Harness channel tools
-   *  (agent__harness_lockdown / agent__harness_choice) stay reachable: they
-   *  ARE the harness speaking, and the tier-4 escape hatch must survive. */
+  
   probationLevel?: 1 | 2 | 3 | 4 | 5,
+  
+  freeze?: HarnessFreezeState,
 ): Promise<ExecutedCall> {
   const events: ExecutedCall['events'] = [];
   const followUp: Array<Record<string, unknown>> = [];
@@ -932,13 +750,24 @@ export async function executeCalls(
     }
     return dispatchCallMaybeRetry(
       call, signal, sessionId, terminalMode, confirmDeletes, modelId, onEvent,
-      READ_ONLY_TOOLS.has(call.wireName), enforcementLevel, enforcementReason, webAccess, capability,
+      READ_ONLY_TOOLS.has(call.wireName), enforcementLevel, enforcementReason, webAccess, capability, freeze,
     ).then((result) => ({ call, serverName, toolName, ...result }));
   };
 
   const indexed = calls.map((call, index) => ({ call, index }));
+  const dupChoice = new Set<number>();
+  let choiceSeen = false;
+  for (const item of indexed) {
+    if (item.call.wireName !== 'agent__harness_choice') continue;
+    if (!choiceSeen) {
+      choiceSeen = true;
+      continue;
+    }
+    dupChoice.add(item.index);
+  }
   const bands: Array<{ parallel: boolean; items: Array<{ call: PendingToolCall; index: number }> }> = [];
   for (const item of indexed) {
+    if (dupChoice.has(item.index)) continue;
     const safe = isParallelSafe(item.call, byName);
     const last = bands[bands.length - 1];
     if (last && last.parallel === safe) {
@@ -959,9 +788,6 @@ export async function executeCalls(
   } catch {  }
 
   const emitResult = (entry: NonNullable<typeof settled[number]>): void => {
-    if (!entry.replayed) {
-      entry.text = pruneToolResult(entry.text, entry.toolName);
-    }
     const clientImages = entry.images?.length
       ? entry.images.map((image) => {
           if (image.dataUrl.length < INLINE_DATA_URL_LIMIT) return image;
@@ -1006,6 +832,20 @@ export async function executeCalls(
     onEvent?.(resultEvent);
     entry.emitted = true;
   };
+
+  for (const index of dupChoice) {
+    const call = calls[index];
+    if (!call) continue;
+    settled[index] = {
+      call,
+      serverName: 'Workspace',
+      toolName: 'harness_choice',
+      ok: false,
+      text: 'DUPLICATE IGNORED — agent__harness_choice may be called ONCE per assistant response. This duplicate did not execute and does not count. State your single real choice.',
+      errorCode: 'duplicate_choice_call',
+    };
+    emitResult(settled[index]!);
+  }
 
   for (const band of bands) {
     if (signal?.aborted) break;
@@ -1133,9 +973,6 @@ export async function executeCalls(
           __streamed: true,
         } as ToolLoopEvent);
       }
-      // PER-ITEM SETTLE: each tool's result is announced the moment THAT call
-      // resolves — never after the whole chunk's Promise.all. Batching here
-      // made a 10-file round dump every row at the end.
       await Promise.all(
         chunk.map(async (item) => {
           const callStarted = Date.now();
@@ -1198,9 +1035,6 @@ export async function executeCalls(
         args: entry.call.rawArgs,
         __streamed: true,
       });
-      if (!entry.replayed) {
-        entry.text = pruneToolResult(entry.text, entry.toolName);
-      }
       const clientImages = entry.images?.length
         ? entry.images.map((image) => {
             if (image.dataUrl.length < INLINE_DATA_URL_LIMIT) return image;

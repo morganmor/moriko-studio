@@ -1,10 +1,4 @@
-/**
- * RSA/T popup notification (toast) — mekanisme 1:1 dari
- * design/split/rsat-panel-popup-notification.html, dipasang sebagai PROVIDER
- * GLOBAL (bukan halaman): board.tsx memuat <ToastHost/>, panel mana pun
- * memanggil toast(). Juga mengekspor useNow — tick waktu global agar
- * heartbeat (5 hati) menyusut live dan pill stale muncul otomatis.
- */
+
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Spr, sa } from './sprites.tsx';
 import { Ic } from './icon.tsx';
@@ -22,7 +16,7 @@ type ToastItem = {
   action?: { label: string; run: () => void };
 };
 
-/** Label kecil (desain baris 177); `label` opsional menimpanya. */
+
 const LABEL: Record<ToastKind, string> = {
   ach: 'Achievement unlocked',
   info: 'Notice',
@@ -31,15 +25,15 @@ const LABEL: Record<ToastKind, string> = {
   error: 'Blocked',
 };
 
-/** S.toasts desain: ach/info disembunyikan saat off; warn/error SELALU tampil. */
+
 let toastsEnabled = true;
 export function setToastsEnabled(on: boolean) {
   toastsEnabled = on;
 }
 
-/** Context toast global — diisi ToastHost saat mount, dipakai panel mana pun. */
+
 let pushToast: ((t: Omit<ToastItem, 'id'>) => void) | null = null;
-/** toast(kind, title, sub, o) — desain baris 178. Maks 3 tampil; tertua dibuang. */
+
 export function toast(
   kind: ToastKind,
   title: string,
@@ -59,7 +53,7 @@ export function toast(
   });
 }
 
-/** Tick waktu (default 1s) — re-render pemanggil agar hitungan live. */
+
 export function useNow(step = 1000): number {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -69,7 +63,7 @@ export function useNow(step = 1000): number {
   return now;
 }
 
-/** Kartu toast (desain baris 184–193): medal/ikon + label kecil + judul + sub + bar. */
+
 function ToastCard({ t, out, kill }: { t: ToastItem; out: boolean; kill: (id: number) => void }) {
   const ch = t.kind === 'ach' && t.tier === 'diamond';
   const act = (e: React.MouseEvent | React.KeyboardEvent) => {

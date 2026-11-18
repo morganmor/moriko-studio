@@ -1,16 +1,4 @@
-/**
- * IMPORT GRAPH — "what breaks if I change this file?"
- *
- * A rename/type change in `types.ts` used to be answered with
- * grep + eyeball. deps.ts parses the import/require/dynamic-import specifiers
- * of the JS/TS family (ts/tsx/js/jsx/mjs/cjs), resolves relative specifiers to
- * real files on disk, and maintains a two-way graph (imports + importedBy).
- * The agent asks about ONE file and gets: what it pulls in, what pulls IT in
- * (with a bounded BFS reachability radius), and which edges are bare packages.
- *
- * Bounded like every other walker: SKIP_DIRS, depth cap, file caps, TTL cache
- * (5 s) per workspace so repeated queries inside one tool loop stay instant.
- */
+
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -32,13 +20,13 @@ const CACHE_TTL_MS = 5_000;
 interface DepsGraph {
   root: string;
   builtAt: number;
-  /** relative path -> set of relative paths it imports */
+  
   imports: Map<string, Set<string>>;
-  /** relative path -> set of relative paths that import it */
+  
   importedBy: Map<string, Set<string>>;
-  /** relative path -> external package names (bare specifiers) */
+  
   externals: Map<string, Set<string>>;
-  /** relative path -> relative specifiers that failed to resolve (F1.1) */
+  
   unresolved: Map<string, Set<string>>;
   filesScanned: number;
 }
@@ -53,10 +41,10 @@ function toRel(root: string, absPath: string): string {
   return path.relative(root, absPath).split(path.sep).join('/');
 }
 
-/** tsconfig `paths`/`baseUrl` support (F1.1) — cached per tsconfig file. */
+
 interface AliasConfig {
   baseUrl: string;
-  /** alias pattern (without trailing *) -> prefix replacement target. */
+  
   paths: Array<[string, string]>;
 }
 const aliasCache = new Map<string, AliasConfig | null>();
@@ -95,7 +83,7 @@ function loadAliasConfig(root: string): AliasConfig | null {
   return config;
 }
 
-/** Resolves a non-relative specifier through tsconfig paths aliases (F1.1). */
+
 function resolveTsconfigAlias(root: string, spec: string): string | null {
   if (spec.startsWith('node:')) return null;
   const cfg = loadAliasConfig(root);
@@ -120,12 +108,7 @@ function resolveTsconfigAlias(root: string, spec: string): string | null {
 }
 
 
-/**
- * F1.1 — extract import/require/dynamic-import specifiers via the TypeScript
- * scanner (preProcessFile). Kills the manual scanner's false positives
- * (e.g. `export const X = new Set(['.png'])` misread as an import) and covers
- * dynamic import + require in one pass.
- */
+
 function extractSpecifiers(source: string): string[] {
   try {
     const pre = ts.preProcessFile(source, true, true);
@@ -142,7 +125,7 @@ function extractSpecifiers(source: string): string[] {
 
 const RESOLVE_SUFFIXES = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '/index.ts', '/index.tsx', '/index.js'];
 
-/** TS ESM convention: a `.js` specifier may point at a `.ts` sibling (F1.1). */
+
 const EXT_SWAPS: Record<string, string[]> = {
   '.js': ['.ts', '.tsx', '.js'],
   '.jsx': ['.tsx', '.ts', '.jsx'],
@@ -150,8 +133,7 @@ const EXT_SWAPS: Record<string, string[]> = {
   '.cjs': ['.cts', '.ts', '.cjs'],
 };
 
-/** Resolves a relative specifier ('./x', '../y/z') to a real file, or null.
- *  Handles the TS ESM `.js` → `.ts` mapping plus tsconfig `paths` aliases. */
+
 function resolveSpecifier(root: string, fromFileRel: string, spec: string): string | null {
   if (!spec.startsWith('./') && !spec.startsWith('../')) {
     return resolveTsconfigAlias(root, spec);
@@ -239,7 +221,7 @@ function getGraph(root: string): DepsGraph {
   return fresh;
 }
 
-/** Forces a rebuild on the next query (called from the write-hook family). */
+
 export function invalidateDepsGraph(root: string): void {
   graphCache.delete(root);
 }
@@ -249,14 +231,14 @@ export interface DepsReport {
   imports: string[];
   importedBy: string[];
   externals: string[];
-  /** Relative specifiers that failed to resolve (F1.1). */
+  
   unresolved: string[];
-  /** Unique files reachable through importedBy within MAX_BFS_RADIUS (excluding the file itself). */
+  
   reachableDependents: number;
   filesScanned: number;
 }
 
-/** One file's dependency report: what it pulls in, what pulls it in, blast radius. */
+
 export function queryDeps(root: string, absoluteFile: string): DepsReport | null {
   const graph = getGraph(root);
   const rel = path.relative(root, absoluteFile).split(path.sep).join('/');

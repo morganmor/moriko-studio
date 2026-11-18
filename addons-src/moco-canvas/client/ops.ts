@@ -1,10 +1,4 @@
-/**
- * Moco Canvas — op engine (P1).
- *
- * Every mutation is an op; a batch is ONE transaction (all-or-nothing, plan
- * §7.1). The engine works in intent space only: cells, tokens, roles. It never
- * writes a pixel, and every rejection teaches the legal alternative (§7.4).
- */
+
 
 import {
   COLS,
@@ -54,11 +48,11 @@ export interface PlaceOp {
   op: 'place';
   id: string;
   kind?: NodeKind;
-  /** parent frame/page id */
+  
   in?: string;
-  /** grid address ("B2:H5") for grid parents */
+  
   at?: string;
-  /** stack parents: insert before/after a sibling */
+  
   before?: string;
   after?: string;
   role?: Role;
@@ -68,18 +62,18 @@ export interface PlaceOp {
   fit?: 'cover' | 'contain';
   layout?: FrameLayout;
   style?: NodeStyle;
-  /** allow intentional layering (overlay decor); lint still reports it */
+  
   force?: boolean;
 }
 
 export interface MoveOp {
   op: 'move';
   id: string;
-  /** new grid address (same frame) */
+  
   at?: string;
-  /** reparent into this frame/page */
+  
   parent?: string;
-  /** stack parents: target index / sibling anchors */
+  
   index?: number;
   before?: string;
   after?: string;
@@ -89,10 +83,10 @@ export interface MoveOp {
 export interface ResizeOp {
   op: 'resize';
   id: string;
-  /** span width/height in cells */
+  
   w?: number;
   h?: number;
-  /** explicit address instead of w/h */
+  
   at?: string;
   force?: boolean;
 }
@@ -111,7 +105,7 @@ export interface AlignOp {
   op: 'align';
   ids: string[];
   edge: AlignEdge;
-  /** reference node; defaults to the frame edges */
+  
   to?: string;
   force?: boolean;
 }
@@ -146,7 +140,7 @@ export interface GroupOp {
   op: 'group';
   ids: string[];
   id?: string;
-  /** grid parents: address for the new frame (defaults to the bounding box) */
+  
   at?: string;
 }
 
@@ -198,38 +192,36 @@ export interface ReorderOp {
   after?: string;
 }
 
-/** P3 co-edit (plan §12): lock/unlock a node against agent mutation. Users may
- *  always lock/unlock; agent ops that touch a locked node are rejected with the
- *  unlock instruction. */
+
 export interface LockOp {
   op: 'lock' | 'unlock';
   id: string;
 }
 
-/** P4 (plan §7.2): per-breakpoint overrides. bp omitted = clear all overrides. */
+
 export interface ResponsiveOp {
   op: 'responsive';
   id: string;
-  /** target breakpoint ('lg' clears that key's overrides) */
+  
   bp?: 'sm' | 'md' | 'lg';
-  /** grid address override for grid-placed nodes */
+  
   at?: string;
-  /** drop the node at this breakpoint */
+  
   hide?: boolean;
   maxWidth?: string;
-  /** frame-only layout overrides */
+  
   layout?: FrameLayout;
-  /** remove the whole responsive map */
+  
   clear?: boolean;
 }
 
-/** P4 (plan §7.3): store a relation the engine keeps enforcing across ops. */
+
 export interface ConstrainOp {
   op: 'constrain';
   rule: ConstraintRule;
-  /** ≥2 nodes sharing one parent; omit with clear to drop by rule */
+  
   ids?: string[];
-  /** remove this constraint (rule [+ ids]) from the scene */
+  
   clear?: boolean;
 }
 
@@ -238,7 +230,7 @@ export type CanvasOp =
   | LayoutOp | GroupOp | UngroupOp | StyleOp | TextOp | SwapOp | DeleteOp | ReorderOp
   | LockOp | ResponsiveOp | ConstrainOp;
 
-/** A rejection that carries the legal alternatives (plan §7.4). */
+
 export class OpError extends Error {
   constructor(message: string) {
     super(message);
@@ -248,17 +240,17 @@ export class OpError extends Error {
 
 export interface OpOutcome {
   note: string;
-  /** node ids the op touched — feeds the delta readout */
+  
   changed: string[];
 }
 
 export interface BatchOutcome {
   ok: boolean;
   scene: Scene;
-  /** one line per applied op */
+  
   notes: string[];
   changed: string[];
-  /** index + message when a batch was rolled back */
+  
   rejected?: { index: number; op: string; note: string };
 }
 
@@ -297,7 +289,7 @@ function distance(a: string, b: string): number {
   return dp[cols - 1];
 }
 
-/** Cheap fuzzy match for "did you mean" (prefix + substring + edit distance). */
+
 function suggestions(target: string, pool: string[]): string[] {
   const t = target.toLowerCase();
   return pool
@@ -355,7 +347,7 @@ function parseAtIn(at: string, frame: SceneNode): Rect {
   return rect;
 }
 
-/** Rows are `auto` in the compiled CSS, so growing the lattice is legal. */
+
 function growRows(frame: SceneNode, rect: Rect): void {
   if (!frame.layout) frame.layout = { mode: 'grid' };
   const rows = frame.layout.rows ?? 1;
@@ -424,16 +416,12 @@ function detach(parent: SceneNode, node: SceneNode): void {
   parent.children = parent.children.filter((c) => c.id !== node.id);
 }
 
-// ── P3 co-edit: lock guard (plan §12) ─────────────────────────────────────────
 
 function isLocked(node: SceneNode): boolean {
   return node.style?.locked === true;
 }
 
-/**
- * Reject an AGENT batch that mutates a user-locked node. Locks inherit to
- * descendants. Users bypass this entirely (applyBatch caller passes isUser).
- */
+
 function assertNotLocked(scene: Scene, op: CanvasOp, isUser: boolean): void {
   if (isUser) return;
   if (op.op === 'lock' || op.op === 'unlock') return;
@@ -451,7 +439,6 @@ function assertNotLocked(scene: Scene, op: CanvasOp, isUser: boolean): void {
           ` Skip it or ask the user to unlock via the panel.`,
       );
     }
-    // children inherit the lock
     walk(node, (child) => {
       if (isLocked(child)) {
         fail(`"${child.id}" inside "${id}" is LOCKED by the user — agents must not touch it. Ask the user to unlock it via the panel.`);
@@ -469,7 +456,7 @@ function opLock(scene: Scene, op: LockOp): OpOutcome {
   };
 }
 
-/** A grid frame the node can be positioned in, or null when it is stack-only. */
+
 function gridContext(scene: Scene, id: string): { node: SceneNode; frame: SceneNode; rect: Rect } | null {
   const target = gridTarget(scene.root, id);
   if (!target) return null;
@@ -489,7 +476,6 @@ function boundingBox(rects: Rect[]): Rect {
   );
 }
 
-// ── op handlers ────────────────────────────────────────────────────────────
 
 function opPlace(scene: Scene, op: PlaceOp): OpOutcome {
   uniqueId(scene, op.id);
@@ -557,8 +543,6 @@ function opMove(scene: Scene, op: MoveOp): OpOutcome {
   if (parent.layout?.mode === 'grid') {
     if (!op.at) fail(`move "${op.id}" requires "at" (a cell address), e.g. {op:"move", id:"${op.id}", at:"H1:L6"}.`);
     let rect = parseAtIn(op.at, parent);
-    // A bare cell ("H1") means "move here, keep my span" — a drag must not
-    // silently collapse a 5-column image to one cell.
     if (!op.at.includes(':')) {
       const current = parseAt(node.at);
       if (current) {
@@ -669,7 +653,6 @@ function opAlign(scene: Scene, op: AlignOp): OpOutcome {
     planned.push(next);
   }
 
-  // Two aligned nodes must not land on each other or on a bystander.
   if (!op.force) {
     const lattice = latticeOf(frame);
     for (let i = 0; i < planned.length; i++) {
@@ -775,8 +758,6 @@ function opSpace(scene: Scene, op: SpaceOp): OpOutcome {
     parentA.layout.gap = gap;
     return { note: `space ${parentA.id}: gap ${before} → ${gap} (${spacePx(gap)}px)`, changed: [parentA.id] };
   }
-  // Grid siblings: rows are auto bands, so place b directly under a and let the
-  // frame gap govern the exact pixels (honest, not a fabricated px value).
   const ctxA = gridContext(scene, a.id);
   const ctxB = gridContext(scene, b.id);
   if (!ctxA || !ctxB) fail(`space failed: ${a.id}/${b.id} have no grid address.`);
@@ -800,7 +781,6 @@ function opLayout(scene: Scene, op: LayoutOp): OpOutcome {
   if (op.rows !== undefined && (op.rows < 1 || op.rows > ROWS + 12)) fail(`rows ${op.rows} out of range 1–${ROWS + 12}.`);
 
   if (mode === 'grid' && frame.layout?.mode !== 'grid') {
-    // stack → grid: one full-width band per child, in source order.
     const cols = op.cols ?? COLS;
     const kids = frame.children ?? [];
     kids.forEach((child, i) => {
@@ -899,8 +879,6 @@ function opUngroup(scene: Scene, op: UngroupOp): OpOutcome {
     if (!frameRect) fail(`ungroup "${op.id}" failed: the frame in grid ${parent.id} has no address.`);
     const cols = frameCols(parent);
     const rows = frameRows(parent);
-    // Placed children keep their own offsets (no extra band shift); stack
-    // children become one full-width band each, in source order.
     let band = 0;
     kids.forEach((child) => {
       const rect = parseAt(child.at);
@@ -1072,8 +1050,7 @@ function opReorder(scene: Scene, op: ReorderOp): OpOutcome {
   return { note: `reordered ${node.id} in ${parent.id} #${from + 1} → #${to + 1}`, changed: [node.id, parent.id] };
 }
 
-/** P4 (plan §7.2): write per-breakpoint overrides. Validated here so the
- *  compiler can trust the map (legal addresses, frame-only layout keys). */
+
 function opResponsive(scene: Scene, op: ResponsiveOp): OpOutcome {
   const node = requireNode(scene, op.id);
   if (op.clear) {
@@ -1085,7 +1062,6 @@ function opResponsive(scene: Scene, op: ResponsiveOp): OpOutcome {
   }
   const parts: string[] = [];
   if (op.bp === 'lg') {
-    // lg IS the base scene — there is nothing to override, so this clears.
     if (node.responsive) delete node.responsive.md;
     return { note: `responsive ${node.id}: cleared md (lg is the base)`, changed: [node.id] };
   }
@@ -1123,11 +1099,7 @@ function opResponsive(scene: Scene, op: ResponsiveOp): OpOutcome {
   return { note: `responsive ${node.id} @${op.bp}: ${parts.join(', ')}`, changed: [node.id] };
 }
 
-/**
- * P4 (plan §7.3): store a relation. The relation must ALREADY hold — there is
- * no solver, so we never invent geometry; we only remember what structure
- * already guarantees. Enforcement lives in applyBatch.
- */
+
 function opConstrain(scene: Scene, op: ConstrainOp): OpOutcome {
   const rule = op.rule;
   if (!['same-left', 'same-height', 'same-gap'].includes(rule)) {
@@ -1198,7 +1170,7 @@ function applyOne(scene: Scene, op: CanvasOp): OpOutcome {
   }
 }
 
-/** Apply one op on a fresh copy (single-op convenience). */
+
 export function applyOp(scene: Scene, op: CanvasOp): { scene: Scene; note: string; ok: boolean; changed: string[] } {
   const outcome = applyBatch(scene, [op]);
   if (!outcome.ok) {
@@ -1207,11 +1179,7 @@ export function applyOp(scene: Scene, op: CanvasOp): { scene: Scene; note: strin
   return { scene: outcome.scene, note: outcome.notes[0] ?? 'ok', ok: true, changed: outcome.changed };
 }
 
-/**
- * Apply a batch as ONE transaction: any rejection rolls back every op, so the
- * caller never sees a half-applied design (plan §7.1). `isUser` bypasses the
- * P3 lock guard — only user-driven callers may pass true.
- */
+
 export function applyBatch(scene: Scene, ops: CanvasOp[], isUser = false): BatchOutcome {
   if (!Array.isArray(ops) || ops.length === 0) {
     return { ok: false, scene, notes: [], changed: [], rejected: { index: -1, op: 'batch', note: 'empty batch — send at least one op.' } };
@@ -1219,9 +1187,6 @@ export function applyBatch(scene: Scene, ops: CanvasOp[], isUser = false): Batch
   const next = cloneScene(scene);
   const notes: string[] = [];
   const changed = new Set<string>();
-  // P4 §7.3: a relation is enforced from the moment it HOLDS (transition
-  // semantics) — a legacy scene with a broken relation never deadlocks every
-  // future batch, and a constraint created mid-batch guards the rest of it.
   const held = new Set(
     (scene.constraints ?? [])
       .filter((c) => constraintStatus(scene, c).ok)
@@ -1267,7 +1232,7 @@ export function applyBatch(scene: Scene, ops: CanvasOp[], isUser = false): Batch
   return { ok: true, scene: next, notes, changed: [...changed] };
 }
 
-/** Every op name the engine accepts (drives the tool schema enum). */
+
 export const OP_NAMES: Array<CanvasOp['op']> = [
   'place', 'move', 'resize', 'span', 'align', 'distribute', 'space',
   'stack', 'grid', 'group', 'ungroup', 'style', 'text', 'swap', 'delete', 'reorder',

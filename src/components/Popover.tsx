@@ -8,8 +8,7 @@ export type PopoverPlacement = 'bottom-start' | 'bottom-end' | 'right-start';
 interface PopoverProps {
   open: boolean;
   onClose: () => void;
-  /** Phone sheet only: header Back handler. When set, Back calls this instead
-   *  of onClose — lets nested panels step back (e.g. Model list → quick picker). */
+  
   onBack?: () => void;
   anchorRef: RefObject<HTMLElement | null>;
   label: string;
@@ -26,12 +25,7 @@ const EDGE = 8;
 const MAX_HEIGHT = 480;
 const EXIT_MS = 160;
 
-/**
- * Design `.pop` popover (moriko-design-1-popovers-menus.html): portaled to <body>
- * so no overflow/transform ancestor can clip it, positioned fixed from the anchor,
- * flipped and clamped to the viewport, scrollable when space is short, and a
- * bottom sheet on phones. Closes on outside pointer, Escape; arrow keys move focus.
- */
+
 export function Popover({
   open,
   onClose,

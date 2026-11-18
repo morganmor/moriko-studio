@@ -1,12 +1,4 @@
-/**
- * Addon v2 RPC (A4) — the route `POST /api/addons/:id/rpc/:name` dispatches to
- * a handler the addon registered via `ctx.rpc.handle(name, fn)`. Calls arrive
- * from the addon's UI, so the actor is always `{ kind: 'user' }` — the tool
- * surface stays agent-only, the RPC surface user-only.
- *
- * Auth: the route rides the same Express router as every other /api route —
- * whatever middleware the app mounts in front of /api applies here too.
- */
+
 
 export type RpcHandler = (
   body: Record<string, unknown>,

@@ -1,16 +1,4 @@
-/**
- * SEMANTIC SEARCH — BM25 in-process, no daemon, no RocksDB.
- *
- * The earlier harness plan mentioned the `.zvec-grep` daemon (a plan, never built) as
- * "half-existing." This is the real thing: a lightweight BM25 index that
- * walks the workspace on first call, tokenizes text-like files into
- * fixed-size document blocks (~50 lines), and scores queries against an
- * inverted index with IDF weighting. No external processes, no native deps.
- *
- * Index is cached per workspace root; a single re-index of the touched file
- * fires when `recordAfterWrite` reports a write (see invalidateSearchIndex).
- * The agent gets `file:line` pointers — it follows with read_file.
- */
+
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -37,13 +25,7 @@ const SKIP_EXTENSIONS = new Set([
   '.lock', '.snapshot.json',
 ]);
 
-/**
- * SEARCH ROOTS — the union the index covers: the ACTIVE workspace root plus
- * the builtin addon sources (addons-src/, the Addon Manager workspace). The
- * addon roots ride along in every session — the agent never has to switch
- * workspaces to search addon code. The second entry is null in packaged
- * builds, and is dropped when it IS the workspace (the self-hosted case).
- */
+
 function searchRoots(sessionId?: string): Array<{ root: string; prefix: string }> {
   const roots: Array<{ root: string; prefix: string }> = [];
   const ws = getActiveWorkspace(sessionId);
@@ -66,21 +48,21 @@ interface Doc {
   lineStart: number;
   lineCount: number;
   tokens: string[];
-  /** path tokens + declared-symbol tokens, for boosting (F1.3). */
+  
   boostTokens: Set<string>;
-  /** raw block text kept for snippet selection (F1.3). */
+  
   text: string;
 }
 
 interface Index {
   docs: Doc[];
-  /** term -> Set of doc indices that contain it */
+  
   inverted: Map<string, Set<number>>;
-  /** average doc length (in tokens) */
+  
   avgDocLen: number;
-  /** total docs */
+  
   docCount: number;
-  /** workspace root path this index was built for */
+  
   root: string;
 }
 
@@ -98,9 +80,7 @@ const STOPWORDS = new Set([
   'void', 'null', 'true', 'false', 'new', 'await', 'async', 'type',
 ]);
 
-/** F1.3 — camelCase/PascalCase/snake/kebab/dot aware tokenizer + light stem.
- *  `truncateOutput` → [truncateoutput, truncate, output]; keeps the whole
- *  token too so exact matches still score. */
+
 export function tokenize(text: string): string[] {
   const raw = text
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
@@ -117,7 +97,7 @@ export function tokenize(text: string): string[] {
   return out;
 }
 
-/** Light suffix stemmer (len > 4): s / ing / ed. */
+
 function stemToken(token: string): string | null {
   if (token.length <= 4) return null;
   for (const suffix of ['ing', 'ed']) {
@@ -129,7 +109,7 @@ function stemToken(token: string): string | null {
   return null;
 }
 
-/** Walk the workspace collecting relative paths of text-like files. */
+
 function walkTextFiles(root: string): string[] {
   const files: string[] = [];
   const visit = (dir: string, depth: number): void => {
@@ -156,9 +136,7 @@ function walkTextFiles(root: string): string[] {
   return files;
 }
 
-/** Build (or rebuild) the BM25 index over the SEARCH ROOTS (workspace +
- *  addons-src). Docs from the addon roots carry an `addons-src/` path prefix
- *  so the file references are directly follow-up-able with read_file. */
+
 function buildIndex(roots: Array<{ root: string; prefix: string }>): Index {
   const docs: Doc[] = [];
   const inverted = new Map<string, Set<number>>();
@@ -199,14 +177,14 @@ function buildIndex(roots: Array<{ root: string; prefix: string }>): Index {
   };
 }
 
-/** Cache key for the search-root union (stable even without a workspace). */
+
 function indexKey(sessionId?: string): string | null {
   const roots = searchRoots(sessionId);
   if (roots.length === 0) return null;
   return roots.map((entry) => entry.root).join('|');
 }
 
-/** Get or create the index covering the workspace + addon sources. */
+
 function getIndex(sessionId?: string): Index | null {
   const key = indexKey(sessionId);
   if (!key) return null;
@@ -218,11 +196,7 @@ function getIndex(sessionId?: string): Index | null {
   return idx;
 }
 
-/**
- * F1.3 — incremental invalidation. `absolutePath` is the written file; the
- * index that covers its owning root (workspace OR addons-src) re-indexes it.
- * With no relPath the whole index is dropped (mass change / full rebuild).
- */
+
 export function invalidateSearchIndex(root: string, relPath?: string): void {
   if (relPath === undefined) {
     for (const key of indices.keys()) {
@@ -237,7 +211,7 @@ export function invalidateSearchIndex(root: string, relPath?: string): void {
   }
 }
 
-/** Re-index one file inside one already-built index (old F1.3 behavior). */
+
 function invalidateInIndex(root: string, idx: Index, relPath: string): void {
   const displayPath = root === idx.root ? relPath : `addons-src/${relPath}`;
   const keep = idx.docs.filter((doc) => doc.file !== displayPath);
@@ -275,7 +249,7 @@ function invalidateInIndex(root: string, idx: Index, relPath: string): void {
   Object.assign(idx, rebuilt);
 }
 
-/** BM25 score for a single document given query terms. */
+
 function bm25Score(docIdx: number, queryTerms: string[], index: Index, k1 = 1.5, b = 0.75): number {
   const doc = index.docs[docIdx];
   const docLen = doc.tokens.length;
@@ -299,7 +273,7 @@ export interface SearchResult {
   snippet: string;
 }
 
-/** Run a BM25 query across the workspace + addon sources. Top-K results. */
+
 export function searchWorkspace(
   query: string,
   limit = 10,

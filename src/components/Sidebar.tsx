@@ -17,26 +17,25 @@ import { ShortcutsDialog } from './ShortcutsDialog';
 
 interface SidebarProps {
   onOpenProviders: () => void;
-  /** Opens the workspace preferences dialog (font, theme, data). */
+  
   onOpenSettings?: () => void;
-  /** NATIVE folder picker: register + activate a folder as the workspace
-   *  (sama dengan pill TopBar / composer — tanpa harus buka chat dulu). */
+  
   onBindWorkspace?: () => void;
-  /** Called after any navigation, so a mobile drawer can close itself. */
+  
   onNavigate?: () => void;
-  /** Drag-resizable rail width (device-persisted); 248 default. */
+  
   width?: number;
 }
 
 interface NavItemProps {
   icon: React.ReactNode;
   label: string;
-  /** Satu baris kecil di bawah label (status addon / versi). */
+  
   subtitle?: string;
   active?: boolean;
   onClick?: () => void;
   trailing?: React.ReactNode;
-  /** Renders the item as a non-interactive placeholder, kept for future use. */
+  
   placeholder?: boolean;
   'aria-expanded'?: boolean;
 }
@@ -74,7 +73,7 @@ function NavItem({
   );
 }
 
-/** Indented child of a collapsible nav group ("New Chat", "History", …). */
+
 export function SubItem({
   icon,
   label,
@@ -104,11 +103,7 @@ export function SubItem({
   );
 }
 
-/**
- * Height-animated disclosure — the same easing the activity pill uses
- * (grid-rows 0fr→1fr). Content stays mounted ~330ms after close so the
- * collapse eases down instead of snapping shut, then unmounts.
- */
+
 function CollapseSection({
   open,
   className,
@@ -139,7 +134,7 @@ function CollapseSection({
   );
 }
 
-/** Expandable nav group: the parent toggles, children render inline below. */
+
 export function NavGroup({
   icon,
   label,
@@ -155,13 +150,13 @@ export function NavGroup({
   icon: React.ReactNode;
   label: string;
   subtitle?: string;
-  /** Badge status di kanan (legacy / Appove / off) — ciri khas per addon. */
+  
   tail?: React.ReactNode;
   active?: boolean;
   open: boolean;
   onToggle: () => void;
   count?: number;
-  /** Baris tanpa sub-menu: tanpa chevron, tanpa CollapseSection. */
+  
   leaf?: boolean;
   children: React.ReactNode;
 }) {
@@ -198,10 +193,7 @@ export function SectionLabel({ children }: { children: React.ReactNode }) {
 }
 
 
-/**
- * One recent-chat row. Hovering reveals the triple-dots button; the menu lets
- * the user rename the chat inline (input replaces the label) or delete it.
- */
+
 const RecentItem = memo(function RecentItem({
   conversation,
   active,
@@ -212,12 +204,11 @@ const RecentItem = memo(function RecentItem({
 }: {
   conversation: Conversation;
   active: boolean;
-  /** Selects this row's conversation — receives the id so a single stable
-   *  closure serves every row (the memo only holds while props are equal). */
+  
   onSelect: (id: string) => void;
-  /** An agent/AI is actively generating in this conversation right now. */
+  
   running?: boolean;
-  /** Owned by the Sidebar — only ONE row's menu may be open at a time. */
+  
   menuOpen: boolean;
   onMenuToggle: (id: string) => void;
 }) {
@@ -377,18 +368,11 @@ const RecentItem = memo(function RecentItem({
   );
 });
 
-/**
- * Primary navigation rail.
- *
- * Playground entries are collapsible groups with inline children (matching the
- * requested layout). The NAV itself is the scroll region once every tab is
- * open, so nothing sinks behind the fixed footer; Recent Chat yields (bounded
- * list) while Workspace always shows in full — workspace outranks chat.
- */
+
 export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, onBindWorkspace, width }: SidebarProps) {
   const theme = useStore((state) => state.theme);
   const setTheme = useStore((state) => state.setTheme);
-  /** 'system' resolves through the OS so the toggle label/flip stay truthful. */
+  
   const effectiveTheme = resolveTheme(theme);
   const view = useStore((state) => state.view);
   const setView = useStore((state) => state.setView);
@@ -445,11 +429,7 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, onBindWor
   const searchQuery = useStore((state) => state.searchQuery);
   const setSearchQuery = useStore((state) => state.setSearchQuery);
 
-  /**
-   * Session bug: workspaces used to pile up with no way to unregister them.
-   * Removal unbinds the CHATS first (so grouping stays honest), then drops
-   * the registration — the files on disk are never touched.
-   */
+  
   const handleRemoveWorkspace = useCallback(
     async (workspaceId: string) => {
       const bound = useStore
@@ -472,24 +452,21 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, onBindWor
     [patchConversation, removeAgentWorkspace, showNotice],
   );
 
-  /** DROPDOWN PERSIST (2026-10): open/closed follows the user's LAST
-   *  condition across reloads (device ui-state) — hard defaults are first-run
-   *  only. Refresh keeps whatever was left open/closed. */
+  
   const savedSections = storage.loadSidebarSections();
   const [recentOpen, setRecentOpen] = useState(savedSections.recent ?? true);
-  /** 6A: the Workspace dropdown — chats grouped under their bound workspace. */
+  
   const [workspaceOpen, setWorkspaceOpen] = useState(savedSections.workspace ?? true);
   const [expandedWorkspaceId, setExpandedWorkspaceId] = useState<string | null>(
     savedSections.expanded ?? null,
   );
-  /** '+' in the Workspace header: start a chat bound to a picked workspace
-   *  WITHOUT switching the active workspace. Closed on outside mousedown. */
+  
   const [newChatPickerOpen, setNewChatPickerOpen] = useState(false);
   const newChatPickerRef = useRef<HTMLButtonElement | null>(null);
-  /** Collapsible playground groups; start expanded around the active view. */
+  
   const [chatOpen, setChatOpen] = useState(savedSections.chat ?? view === 'playground');
   const [imageOpen, setImageOpen] = useState(savedSections.image ?? view === 'imagestudio');
-  /** Save every dropdown's last condition on change (debounced device patch). */
+  
   useEffect(() => {
     storage.saveSidebarSections({
       chat: chatOpen,
@@ -499,11 +476,11 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, onBindWor
       expanded: expandedWorkspaceId,
     });
   }, [chatOpen, imageOpen, workspaceOpen, recentOpen, expandedWorkspaceId]);
-  /** The recent-chat row menus are Sidebar-owned: only ONE open at a time. */
+  
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
-  /** Command palette ("Search or jump…", Ctrl K) — also opened from the brand row. */
+  
   const [paletteOpen, setPaletteOpen] = useState(false);
-  /** Design plus menu's "Slash command" row opens the palette via this event. */
+  
   useEffect(() => {
     const onOpenPalette = () => setPaletteOpen(true);
     window.addEventListener('moriko:open-palette', onOpenPalette);
@@ -511,11 +488,11 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, onBindWor
   }, []);
   const toggleSidebar = useStore((state) => state.toggleSidebar);
   const sidebarCollapsed = useStore((state) => state.sidebarCollapsed);
-  /** Reference design's footer affordance: the `?` key opens the cheat-sheet. */
+  
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  /** Addon Hub popup — enable/disable/reload addons without leaving the rail. */
+  
   const [addonHubOpen, setAddonHubOpen] = useState(false);
-  /** /help slash command — same cheat-sheet as the footer's ? button. */
+  
   useEffect(() => {
     const onOpenShortcuts = () => setShortcutsOpen(true);
     window.addEventListener('moriko:open-shortcuts', onOpenShortcuts);
@@ -547,7 +524,7 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, onBindWor
     void loadImageSessions();
   }, [loadImageSessions]);
 
-  /** Chats that actually exist: unused "New chat" phantoms never show. */
+  
   const visibleConversations = useMemo(
     () => conversations.filter(
       (conversation) => !isPhantomConversation(conversation) && !isSubSession(conversation),
@@ -568,7 +545,7 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, onBindWor
     );
   }, [visibleConversations, searchQuery]);
 
-  /** 6A: sessions per workspace — the Workspace dropdown's grouping. */
+  
   const chatsByWorkspace = useMemo(() => {
     const map = new Map<string, Conversation[]>();
     for (const workspace of agentWorkspaces) map.set(workspace.id, []);
@@ -586,7 +563,7 @@ export function Sidebar({ onOpenProviders, onOpenSettings, onNavigate, onBindWor
     if (!options?.keepDrawer) onNavigate?.();
   };
 
-  /** Desktop instance only: collapsed renders the reference's 64px icon rail. */
+  
   const railSm = sidebarCollapsed && width !== undefined;
 
   return (

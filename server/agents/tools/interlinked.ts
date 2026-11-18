@@ -1,33 +1,4 @@
-/**
- * agent__interlinked — "which files pull in the same imports/modules?"
- *
- * Three modes, decided by the flat `target` / `targets` arguments (merged,
- * de-duplicated):
- *
- *  - Mode A (one target): every other workspace source file that shares at
- *    least one canonical import/module with the target, most shared first.
- *  - Mode B (two or more targets): the workspace index is built ONCE, then each
- *    target gets its own section + table.
- *  - Mode C (no target): the whole workspace map — every source file with its
- *    imports/modules, plus the groups of files sharing the same module.
- *
- * EXTRACTION walks the TypeScript AST (never regex over raw text), so comments
- * and string contents can never be misread as imports. Captured forms:
- * `import … from '…'`, `import '…'`, `import type …`, `export … from '…'`,
- * `import x = require('…')`, `import('…')`, `typeof import('…')`, `require('…')`.
- *
- * CANONICAL IDENTITY is the whole point: a relative specifier resolves against
- * the importing file's directory and then to the REAL source file on disk
- * (`../lib/projectFiles.js` and `./projectFiles` both land on
- * `…/lib/projectFiles.ts`), so two files at different folder depths importing
- * the same local module share one identical key. tsconfig `paths` aliases
- * resolve the same way. Node built-ins are unified to `node:<name>`
- * (`fs/promises` ≡ `node:fs/promises`); other packages keep their specifier.
- *
- * Nothing is swallowed: unreadable directories/files and broken tsconfig files
- * are reported in a "Scan notes" section, and a missing target is an explicit
- * error for that target.
- */
+
 import { readFileSync, readdirSync, realpathSync, statSync, type Stats } from 'node:fs';
 import { builtinModules } from 'node:module';
 import path from 'node:path';
@@ -38,16 +9,16 @@ import { SKIP_DIRS, requireWorkspace, resolveManyWithPermission } from './shared
 import { defineTool } from './registry.js';
 import { fuzzyHint } from '../fuzzy.js';
 
-/** Source files the scanner reads. */
+
 const SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']);
 
-/** Non-source trees never descended into (harness defaults + `.chuze`). */
+
 const INTERLINKED_SKIP_DIRS = new Set<string>([...SKIP_DIRS, '.chuze']);
 
-/** Node built-ins WITHOUT the `node:` prefix (e.g. `fs`, `fs/promises`). */
+
 const NODE_BUILTINS = new Set<string>(builtinModules);
 
-/** TS ESM convention: an emitted-extension specifier points at its source sibling first. */
+
 const EXT_SWAPS: Record<string, string[]> = {
   '.js': ['.ts', '.tsx', '.js', '.jsx'],
   '.jsx': ['.tsx', '.jsx', '.ts', '.js'],
@@ -55,7 +26,7 @@ const EXT_SWAPS: Record<string, string[]> = {
   '.cjs': ['.cts', '.cjs'],
 };
 
-/** Extensionless specifier probes, TS sources first so the key is always the source file. */
+
 const RESOLVE_SUFFIXES = [
   '.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs',
   '/index.ts', '/index.tsx', '/index.mts', '/index.cts',
@@ -64,35 +35,35 @@ const RESOLVE_SUFFIXES = [
 
 const TSCONFIG_NAME = /^tsconfig(\..+)?\.json$/i;
 
-/** tsconfig diagnostic "No inputs were found" — expected, we never enumerate files. */
+
 const TS_NO_INPUTS_CODE = 18003;
 
 type ModuleKind = 'local' | 'external' | 'unresolved';
 
 interface ModuleRef {
-  /** Canonical identity key — equal keys mean "the same module". */
+  
   key: string;
   kind: ModuleKind;
-  /** Human label: workspace-relative path, package specifier, or unresolved path. */
+  
   label: string;
 }
 
 interface IndexedFile {
   absolute: string;
-  /** Comparison id (case-folded on Windows). */
+  
   id: string;
-  /** Workspace-relative POSIX path. */
+  
   relative: string;
   modules: Map<string, ModuleRef>;
 }
 
 interface AliasRule {
-  /** Text before the `*` (or the whole pattern when there is no wildcard). */
+  
   prefix: string;
-  /** Text after the `*` ('' when there is no wildcard). */
+  
   suffix: string;
   wildcard: boolean;
-  /** Absolute target templates (may contain one `*`). */
+  
   targets: string[];
 }
 
@@ -119,7 +90,6 @@ type TargetOutcome =
   | { raw: string; ok: true; matches: TargetMatch[]; moduleCount: number }
   | { raw: string; ok: false; error: string };
 
-// ─── small helpers ───────────────────────────────────────────────────────────
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -130,7 +100,7 @@ function errnoCode(error: unknown): string | undefined {
   return undefined;
 }
 
-/** stat that answers null ONLY for "nothing there"; every other failure propagates. */
+
 function statOrNull(absolute: string): Stats | null {
   try {
     return statSync(absolute);
@@ -155,7 +125,7 @@ function toPosix(value: string): string {
   return value.split(path.sep).join('/');
 }
 
-/** Workspace-relative POSIX path, or the absolute POSIX path when outside `root`. */
+
 function displayPath(root: string, absolute: string): string {
   const rel = path.relative(root, absolute);
   if (!rel) return '.';
@@ -178,7 +148,6 @@ function escapeCell(value: string): string {
   return value.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 }
 
-// ─── workspace walk ──────────────────────────────────────────────────────────
 
 function walkWorkspace(root: string, notes: string[]): { sources: string[]; tsconfigs: string[] } {
   const sources: string[] = [];
@@ -211,7 +180,6 @@ function walkWorkspace(root: string, notes: string[]): { sources: string[]; tsco
   return { sources, tsconfigs };
 }
 
-// ─── tsconfig `paths` aliases ────────────────────────────────────────────────
 
 function loadAliasConfig(root: string, configPath: string, notes: string[]): AliasConfig | null {
   const label = displayPath(root, configPath);
@@ -248,9 +216,8 @@ function loadAliasConfig(root: string, configPath: string, notes: string[]): Ali
   return rules.length > 0 ? { dir: configDir, rules } : null;
 }
 
-// ─── resolution ──────────────────────────────────────────────────────────────
 
-/** Maps a candidate base path to the real source file on disk, or null. */
+
 function resolveCandidate(base: string): string | null {
   const ext = path.extname(base).toLowerCase();
   const swaps = EXT_SWAPS[ext];
@@ -324,7 +291,6 @@ function resolveModule(rawSpec: string, fromFile: string, index: WorkspaceIndex)
   return externalRef(spec);
 }
 
-// ─── extraction ──────────────────────────────────────────────────────────────
 
 function scriptKindFor(absolute: string): ts.ScriptKind {
   switch (path.extname(absolute).toLowerCase()) {
@@ -341,7 +307,7 @@ function scriptKindFor(absolute: string): ts.ScriptKind {
   }
 }
 
-/** Every module specifier in the file's AST (comments are never part of the AST). */
+
 function extractSpecifiers(source: string, absolute: string): string[] {
   const sourceFile = ts.createSourceFile(absolute, source, ts.ScriptTarget.Latest, false, scriptKindFor(absolute));
   const out: string[] = [];
@@ -381,7 +347,7 @@ function indexFile(absolute: string, index: WorkspaceIndex): IndexedFile {
   return { absolute, id: fileId(absolute), relative: displayPath(index.root, absolute), modules };
 }
 
-/** One pass over the workspace — every mode reads from this in-memory index. */
+
 function buildIndex(root: string): WorkspaceIndex {
   const notes: string[] = [];
   const rootReal = realpathSync.native(root);
@@ -404,9 +370,8 @@ function buildIndex(root: string): WorkspaceIndex {
   return index;
 }
 
-// ─── arguments ───────────────────────────────────────────────────────────────
 
-/** `target` + `targets`, merged in order without duplicates. Blank values count as absent. */
+
 function collectTargets(args: Record<string, unknown>): string[] {
   const out: string[] = [];
   const add = (value: string): void => {
@@ -435,7 +400,6 @@ function collectTargets(args: Record<string, unknown>): string[] {
   return out;
 }
 
-// ─── evaluation ──────────────────────────────────────────────────────────────
 
 function evaluateTarget(raw: string, absolute: string, index: WorkspaceIndex): TargetOutcome {
   const stats = statOrNull(absolute);
@@ -473,7 +437,6 @@ function evaluateTarget(raw: string, absolute: string, index: WorkspaceIndex): T
   return { raw, ok: true, matches, moduleCount: target.modules.size };
 }
 
-// ─── rendering ───────────────────────────────────────────────────────────────
 
 function renderTargetBlock(outcome: TargetOutcome): string {
   if (!outcome.ok) return `Error: ${outcome.error}`;
@@ -544,7 +507,6 @@ function renderWorkspaceMap(index: WorkspaceIndex): string {
   return lines.join('\n');
 }
 
-// ─── handler ─────────────────────────────────────────────────────────────────
 
 async function interlinkedTool(args: Record<string, unknown>, ctx: AgentToolContext): Promise<HarnessToolResult> {
   const rawTargets = collectTargets(args);

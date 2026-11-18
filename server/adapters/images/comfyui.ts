@@ -1,25 +1,4 @@
-/**
- * ComfyUI local adapter — workflow-based image generation.
- *
- * ComfyUI runs locally at http://127.0.0.1:8188 (no auth). Instead of
- * OpenAI's /images/generations, it accepts workflow JSON via POST /prompt,
- * returns a prompt_id, and results are polled via GET /history/{id} then
- * downloaded via GET /view.
- *
- * Model discovery scans /models/{folder} for checkpoints, diffusion_models,
- * and unet (legacy). Each model is tagged: "ckpt:name" uses
- * CheckpointLoaderSimple (bundled MODEL+CLIP+VAE); "diff:name" / "unet:name"
- * uses UNETLoader (MODEL only — CLIP and VAE are auto-detected from
- * /models/clip and /models/vae at submit time).
- *
- * Supported modes:
- *  - Text-to-Image: EmptyLatentImage → KSampler (denoise=1)
- *  - Image-to-Image: LoadImage → VAEEncode → KSampler (denoise<1)
- *
- * For diffusion models (Flux, SD3), the adapter auto-detects CLIP and VAE
- * files: Flux models pair with t5xxl + clip_l + ae; other diffusion models
- * fall back to the first available CLIP/VAE.
- */
+
 
 import { randomUUID } from 'node:crypto';
 
@@ -35,12 +14,12 @@ import type {
 } from './types.js';
 
 
-/** Strip trailing slashes; ComfyUI has no /v1 prefix. */
+
 function base(host: string): string {
   return host.replace(/\/+$/, '');
 }
 
-/** Parse model ID: "ckpt:filename" | "diff:filename" | "unet:filename" | "filename". */
+
 function parseModelId(model: string): { loader: 'checkpoint' | 'diffusion'; filename: string } {
   const colon = model.indexOf(':');
   if (colon > 0) {
@@ -53,7 +32,7 @@ function parseModelId(model: string): { loader: 'checkpoint' | 'diffusion'; file
   return { loader: 'checkpoint', filename: model };
 }
 
-/** Fetch JSON, return null on failure (non-OK or network error). */
+
 async function fetchJson<T>(url: string, opts?: RequestInit): Promise<T | null> {
   try {
     const res = await fetch(url, opts);
@@ -142,12 +121,12 @@ interface WorkflowParams {
   clipVae: ClipVae;
 }
 
-/** Detect Flux-family model → lower cfg, simple scheduler. */
+
 function isFluxFamily(filename: string): boolean {
   return /flux/i.test(filename);
 }
 
-/** Build the ComfyUI API-format workflow JSON. */
+
 function buildWorkflow(p: WorkflowParams): Record<string, { class_type: string; inputs: Record<string, unknown> }> {
   const { loader, filename } = parseModelId(p.model);
   const isFlux = isFluxFamily(filename);

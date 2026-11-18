@@ -5,7 +5,7 @@ interface ShortcutRow {
   label: string;
 }
 
-/** Shared with the Settings dialog's Keyboard tab — single source of truth. */
+
 export const SHORTCUT_GROUPS: { title: string; rows: ShortcutRow[] }[] = [
   {
     title: 'Global',
@@ -29,11 +29,7 @@ export const SHORTCUT_GROUPS: { title: string; rows: ShortcutRow[] }[] = [
   },
 ];
 
-/**
- * Keyboard shortcuts cheat-sheet. Lives inside the sidebar so the footer's
- * keyboard button and the global `?` key both open it; rendered through the
- * shared themed Modal (never a native browser dialog).
- */
+
 export function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   return (
     <Modal

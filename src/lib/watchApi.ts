@@ -1,6 +1,4 @@
-/**
- * watchApi.ts — typed helpers for /api/watch (Mobile Watching).
- */
+
 
 export interface WatchTarget {
   id: string;
@@ -61,7 +59,7 @@ export function fetchInstallProgress(): Promise<WatchInstallProgress> {
   return fetch('/api/watch/install-progress').then((res) => jsonOrThrow<WatchInstallProgress>(res));
 }
 
-/** Downloads the selected platform asset; server skips when already installed. */
+
 export function installWatch(target?: string): Promise<{ skipped: boolean; path: string }> {
   return fetch('/api/watch/install', {
     method: 'POST',
@@ -84,7 +82,7 @@ export function stopWatch(): Promise<{ stopped: boolean }> {
   );
 }
 
-/** SVG QR endpoint — use directly as an <img src>. */
+
 export function watchQrUrl(text: string): string {
   return `/api/watch/qr?text=${encodeURIComponent(text)}`;
 }

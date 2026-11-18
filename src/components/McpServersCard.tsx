@@ -16,15 +16,7 @@ import {
 } from '../lib/api';
 import { Tip, cx } from './ui';
 
-/**
- * MCP server manager inside Settings. Users register tool servers here —
- * a LOCAL one runs as a command the proxy spawns (stdio), a REMOTE one is
- * a Streamable HTTP endpoint with optional auth headers.
- *
- * Each row has a tools panel: the server's discovered tools with per-tool
- * on/off checkboxes. Disabled tools are filtered out of the catalogue the
- * model receives.
- */
+
 
 interface McpServer {
   id: string;
@@ -40,7 +32,7 @@ interface McpServer {
 
 type TestState = { ok: boolean; toolCount: number; error?: string };
 
-/** "KEY=VALUE" or "Key: Value" per line → object; blank lines ignored. */
+
 function parsePairBlock(raw: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const line of raw.split('\n')) {
@@ -69,11 +61,11 @@ export function McpServersCard() {
   });
   const [testStates, setTestStates] = useState<Record<string, TestState | 'testing'>>({});
   const [busy, setBusy] = useState(false);
-  /** Figma OAuth state — separate from the generic server list. */
+  
   const [figma, setFigma] = useState<FigmaAuthStatus | null>(null);
   const [figmaBusy, setFigmaBusy] = useState(false);
   const [figmaError, setFigmaError] = useState<string | null>(null);
-  /** Per-server tools panel: which are open, and their tool list. */
+  
   const [openPanels, setOpenPanels] = useState<Set<string>>(new Set());
   const [toolsByServer, setToolsByServer] = useState<Record<string, McpServerTool[] | 'loading'>>({});
 
@@ -125,7 +117,7 @@ export function McpServersCard() {
     }
   };
 
-  /** Opens (or closes) the per-server tools panel, loading the tool list. */
+  
   const togglePanel = async (id: string) => {
     setOpenPanels((prev) => {
       const next = new Set(prev);
@@ -144,7 +136,7 @@ export function McpServersCard() {
     }
   };
 
-  /** Flips one tool on/off: optimistically update, then persist the full list. */
+  
   const toggleTool = async (server: McpServer, toolName: string, enabled: boolean) => {
     const current = toolsByServer[server.id];
     if (!current || current === 'loading') return;
@@ -162,7 +154,7 @@ export function McpServersCard() {
     }
   };
 
-  /** Full OAuth round-trip: server opens Figma consent, resolves after tokens land. */
+  
   const handleFigmaConnect = async () => {
     if (figmaBusy) return;
     setFigmaBusy(true);
@@ -170,7 +162,6 @@ export function McpServersCard() {
     try {
       await connectFigma();
       setFigma(await getFigmaAuth());
-      // Register the Figma remote MCP server once so its tools appear in the list.
       if (!servers.some((server) => server.auth === 'figma')) {
         await addMcpServer({
           name: 'Figma',
@@ -201,7 +192,7 @@ export function McpServersCard() {
     }
   };
 
-  /** Registers the Figma desktop Dev Mode MCP server (no OAuth needed). */
+  
   const handleFigmaDesktop = async () => {
     if (figmaBusy) return;
     setFigmaBusy(true);
@@ -222,7 +213,7 @@ export function McpServersCard() {
     }
   };
 
-  /** PAT path — works on the free Starter plan via Figma's REST API. */
+  
   const [figmaPat, setFigmaPat] = useState('');
   const handleFigmaPat = async () => {
     if (figmaBusy || !figmaPat.trim()) return;

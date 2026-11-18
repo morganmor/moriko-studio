@@ -1,21 +1,4 @@
-/**
- * MORIKO SERVER SUPERVISOR — the resilience layer between `pnpm dev` and the
- * model proxy.
- *
- * Why this exists: the server IS the thing the agent edits. Under plain
- * `tsx watch`, every edited server file restarted the proxy instantly and
- * tore apart any SSE stream mid-generation — the agent killed its own
- * conversation by working on the harness.
- *
- * Contract with the server:
- *   - exit code 75  → graceful reload (harness-reload gate passed, streams
- *     drained) → restart IMMEDIATELY.
- *   - any other exit → crash → restart with backoff (1s → 10s), reset after
- *     30s of healthy uptime.
- *
- * File changes deliberately do NOT restart the server anymore. The agent (or
- * a human via POST /api/agent/harness-reload) decides when changes go live.
- */
+
 
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -44,9 +27,6 @@ let lastStartAt = 0;
 
 function start() {
   lastStartAt = Date.now();
-  // 2 GB was NOT headroom: one full LanguageService Program build approaches
-  // it on its own. 4 GB keeps the default limit from being the crash site.
-  // Override with MORIKO_MAX_OLD_SPACE (in MB) if a smaller box needs it.
   const heapMb = Number(process.env.MORIKO_MAX_OLD_SPACE ?? 4096);
   const heapArg = Number.isFinite(heapMb) && heapMb > 0 ? `--max-old-space-size=${Math.round(heapMb)}` : null;
   const nodeArgs = heapArg ? [heapArg, tsxCli, 'server/index.ts'] : [tsxCli, 'server/index.ts'];

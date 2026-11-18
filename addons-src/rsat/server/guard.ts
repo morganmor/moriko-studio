@@ -1,16 +1,4 @@
-/**
- * RSA/T scope guard (R3) — two hooks:
- *
- *  tool.call  → STRICT mode denies out-of-scope edits by non-holders here
- *               (with anti-runaway escalation after repeated strikes).
- *  tool.result → ADVISORY mode appends the note to the tool result text
- *               (A-19 mutation channel) so the model SEES the scope warning
- *               without being blocked.
- *
- * Honest limitation (stated in the board + README): shell tools
- * (agent__run/git/exec/task_*) touch UNKNOWN paths — the guard cannot fence
- * them; the ledger still records every observable write.
- */
+
 
 import { agentBySession } from './agents.js';
 import { touchedPathsOf } from './platform.js';
@@ -25,9 +13,9 @@ const WRITE_TOOLS = new Set([
   'agent__layout_edit',
 ]);
 
-/** sessionId → recent out-of-scope strikes (anti-runaway). */
+
 const strikes = new Map();
-/** sessionId+tool → advisory note waiting for the matching tool.result. */
+
 const pendingNotes = new Map();
 const STRIKE_WINDOW_MS = 10 * 60 * 1000;
 const STRIKE_LIMIT = 5;
@@ -44,7 +32,7 @@ function clearStrikes(sessionId) {
   strikes.delete(sessionId);
 }
 
-/** Compute the scope violation notes for one write call (shared by both hooks). */
+
 function scopeNotes(api, sessionId, tool, args) {
   const doc = loadDoc(api, sessionId);
   if (!doc || doc.prd.status !== 'running') return [];
@@ -67,7 +55,7 @@ function scopeNotes(api, sessionId, tool, args) {
   return notes;
 }
 
-/** Compute architectural blast-radius & layer violation advisories for a write. */
+
 function archImpactNotes(api, sessionId, tool, args) {
   const touched = touchedPathsOf(api, tool, args ?? {});
   const known = (touched ?? []).filter((t) => !t.unknown && (t.path || t.from));
@@ -90,7 +78,7 @@ function archImpactNotes(api, sessionId, tool, args) {
   return advisories;
 }
 
-/** tool.call hook — strict denies + anti-runaway. */
+
 export function createGuard(api) {
   return async function guardCall($, event, next) {
     const tool = event?.tool ?? '';
@@ -127,7 +115,7 @@ export function createGuard(api) {
   };
 }
 
-/** tool.result hook — advisory notes ride the A-19 mutation channel. */
+
 export function createGuardResult(api) {
   return async function guardResult($, event) {
     const tool = event?.tool ?? '';

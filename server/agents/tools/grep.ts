@@ -1,12 +1,4 @@
-/**
- * agent__grep — search file contents across the active workspace with a
- * regular expression. Returns "path:line: text" matches; skips node_modules/
- * .git and binary or huge files.
- *
- * Supports: multi-pattern (patterns array), multi-glob (globs array), multi-
- * subpath (subpaths array), context lines, wholeLines (receipt mode), sort
- * "density", pagination (continueFrom), and per-file match cap.
- */
+
 import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
@@ -14,7 +6,7 @@ import {
   str, num, bool,
   compilePattern, globToRegExp, truncateOutput,
   requireWorkspace, resolveWithPermission,
-  MAX_MATCHES, MAX_MATCH_FILES, MAX_SCAN_BYTES,
+  MAX_SCAN_BYTES,
   MAX_LINE_CHARS, MAX_MATCHES_PER_FILE,
 } from './shared.js';
 import { walkFiles } from './list.js';
@@ -22,7 +14,7 @@ import { recordRead } from '../read-policy.js';
 import { sha256 } from '../edit-diagnostics.js';
 import { enclosingSymbol } from '../ts-ast.js';
 
-/** Own budget for this tool — the shared constant was removed (2026-10-22). */
+
 const GREP_BUDGET_CHARS = 48_000;
 
 const GENERIC_KEYWORDS = new Set([
@@ -41,12 +33,15 @@ function isBroadPattern(source: string): boolean {
 const ARG_ALIASES: Record<string, string> = {
   path: 'subpath', directory: 'subpath', dir: 'subpath',
   query: 'pattern', regex: 'pattern',
-  max_results: 'maxResults', case_sensitive: 'caseSensitive',
+  max_results: 'maxMatches', maxResults: 'maxMatches',
+  max_matches: 'maxMatches',
+  max_files: 'maxFiles',
+  case_sensitive: 'caseSensitive',
   whole_lines: 'wholeLines', continue_from: 'continueFrom',
 };
 const ALLOWED_ARGS = new Set([
   'pattern', 'patterns', 'glob', 'globs', 'subpath', 'subpaths',
-  'caseSensitive', 'maxResults', 'context', 'wholeLines', 'sort', 'continueFrom', 'enclosing',
+  'caseSensitive', 'maxMatches', 'maxFiles', 'context', 'wholeLines', 'sort', 'continueFrom', 'enclosing',
 ]);
 
 function normalizeArgs(raw: Record<string, unknown>): {
@@ -66,11 +61,7 @@ function normalizeArgs(raw: Record<string, unknown>): {
   return { args, unknown, aliasesUsed };
 }
 
-/**
- * P0b — when a subpath doesn't exist, walk the workspace root once and find
- * files whose basename matches or starts with the input's basename. Cheap
- * heuristic that catches typos and wrong extensions.
- */
+
 function suggestPaths(input: string, ctx?: AgentToolContext): string[] {
   let root: string;
   try { root = requireWorkspace(ctx).root; } catch { return []; }
@@ -154,7 +145,7 @@ export async function grepTool(rawArgs: Record<string, unknown>, ctx: AgentToolC
       };
     }
     if (stats.isFile()) {
-      explicitFiles.push({ displayPath: resolved.relative, absolute: resolved.absolute });
+      explicitFiles.push({ displayPath: resolved.relative.replace(/\\/g, '/'), absolute: resolved.absolute });
     } else {
       roots.push({ absolute: resolved.absolute, relative: resolved.relative });
     }
@@ -163,7 +154,6 @@ export async function grepTool(rawArgs: Record<string, unknown>, ctx: AgentToolC
     roots.push({ absolute: requireWorkspace(ctx).root, relative: '.' });
   }
 
-  const maxResults = Math.min(Math.max(num(args, 'maxResults') ?? MAX_MATCHES, 1), MAX_MATCHES);
   const context = Math.min(Math.max(Math.trunc(num(args, 'context') ?? 0), 0), 10);
   const wholeLines = bool(args, 'wholeLines');
   const receiptMode = context > 0 || wholeLines;
@@ -186,24 +176,78 @@ export async function grepTool(rawArgs: Record<string, unknown>, ctx: AgentToolC
   }
 
   const fileOrder: Array<{ displayPath: string; absolute: string }> = [];
-  const seenPaths = new Set<string>();
+  const seenAbsolute = new Set<string>();
+  const absoluteKey = (absolute: string): string =>
+    path.resolve(absolute).replace(/\\/g, '/').toLowerCase();
   let walkTruncated = false;
+  let totalWalkedFiles = 0;
   for (const root of roots) {
     const walked = walkFiles(root.absolute);
     walkTruncated = walkTruncated || walked.truncated;
+    totalWalkedFiles += walked.files.length;
+    const rootPosix = root.relative.replace(/\\/g, '/');
     for (const file of walked.files) {
-      if (globRes.length > 0 && !globRes.some((re) => re.test(file) || re.test(path.basename(file)))) continue;
-      const displayPath = root.relative === '.' ? file : `${root.relative}/${file}`;
-      if (seenPaths.has(displayPath)) continue;
-      seenPaths.add(displayPath);
+      const filePosix = file.replace(/\\/g, '/');
+      if (globRes.length > 0 && !globRes.some((re) => re.test(filePosix) || re.test(path.basename(filePosix)))) continue;
+      const displayPath = rootPosix === '.' ? filePosix : `${rootPosix}/${filePosix}`;
+      const key = absoluteKey(path.join(root.absolute, file));
+      if (seenAbsolute.has(key)) continue;
+      seenAbsolute.add(key);
       fileOrder.push({ displayPath, absolute: path.join(root.absolute, file) });
     }
   }
 
   for (const ef of explicitFiles) {
-    if (seenPaths.has(ef.displayPath)) continue;
-    seenPaths.add(ef.displayPath);
+    const key = absoluteKey(ef.absolute);
+    if (seenAbsolute.has(key)) continue;
+    seenAbsolute.add(key);
     fileOrder.push(ef);
+  }
+
+  if (globList.length > 0 && totalWalkedFiles > 0 && fileOrder.length === 0) {
+    return {
+      ok: false,
+      isError: true,
+      errorCode: 'glob_matched_zero_files',
+      text:
+        `grep: glob filter ${globList.map((g) => `"${g}"`).join(', ')} matched 0 of ${totalWalkedFiles} file(s) in scope ` +
+        `(${subpaths.length > 0 ? subpaths.join(', ') : 'workspace root'}). ` +
+        'The glob is wrong, not the code base — brace expansion is supported (`**/*.{ts,tsx}`), adjust the filter or subpath.',
+    };
+  }
+
+  const clampBudget = (value: number | undefined, fallback: number, max: number): number =>
+    Math.min(Math.max(Math.trunc(value ?? fallback), 1), max);
+  const requestedMatches = num(args, 'maxMatches');
+  const requestedFiles = num(args, 'maxFiles');
+  const walkedDirs = new Set(fileOrder.map((entry) => path.posix.dirname(entry.displayPath)));
+  const flatFolder = walkedDirs.size <= 1;
+  let mode: 'single_file' | 'multi_file' | 'single_folder' | 'multi_folder';
+  let maxResults: number;
+  let maxFilesCap: number;
+  let perFileCap: number;
+  if (roots.length === 0 && explicitFiles.length === 1) {
+    mode = 'single_file';
+    maxResults = clampBudget(requestedMatches, 200, 200);
+    maxFilesCap = 1;
+    perFileCap = maxResults;
+  } else if (roots.length === 0 && explicitFiles.length > 1) {
+    mode = 'multi_file';
+    perFileCap = clampBudget(requestedMatches, 100, 100);
+    maxFilesCap = explicitFiles.length;
+    maxResults = perFileCap * explicitFiles.length;
+  } else if (
+    roots.length === 1 && roots[0].relative !== '.' && explicitFiles.length === 0 && flatFolder
+  ) {
+    mode = 'single_folder';
+    maxFilesCap = clampBudget(requestedFiles, 10, 10);
+    perFileCap = clampBudget(requestedMatches, 20, 20);
+    maxResults = perFileCap;
+  } else {
+    mode = 'multi_folder';
+    maxFilesCap = clampBudget(requestedFiles, 10, 10);
+    maxResults = clampBudget(requestedMatches, 100, 100);
+    perFileCap = Math.min(MAX_MATCHES_PER_FILE, maxResults);
   }
 
   interface FileScan {
@@ -212,7 +256,7 @@ export async function grepTool(rawArgs: Record<string, unknown>, ctx: AgentToolC
     content: string;
     view: string[];
     mtimeMs: number;
-    /** 1-based line numbers with the pattern indexes that matched. */
+    
     hits: Array<{ lineNo: number; matched: number[] }>;
     perFileCapHit: boolean;
   }
@@ -228,6 +272,7 @@ export async function grepTool(rawArgs: Record<string, unknown>, ctx: AgentToolC
   let stopFileIdx = -1;
   let stopLine = 0;
   let maxStopped = false;
+  let fileCapStopped = false;
 
   const probeTokens = [...new Set(
     patterns.join(' ')
@@ -242,11 +287,13 @@ export async function grepTool(rawArgs: Record<string, unknown>, ctx: AgentToolC
     catch {  }
   }
 
+  const fileCapGated = mode === 'single_folder' || mode === 'multi_folder';
   scan: for (let fileIdx = resumeFileIdx; fileIdx < fileOrder.length; fileIdx += 1) {
-    if (totalMatches >= maxResults || matchedFiles.size >= MAX_MATCH_FILES) {
+    if (totalMatches >= maxResults || (fileCapGated && matchedFiles.size >= maxFilesCap)) {
       stopFileIdx = fileIdx;
       stopLine = 0;
       maxStopped = totalMatches >= maxResults;
+      if (!maxStopped) fileCapStopped = true;
       break;
     }
     const target = fileOrder[fileIdx];
@@ -278,7 +325,7 @@ export async function grepTool(rawArgs: Record<string, unknown>, ctx: AgentToolC
     let perFileCapHit = false;
     const startIdx = fileIdx === resumeFileIdx && resumeLine > 0 ? resumeLine - 1 : 0;
     for (let index = startIdx; index < view.length; index += 1) {
-      if (hits.length >= MAX_MATCHES_PER_FILE) {
+      if (hits.length >= perFileCap) {
         perFileCapHit = true;
         break;
       }
@@ -309,12 +356,13 @@ export async function grepTool(rawArgs: Record<string, unknown>, ctx: AgentToolC
       }
       hits.push({ lineNo: index + 1, matched });
     }
+    if (hits.length > 0) {
+      if (perFileCapHit) perFileTruncated.push(target.displayPath);
+      matchedFiles.add(target.displayPath);
+      totalMatches += hits.length;
+      scans.push({ displayPath: target.displayPath, absolute: target.absolute, content, view, mtimeMs, hits, perFileCapHit });
+    }
     if (stopFileIdx >= 0) break scan;
-    if (hits.length === 0) continue;
-    if (perFileCapHit) perFileTruncated.push(target.displayPath);
-    matchedFiles.add(target.displayPath);
-    totalMatches += hits.length;
-    scans.push({ displayPath: target.displayPath, absolute: target.absolute, content, view, mtimeMs, hits, perFileCapHit });
   }
 
   if (density) {
@@ -326,7 +374,7 @@ export async function grepTool(rawArgs: Record<string, unknown>, ctx: AgentToolC
   let budgetStopped = false;
   let receiptCount = 0;
   const receiptFooters: string[] = [];
-  /** FIX 1: never silently cut a line again — the ellipsis is the contract. */
+  
   const flatLine = (displayPath: string, lineNo: number, text: string): string => {
     const trimmed = text.trim();
     const cut = trimmed.length > MAX_LINE_CHARS;
@@ -339,10 +387,11 @@ export async function grepTool(rawArgs: Record<string, unknown>, ctx: AgentToolC
   const enclosingFor = (scan: FileScan, lineNo: number): string | null => {
     if (!wantEnclosing) return null;
     if (!/\.(ts|tsx|js|jsx|mts|cts)$/.test(scan.displayPath)) return null;
-    let sym = enclosingCache.get(scan.displayPath);
+    const cacheKey = `${scan.displayPath}:${lineNo}`;
+    let sym = enclosingCache.get(cacheKey);
     if (sym === undefined) {
       sym = enclosingSymbol(scan.content, scan.displayPath, lineNo);
-      enclosingCache.set(scan.displayPath, sym);
+      enclosingCache.set(cacheKey, sym);
     }
     return sym;
   };
@@ -405,8 +454,9 @@ export async function grepTool(rawArgs: Record<string, unknown>, ctx: AgentToolC
           windows.push({ from, to, hits: 1 });
         }
       }
+      let firstReceipt: { from: number; to: number; rev: number } | null = null;
       let lastReceipt: { from: number; to: number; rev: number } | null = null;
-      for (const window of windows.slice(0, 12)) {
+      for (const window of windows) {
         if (budgetStopped) break;
         const mergedNote = window.hits > 1 ? ` (${window.hits} hits merged)` : '';
         const header = `── ${scan.displayPath} · lines ${window.from}–${window.to}${mergedNote}`;
@@ -426,12 +476,14 @@ export async function grepTool(rawArgs: Record<string, unknown>, ctx: AgentToolC
           budget -= row.length + 1;
         }
         const receiptEntry = recordRead(ctx.sessionId, scan.absolute, scan.content, scan.mtimeMs, window.from, window.to);
-        lastReceipt = { from: window.from, to: window.to, rev: receiptEntry?.rev ?? 1 };
+        const receipt = { from: window.from, to: window.to, rev: receiptEntry?.rev ?? 1 };
+        if (!firstReceipt) firstReceipt = receipt;
+        lastReceipt = receipt;
         receiptCount += 1;
       }
       receiptFooters.push(
-        `[${scan.displayPath} | sha256:${sha256(scan.content).slice(0, 12)} | ${windows.length} window(s)${windows.length > 12 ? ` (showing 12 of ${windows.length})` : ''}; receipt retained for lines ` +
-          `${lastReceipt ? `${lastReceipt.from}–${lastReceipt.to}` : '?'} (read#${lastReceipt?.rev ?? 1})]`,
+        `[${scan.displayPath} | sha256:${sha256(scan.content).slice(0, 12)} | ${windows.length} window(s); receipts retained for lines ` +
+          `${firstReceipt ? `${firstReceipt.from}–${lastReceipt?.to}` : '?'} (read#${lastReceipt?.rev ?? 1})]`,
       );
     }
   }
@@ -482,8 +534,8 @@ export async function grepTool(rawArgs: Record<string, unknown>, ctx: AgentToolC
   }
 
   const notes: string[] = [];
-  if (maxStopped) notes.push(`stopped at ${maxResults} matches`);
-  if (matchedFiles.size >= MAX_MATCH_FILES) notes.push(`stopped at ${MAX_MATCH_FILES} files`);
+  if (maxStopped) notes.push(`stopped at ${maxResults} matches (${mode} budget)`);
+  if (fileCapStopped) notes.push(`stopped at ${maxFilesCap} files (${mode} budget)`);
   if (walkTruncated) notes.push('file walk truncated');
   if (binarySkipped > 0) {
     notes.push(
@@ -499,7 +551,7 @@ export async function grepTool(rawArgs: Record<string, unknown>, ctx: AgentToolC
   if (perFileTruncated.length > 0) {
     const names = perFileTruncated.slice(0, 6).join(', ');
     notes.push(
-      `${perFileTruncated.length} file(s) truncated at ${MAX_MATCHES_PER_FILE} matches: ${names}${perFileTruncated.length > 6 ? ', …' : ''} — narrow the pattern for those files`,
+      `${perFileTruncated.length} file(s) truncated at ${perFileCap} matches: ${names}${perFileTruncated.length > 6 ? ', …' : ''} — narrow the pattern for those files`,
     );
   }
   if (scans.length >= 2) {

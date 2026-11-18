@@ -1,13 +1,4 @@
-/**
- * agent__multi_edit — atomic multi-edit: apply a batch of { oldString,
- * newString, replaceAll? } replacements to ONE file, all-or-nothing. Every
- * oldString is verified sequentially (each against the result of the
- * previous); NOTHING is written unless the whole batch validates — one
- * snapshot, one diff.
- *
- * Same safety posture as edit_file (read-before-edit, optimistic concurrency,
- * EOL preservation, syntax-guard rollback) via the shared edit-core.
- */
+
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, bool } from './shared.js';
 import {

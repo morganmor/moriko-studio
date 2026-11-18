@@ -1,7 +1,4 @@
-/**
- * Moco Canvas — panel RPC (P1). The panel talks to these; the actor is the
- * USER, so user edits and agent edits land in the same op log (plan §12).
- */
+
 
 import { applyBatch, type CanvasOp } from '../client/ops.ts';
 import { buildDelta, buildReadout, inspectNode, outline } from '../client/readout.ts';
@@ -34,7 +31,7 @@ function pickDocId(ws: ReturnType<typeof resolveWorkspace>, requested: unknown):
   return docs.length ? docs[0].id : null;
 }
 
-/** `state` — docs + the active scene + the op log tail. */
+
 export function rpcState(api: any, sessionId: string | undefined, body: Record<string, unknown>) {
   const ws = resolveWorkspace(api, sessionId);
   const docId = pickDocId(ws, body?.doc);
@@ -50,7 +47,7 @@ export function rpcState(api: any, sessionId: string | undefined, body: Record<s
   return state;
 }
 
-/** `apply` — one batch from the panel (drag, resize, inspector buttons). */
+
 export async function rpcApply(api: any, sessionId: string | undefined, body: Record<string, unknown>) {
   const ws = resolveWorkspace(api, sessionId);
   const docId = sanitizeDocId(String(body?.doc ?? ''));
@@ -76,12 +73,7 @@ export async function rpcApply(api: any, sessionId: string | undefined, body: Re
   };
 }
 
-/**
- * P3 co-edit (plan §12): user edits reach the agent at its next turn as a
- * compact delta line ("USER moved hero.cta A5 → A4"), deduped by rev via the
- * inject `key`. Locked nodes never get here — the engine rejects agent ops on
- * them, so the agent is only ever INFORMED, never overwrites.
- */
+
 function notifyAgentsOfUserEdit(api: any, docId: string, committed: { scene: { rev: number }; outcome: { notes: string[]; changed: string[] } }) {
   try {
     const inject = api?.sessions?.inject;
@@ -95,11 +87,10 @@ function notifyAgentsOfUserEdit(api: any, docId: string, committed: { scene: { r
       ttlMs: 10 * 60_000,
     });
   } catch {
-    // Injection is best-effort co-edit sugar — a panel edit must never fail.
   }
 }
 
-/** `history` — undo/redo, persisted in the log so it survives a restart. */
+
 export async function rpcHistory(api: any, sessionId: string | undefined, body: Record<string, unknown>) {
   const ws = resolveWorkspace(api, sessionId);
   const docId = sanitizeDocId(String(body?.doc ?? ''));
@@ -109,7 +100,7 @@ export async function rpcHistory(api: any, sessionId: string | undefined, body: 
   return { ok: result.ok, scene: result.scene, note: result.note };
 }
 
-/** `new` — create/reset a document from a template. */
+
 export async function rpcNew(api: any, sessionId: string | undefined, body: Record<string, unknown>) {
   const ws = resolveWorkspace(api, sessionId);
   const docId = sanitizeDocId(String(body?.doc ?? 'landing'));
@@ -120,7 +111,7 @@ export async function rpcNew(api: any, sessionId: string | undefined, body: Reco
   return { ok: true, doc: docId, scene: created.scene };
 }
 
-/** `inspect` — node detail or full outline, for the panel's tree/drawer. */
+
 export function rpcInspect(api: any, sessionId: string | undefined, body: Record<string, unknown>) {
   const ws = resolveWorkspace(api, sessionId);
   const docId = sanitizeDocId(String(body?.doc ?? ''));
@@ -133,7 +124,7 @@ export function rpcInspect(api: any, sessionId: string | undefined, body: Record
   };
 }
 
-/** `preview` — dry-run a batch (the panel shows the predicted delta). */
+
 export function rpcPreview(api: any, sessionId: string | undefined, body: Record<string, unknown>) {
   const ws = resolveWorkspace(api, sessionId);
   const docId = sanitizeDocId(String(body?.doc ?? ''));

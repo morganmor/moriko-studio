@@ -1,14 +1,4 @@
-/**
- * agent__search — semantic (BM25) search across the active workspace.
- *
- * Unlike grep (exact regex), this finds files by MEANING: describe what you
- * are looking for in natural language and get ranked file:line pointers.
- * The index covers text-like files (code, markdown, config); binaries and
- * generated dirs are excluded. First call builds the index (a few seconds),
- * then it is cached; every edit_file / vault_restore
- * invalidates it so the next query reflects your changes. Follow each result
- * with read_file for the full context.
- */
+
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, num, truncateOutput } from './shared.js';
 import { searchWorkspace } from '../search.js';

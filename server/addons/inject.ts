@@ -1,16 +1,4 @@
-/**
- * Session message injection (Addon v2, A3, Q2 = system-injection block).
- *
- * sessions.inject(target, msg) queues a short notice for one, many, or all
- * active sessions. Delivery for a RUNNING session happens at the next round
- * boundary — the adapter's steer seam (between executeCalls and the next
- * model fetch) drains the queue as an ordinary user-role message block, the
- * same channel steers use. For an IDLE session the message is delivered at
- * the next turn start.
- *
- * Idempotency: `msg.key` prevents duplicate delivery. Rate limit: 20
- * injections/minute/addon.
- */
+
 
 import { listSessions, isSessionRunning } from '../agents/sessionRegistry.js';
 import { applyTurnPatches } from '../conversationStore.js';
@@ -21,11 +9,11 @@ export type InjectLevel = 'info' | 'warn' | 'block' | 'event';
 export interface InjectMessage {
   text: string;
   level?: InjectLevel;
-  /** Idempotency key — a message with the same key is delivered once. */
+  
   key?: string;
-  /** Which addon is speaking (shown to the user). */
+  
   addonId: string;
-  /** ms; queued-not-running messages expire (default 10 min). */
+  
   ttlMs?: number;
 }
 
@@ -94,8 +82,7 @@ export function injectMessage(
   return { delivered: 0, queued, sessions: targets };
 }
 
-/** The adapter seam: drain everything queued for a session. Returns entries
- *  in order; expired entries (TTL, session not running) are dropped. */
+
 export function drainInjections(sessionId: string | undefined): QueueEntry[] {
   if (!sessionId) return [];
   const list = queues.get(sessionId);
@@ -117,7 +104,7 @@ export function drainInjections(sessionId: string | undefined): QueueEntry[] {
   return out;
 }
 
-/** Turn-start delivery for idle sessions (called at stream start). */
+
 export function pendingInjections(sessionId: string | undefined): QueueEntry[] {
   return drainInjections(sessionId);
 }
@@ -126,25 +113,14 @@ export function isInjectedSessionRunning(sessionId: string): boolean {
   return isSessionRunning(sessionId);
 }
 
-/** Render one entry as the user-visible injection block text. */
+
 export function injectionText(entry: QueueEntry): string {
   const level = entry.level ?? 'info';
   const tag = level === 'warn' ? '[warn]' : level === 'block' ? '[block]' : level === 'event' ? '[event]' : '[info]';
   return `${tag} ${entry.text}`;
 }
 
-/**
- * HARNESS-EVENT emitter (per-session, additive over the queue system).
- *
- * Unlike ordinary injections (which imitate a user turn), an EVENT is its own
- * first-class channel: it is persisted as a `kind: 'harness-event'` turn in
- * THE TARGET CONVERSATION ONLY (never broadcast — events belong to the session
- * that triggered them), and announced live via the bus topic 'harness:event'
- * so an open client appends it immediately, even while the session is idle.
- * The context build (compaction wire rebuild) maps event turns to labeled
- * user-role blocks, so the model sees them on the next round without them
- * polluting the visible user message stream.
- */
+
 export function emitHarnessEvent(
   conversationId: string,
   msg: { text: string; level?: Exclude<InjectLevel, 'event'>; key?: string; addonId: string },

@@ -1,15 +1,7 @@
 import { memo, useEffect, useState } from 'react';
 import { Check, Copy } from './icons';
 
-/**
- * P4: THE WHOLE MARKDOWN STACK is lazy now. The audit measured the
- * react-markdown + remark-gfm + remark-math + unified chain at ~770 KB on the
- * boot waterfall — parsed on the main thread during TBT even though most
- * threads only render it after the first model reply arrives. This module now
- * ships a CHEAP PLAIN-TEXT fallback (whitespace-pre-wrap paragraph) and swaps
- * to the real renderer when the chunk lands. KaTeX rides its own chunk on top
- * (only for messages that contain math — see the probe below).
- */
+
 type MarkdownModule = {
   default: typeof import('react-markdown').default;
   remarkGfm: typeof import('remark-gfm').default;
@@ -18,7 +10,7 @@ type MarkdownModule = {
 
 type KatexPlugin = typeof import('rehype-katex').default;
 
-/** Module-level cache: the chain loads ONCE for the whole app, not per row. */
+
 let markdownModule: MarkdownModule | null = null;
 let markdownLoading: Promise<MarkdownModule> | null = null;
 
@@ -40,25 +32,11 @@ function loadMarkdown(): Promise<MarkdownModule> {
   return markdownLoading;
 }
 
-/** Cheap "this message probably contains math" probe: $..$, $$..$$, \(..\) or \[..\]. */
+
 const MATH_HINT = /\$\$[\s\S]+?\$\$|\$[^$\n]+\$|\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\]/;
 
-/**
- * Markdown renderer for model output.
- *
- * GFM for tables/strikethrough, KaTeX for math. Raw HTML is intentionally not
- * enabled: model output is untrusted input, and `rehype-raw` would make it
- * scriptable.
- */
-/**
- * SOFT-BREAK PRESERVATION for user-authored text: Shift+Enter in the composer
- * writes single newlines, which CommonMark folds into a space — a multi-line
- * user message rendered as one run-on paragraph (the reported "baris hilang"
- * bug). Converting each single newline into a hard break (two trailing
- * spaces) keeps the writer's exact line structure. Used ONLY on user/steer
- * bubbles; model output keeps standard CommonMark. Fenced code is untouched
- * so copied code stays verbatim.
- */
+
+
 function softBreaksToHard(text: string): string {
   if (!text.includes('\n')) return text;
   return text
@@ -117,8 +95,7 @@ export const Markdown = memo(function Markdown({ content, breakLines, className 
   );
 });
 
-/** DESIGN-1 canvas render: tokenizer ringan — komentar/string/tag/angka/keyword
- *  → span .tk-c/.tk-s/.tk-t/.tk-n/.tk-k (palet sudah ada di index.css). */
+
 const HL_KEYWORDS = 'const|let|var|function|return|if|else|for|while|class|new|import|from|export|async|await|true|false|null|undefined|def|this';
 const HL_RE = new RegExp(
   '(\\/\\*[\\s\\S]*?\\*\\/|\\/\\/[^\\n]*)' +
@@ -145,7 +122,7 @@ function highlightCode(code: string): React.ReactNode[] {
   return nodes;
 }
 
-/** Kartu blok kode ala design: header bahasa + Copy + highlighted body. */
+
 function CodeBlock({ children }: { children: React.ReactNode }) {
   const [copied, setCopied] = useState(false);
 
@@ -190,7 +167,7 @@ function CodeBlock({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** Recursively flattens a React node tree into its plain text. */
+
 function extractText(node: React.ReactNode): string {
   if (node === null || node === undefined || typeof node === 'boolean') return '';
   if (typeof node === 'string' || typeof node === 'number') return String(node);

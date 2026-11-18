@@ -1,41 +1,30 @@
-/**
- * SERVER-SIDE TURN MIRROR — the store's own writer for an in-flight turn.
- *
- * THE BUG THIS KILLS: the conversation record's live turn was written by the
- * CLIENT ONLY. The /api/conversations/sync patch channel is fed by the
- * streaming tab's reducer — when that tab is frozen, closed, or its re-attach
- * budget ran out, nobody pushed the run's output anywhere durable: the proxy
- * finished the work (goals done, journal complete) while every reader — any
- * refresh, any second browser — saw the pre-run thread. The mirror closes
- * that hole at the source: the route that EXECUTES the run folds the same
- * StreamEvents into a turn and patches the store itself, on a cadence, plus a
- * final flush in the run's finally. The record is now current server-side no
- * matter what any client does.
- *
- * WHY A REDUCER DUPLICATE IS UNAVOIDABLE HERE: the client's reducer is fused
- * with browser side-effects (rAF flushes, permission cards, panel opening).
- * The mirror folds ONLY the persisted shape — content, reasoning, segments,
- * injections, steers, usage, finishReason, error — which is exactly what the
- * patch channel replaces by turn id. The turn id itself is the shared
- * contract: the client sends `assistantTurnId`, the server echoes it on the
- * stream_id frame (see index.ts), so this mirror, the originating tab, and
- * every re-attaching consumer address ONE turn and converge by replace.
- *
- * WHOSE FLUSH WINS: mid-run, both writers replace by id — the mirror's
- * cadence (~1.5s) and the client's sync debounce interleave harmlessly. At
- * run end the GUARD is terminal-state: if the store's turn already carries
- * usage / finishReason / error, the client's (richer) flush landed, and the
- * mirror stands down. A dead client's turn has none of those, so the mirror's
- * final flush is the truth that survives.
- */
+
 import type { StreamEvent } from './contracts.js';
-import { applyTurnPatches, getStoredConversation } from './conversationStore.js';
+import { applyTurnPatches, getStoredConversation, setStoredLiveContext } from './conversationStore.js';
 import { recordUsage } from './usageLedger.js';
 
-/** How often a live run's mirror flushes into the store (cadence, not per token). */
+
 export const MIRROR_FLUSH_MS = 1_500;
 
-/** Structural shape the mirror owns — the persisted assistant turn's fields. */
+export interface MirrorLiveContext {
+  promptTokens: number;
+  completionTokens: number;
+  addedTokens: number;
+  liveContextTokens: number;
+  contextLimit: number | null;
+  ratio: number | null;
+  buckets?: {
+    systemTokens: number;
+    toolsTokens: number;
+    inputTokens: number;
+    outputTokens: number;
+    reasoningTokens: number;
+    totalTokens: number;
+  };
+  at: number;
+}
+
+
 export interface MirrorTurn {
   id: string;
   role: 'assistant';
@@ -52,11 +41,23 @@ export interface MirrorTurn {
     completionTokens?: number;
     totalTokens?: number;
     cacheReadTokens?: number;
+    lastPromptTokens?: number;
+    lastCompletionTokens?: number;
+    lastReasoningTokens?: number;
+    lastBuckets?: {
+      systemTokens: number;
+      toolsTokens: number;
+      inputTokens: number;
+      outputTokens: number;
+      reasoningTokens: number;
+      totalTokens: number;
+    };
   } | null;
   error: string | null;
   finishReason: string | null;
-  /** True once a done/error event (or the run's finish) marked this turn terminal. */
+  
   terminal: boolean;
+  liveContext?: MirrorLiveContext;
 }
 
 export type MirrorSegment =
@@ -72,11 +73,7 @@ export type MirrorSegment =
       ok?: boolean;
       diff?: string;
       toolImages?: Array<{ mime: string; dataUrl?: string; dataRef?: { hash: string; mime: string; byteSize: number } }>;
-      /**
-       * VISUAL v2: `replaces` = edit-in-place (the newest render_visual
-       * segment for this id is the live card's payload; earlier segments are
-       * the audit trail). `variants` = 1..3 frontend-preview candidates.
-       */
+      
       visual?: {
         id: string;
         html?: string;
@@ -113,16 +110,7 @@ export function createMirrorTurn(options: {
   };
 }
 
-/**
- * Fold ONE stream event into the mirror state. Pure: mutates only the given
- * state object, touches nothing else — this is the testable core.
- *
- * `suppressText` matches the client's OUTPUT BLOCK policy (probation Tier 4+):
- * the model's text must not land in the visible transcript while frozen, so
- * the mirrored record must not hold it either — a second browser reading the
- * store must see what the owning tab's freeze card shows (nothing), not the
- * suppressed text itself.
- */
+
 export function applyMirrorEvent(
   state: MirrorTurn,
   event: StreamEvent,
@@ -193,12 +181,51 @@ export function applyMirrorEvent(
         });
       }
       break;
+    case 'context_telemetry':
+      state.liveContext = {
+        promptTokens: event.promptTokens ?? 0,
+        completionTokens: event.completionTokens ?? 0,
+        addedTokens: 0,
+        liveContextTokens: event.liveContextTokens ?? 0,
+        contextLimit: event.contextLimit ?? null,
+        ratio: event.ratio ?? null,
+        buckets: state.liveContext?.buckets,
+        at: Date.now(),
+      };
+      break;
+    case 'context_live': {
+      const buckets = {
+        systemTokens: event.systemTokens ?? 0,
+        toolsTokens: event.toolsTokens ?? 0,
+        inputTokens: event.inputTokens ?? 0,
+        outputTokens: event.outputTokens ?? 0,
+        reasoningTokens: event.reasoningTokens ?? 0,
+        totalTokens: event.totalTokens ?? 0,
+      };
+      const prev = state.liveContext;
+      const limit = prev?.contextLimit ?? null;
+      state.liveContext = {
+        promptTokens: prev?.promptTokens ?? 0,
+        completionTokens: prev?.completionTokens ?? 0,
+        addedTokens: 0,
+        liveContextTokens: buckets.totalTokens,
+        contextLimit: limit,
+        ratio: limit ? Math.min(1, buckets.totalTokens / limit) : prev?.ratio ?? null,
+        buckets,
+        at: Date.now(),
+      };
+      break;
+    }
     case 'usage':
       state.usage = {
         promptTokens: event.promptTokens,
         completionTokens: event.completionTokens,
         totalTokens: event.totalTokens,
         cacheReadTokens: event.cacheReadTokens,
+        ...(event.lastPromptTokens !== undefined ? { lastPromptTokens: event.lastPromptTokens } : {}),
+        ...(event.lastCompletionTokens !== undefined ? { lastCompletionTokens: event.lastCompletionTokens } : {}),
+        ...(event.lastReasoningTokens !== undefined ? { lastReasoningTokens: event.lastReasoningTokens } : {}),
+        ...(event.lastBuckets ? { lastBuckets: event.lastBuckets } : {}),
       };
       recordUsage({
         providerId: state.providerId,
@@ -222,7 +249,7 @@ export function applyMirrorEvent(
   }
 }
 
-/** The store-ready turn object: nulls are OMITTED, not written. */
+
 export function serializeMirrorTurn(state: MirrorTurn): Record<string, unknown> {
   const turn: Record<string, unknown> = {
     id: state.id,
@@ -242,11 +269,7 @@ export function serializeMirrorTurn(state: MirrorTurn): Record<string, unknown> 
   return turn;
 }
 
-/**
- * True when the store's copy of this turn is already TERMINAL (usage,
- * finishReason, or error present): the client's own richer flush landed, and
- * the mirror must not replace it with its leaner reconstruction.
- */
+
 function storeTurnIsTerminal(conversationId: string, turnId: string): boolean {
   const record = getStoredConversation(conversationId);
   const turns = Array.isArray(record?.turns) ? record!.turns : [];
@@ -263,24 +286,20 @@ function storeTurnIsTerminal(conversationId: string, turnId: string): boolean {
 }
 
 export interface TurnMirrorHandle {
-  /** Feed one stream event (the route's StreamHandler calls this). */
+  
   apply(event: StreamEvent): void;
-  /** Flush now, honoring the terminal guard (the run-end path). */
+  
   flushFinal(): void;
 }
 
-/**
- * Open a mirror for one run. Returns null when the run carries no
- * conversation (one-shot helpers) or is the compaction summarizer (machinery,
- * not a thread turn — its output must never land in the record).
- */
+
 export function startTurnMirror(options: {
   conversationId: string;
   turnId: string;
   model: string;
   providerId: string;
   suppressText?: boolean;
-  /** Overrides the flush cadence (tests shrink this; default MIRROR_FLUSH_MS). */
+  
   flushIntervalMs?: number;
 }): TurnMirrorHandle | null {
   if (!options.conversationId || !options.turnId) return null;
@@ -293,6 +312,9 @@ export function startTurnMirror(options: {
   let lastFlushAt = 0;
 
   const flush = (): void => {
+    if (state.liveContext) {
+      setStoredLiveContext(options.conversationId, state.liveContext, state.terminal);
+    }
     if (storeTurnIsTerminal(options.conversationId, options.turnId)) return;
     applyTurnPatches([
       {

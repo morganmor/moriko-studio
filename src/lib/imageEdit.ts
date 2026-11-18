@@ -1,13 +1,9 @@
-/**
- * Client-side reference-image plumbing for Image Studio: file → data URL,
- * remote result → reference, and canvas encoding that stays under the
- * 15 MB per-reference cap (data URLs travel inside POST /api/images/generations).
- */
 
-/** Per-reference-image upload cap (data URL travels in the submit body). */
+
+
 export const MAX_REFERENCE_BYTES = 15 * 1024 * 1024;
 
-/** Reads an image file into a data URL for reference upload. */
+
 export function readFileAsDataUrl(file: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -17,7 +13,7 @@ export function readFileAsDataUrl(file: Blob): Promise<string> {
   });
 }
 
-/** Approximate decoded byte size of a data URL. */
+
 export function dataUrlBytes(url: string): number {
   const comma = url.indexOf(',');
   if (comma < 0) return 0;
@@ -27,11 +23,7 @@ export function dataUrlBytes(url: string): number {
   return isBase64 ? Math.floor((body * 3) / 4) : body;
 }
 
-/**
- * Encodes a canvas under `maxBytes`: tries the requested mime ladder, then
- * downscales 75% per round (max 4 rounds). Returns null when nothing fits.
- * `flatten` composites onto white first — JPEG has no alpha channel.
- */
+
 export function encodeWithinLimit(
   canvas: HTMLCanvasElement,
   maxBytes: number,
@@ -71,11 +63,7 @@ export function encodeWithinLimit(
   return null;
 }
 
-/**
- * Turns a generated result URL into a reference data URL. Same-origin
- * `/api/images/local/...` snapshots load without CORS; oversized blobs are
- * re-encoded through the ladder above instead of being rejected.
- */
+
 export async function referenceFromUrl(url: string): Promise<string> {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`HTTP ${response.status}`);

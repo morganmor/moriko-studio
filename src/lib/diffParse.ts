@@ -1,36 +1,21 @@
-/**
- * Unified-diff parser + side-by-side row model for the Diff Panel.
- *
- * Input is the string the server's diff engine already rendered
- * (server/agents/diff.ts buildUnifiedDiff): `--- a/path` headers, `@@` hunks
- * with real line numbers, and two annotation line kinds it interleaves —
- * `⇄ moved from before:N` and `│ changed: …`. Annotations parse as NOTE rows,
- * never as code rows, so the split view can render them as full-width notes.
- *
- * Multi-file diffs (apply_patch concatenates one block per file) parse into
- * one ParsedDiffFile per `--- a/` header. Pure function — no DOM, no store.
- */
+
 
 export type DiffRowKind = 'ctx' | 'del' | 'add' | 'note';
 
 export interface DiffRow {
   kind: DiffRowKind;
-  /** Original line number in the before file (ctx/del rows). */
+  
   beforeNo?: number;
-  /** Original line number in the after file (ctx/add rows). */
+  
   afterNo?: number;
   text: string;
 }
 
 export interface DiffHunk {
-  /** The `@@ -a,b +c,d @@` header, kept verbatim. */
+  
   header: string;
   rows: DiffRow[];
-  /**
-   * The server caps a render at MAX_DIFF_LINES — when it hits the cap the
-   * string stops mid-hunk, so row counts no longer match the header counts.
-   * Detected at hunk close and surfaced honestly in the UI.
-   */
+  
   truncated: boolean;
 }
 
@@ -44,7 +29,7 @@ export interface ParsedDiffFile {
 
 const FILE_RE = /^--- a\/(.+)$/;
 const HUNK_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
-/** Annotations are pushed with a fixed 6-space indent (see buildUnifiedDiff). */
+
 const NOTE_RE = /^ {6}[⇄│]/;
 
 export function parseUnifiedDiff(diff: string): ParsedDiffFile[] {
@@ -121,22 +106,16 @@ export function parseUnifiedDiff(diff: string): ParsedDiffFile[] {
   return files;
 }
 
-/** One rendered line of the side-by-side view. */
+
 export interface SplitRow {
   kind: 'ctx' | 'chg' | 'del' | 'add' | 'note';
   before?: { no?: number; text: string };
   after?: { no?: number; text: string };
-  /** note rows only */
+  
   text?: string;
 }
 
-/**
- * SIDE-BY-SIDE PAIRING POLICY (VS Code / GitHub): within a run of
- * consecutive del/add rows, pair dels[i] with adds[i] position-wise; the
- * leftover rows of the longer side render as one-sided lines. Context and
- * note rows pass through unchanged — notes keep their position in the run
- * order so `│ changed` / `⇄ moved` stay next to the line they annotate.
- */
+
 export function toSplitRows(rows: DiffRow[]): SplitRow[] {
   const out: SplitRow[] = [];
   let dels: DiffRow[] = [];

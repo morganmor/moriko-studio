@@ -24,16 +24,7 @@ import {
 import { useStore } from '../store/useStore';
 import type { Accent, ThemeMode } from '../types';
 
-/**
- * Command palette ("Search or jump…", Ctrl K) — ported from
- * moriko-design-1-command-palette.html.
- *
- * One input, grouped results (Chats / Actions / Go to / Theme), FUZZY search
- * (substring first, then subsequence) with matched characters highlighted,
- * ↑↓ / Enter / Escape, mouse hover-select, and the design's footer hints.
- * With an empty query the design keeps the default view short: 5 chats, only
- * Light/Dark theme entries — typing reveals Mocha/System and the accents.
- */
+
 type PaletteItem = {
   id: string;
   group: string;
@@ -43,7 +34,7 @@ type PaletteItem = {
   run: () => void;
 };
 
-/** Design's fuzzy(): exact substring scores high, else a subsequence match. */
+
 type FuzzyMatch = { sc: number; m: Array<[number, number]> };
 function fuzzy(q: string, s: string): FuzzyMatch | null {
   const text = s.toLowerCase();
@@ -254,7 +245,7 @@ export function CommandPalette({
     return list;
   }, [conversations, onClose, onOpenSettings]);
 
-  /** Scored fuzzy results when querying; the design's trimmed default otherwise. */
+  
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (q) {

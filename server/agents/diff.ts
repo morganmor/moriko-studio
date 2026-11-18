@@ -1,10 +1,4 @@
-/**
- * Minimal unified-diff generator for harness tool results (no dependency).
- *
- * Line-based LCS with a size guard: files beyond DIFF_MAX_LINES fall back
- * to a summary instead of an O(n·m) matrix blow-up. Output follows the
- * `--- a/path` / `+++ b/path` / @@ hunks convention with N context lines.
- */
+
 
 const DIFF_MAX_LINES = 4000;
 const CONTEXT_LINES = 3;
@@ -12,7 +6,7 @@ const MAX_DIFF_LINES = 800;
 
 type Op = { type: 'same' | 'add' | 'del'; text: string };
 
-/** LCS backtrace producing an aligned op list (bounded input). */
+
 function lineOps(before: string[], after: string[]): Op[] {
   const n = before.length;
   const m = after.length;
@@ -46,16 +40,7 @@ function lineOps(before: string[], after: string[]): Op[] {
   return ops;
 }
 
-/**
- * Word-level diff annotation for a pair of changed lines. Returns null when the
- * lines are too dissimilar (not worth annotating) or too short (the change is
- * already visible). Output: a compact `changed: old → new` string listing only
- * the token pairs that differ.
- *
- * The gap this closes: a 200-char line that changed one word
- * shows as a full -old/+new pair — the model must scan both to find the single
- * changed token. Word-diff highlights exactly what moved.
- */
+
 function wordDiff(beforeLine: string, afterLine: string): string | null {
   if (beforeLine.length < 40 || afterLine.length < 40) return null;
   const beforeWords = beforeLine.trim().split(/\s+/);
@@ -88,22 +73,17 @@ function wordDiff(beforeLine: string, afterLine: string): string | null {
 
 export interface DiffOptions {
   label?: string;
-  /** Enable word-level diff annotations for changed lines (default true). */
+  
   wordLevel?: boolean;
 }
 
-/** Diffstat of one file: insertions/deletions counted from the raw ops —
- *  never re-parsed from the rendered diff string (annotations + the 800-line
- *  cap would undercount). */
+
 export interface DiffStat {
   added: number;
   removed: number;
 }
 
-/**
- * Count +/− lines straight from the op list (the same source buildUnifiedDiff
- * renders from), so the number survives annotations and truncation.
- */
+
 export function diffStatFromOps(before: string, after: string): DiffStat | undefined {
   if (before === after) return undefined;
   const beforeLines = before.split('\n');
@@ -123,11 +103,7 @@ export function diffStatFromOps(before: string, after: string): DiffStat | undef
   return { added, removed };
 }
 
-/**
- * Unified diff (before → after). Change ops closer than 2×CONTEXT merge into
- * one hunk; each hunk carries its real start line and counts. Huge inputs
- * return a capped summary.
- */
+
 export function buildUnifiedDiff(before: string, after: string, label?: string | DiffOptions): string {
   const options = typeof label === 'string' ? { label } : label ?? {};
   const name = options.label ?? 'file';

@@ -1,30 +1,13 @@
-/**
- * exportPill — ONE self-contained HTML export of the ACTIVITY PILL panel
- * (Thread.tsx ActivityTicker + index.css .activity-ticker family) for a
- * DESIGNER agent to revise: markup, styles, animations, and the exact way the
- * pill looks to the user while the agent is working.
- *
- * Contents of the generated file:
- *   • a spec card (states, animation timings, behavior, source references)
- *   • designer controls (state switcher, row-entrance replay, reduced motion)
- *   • a mock thread stage holding a LIVE CLONE of the real pill markup —
- *     harvested from the running app (opened briefly to capture panel rows,
- *     then restored) — falling back to equivalent synthetic markup
- *   • the FULL app stylesheet (pill rules, keyframes, tokens, utilities)
- *   • a vanilla shim that reproduces React behavior: 2s word rotation while
- *     running, expand/collapse (grid-rows + chevron), comet on .is-running
- *
- * No backticks / ${ / </script inside PILL_SHIM — it is inlined raw.
- */
+
 import { useStore } from '../store/useStore';
 import { inlineCssUrls, inlineImagesIn, prettyCss, type UiExportStats } from './exportUi';
 
-/** Same rotating words as Thread.tsx ACTIVITY_WORDS (kept in sync by hand). */
+
 const ACTIVITY_WORDS = [
   'Doing Work', 'Stand Still', 'Be Calm', 'Stay Focused', 'On Track', 'In Motion',
 ];
 
-/** Fallback markup when the live thread has no pill (fresh chat). */
+
 const SYNTH_PILL = `
 <div class="activity-stack w-full">
   <div class="activity-pill-wrap relative">
@@ -69,7 +52,7 @@ const SYNTH_PILL = `
   </div>
 </div>`;
 
-/** Demo-only styles (scaffold + state rules the React app enforces by render). */
+
 const DEMO_CSS = `
 /* The inlined app shell locks the viewport (index.css: html, body { height:100%;
    overflow:hidden }) — this export is a normal scrollable document, so release
@@ -348,7 +331,7 @@ ${SPEC_HTML}
   return { html: page, stats };
 }
 
-/** Full flow: busy notice → build → save (?kind=pill) → download → notice. */
+
 export async function exportPill(): Promise<void> {
   const { showNotice } = useStore.getState();
   try {

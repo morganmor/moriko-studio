@@ -1,10 +1,4 @@
-/**
- * P4 MEASUREMENT — the pre-paint JS payload: whatever dist/index.html pulls
- * at boot (module scripts + modulepreload links), sized from the build output.
- * Run after `pnpm exec vite build`:
- *
- *   node scripts/measure-prepaint.mjs
- */
+
 
 import fs from 'node:fs';
 import path from 'node:path';

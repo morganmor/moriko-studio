@@ -1,7 +1,4 @@
-/**
- * Mococraft panel — Design DNA picker (Foundry) + Slop Radar (auditor)
- * + macrostructure library (Asymmetry). Lives in the sidebar.
- */
+
 import { useEffect, useState } from 'react';
 import { invoke, useAddonBus, notify } from '@moriko/host';
 
@@ -32,7 +29,7 @@ export default function Panel() {
   const bus = useAddonBus('mococraft.changed');
 
   const refresh = async () => {
-    try { setState(await invoke<State>('mococraft', 'state', {})); } catch { /* silent */ }
+    try { setState(await invoke<State>('mococraft', 'state', {})); } catch {  }
   };
   useEffect(() => { void refresh(); }, []);
   useEffect(() => { void refresh(); }, [bus]);

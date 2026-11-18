@@ -1,10 +1,4 @@
-/**
- * F5.1 — builds local IIFE vendor bundles for render_visual from node_modules
- * into the MORIKO home cache. Output: <cache>/visual-vendor/<lib>.js exposing
- * window.THREE / window.PIXI / window.Matter.
- *
- * Usage: node scripts/build-visual-vendor.mjs
- */
+
 import { build } from 'esbuild';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';

@@ -1,10 +1,4 @@
-/**
- * RSA/T PRD form — Guided Workbench (design/prd_form_d_guided_workbench.html).
- * Menulis PRD seperti dokumen korporat terpandu: rail section bernomor dengan
- * dot status live (kosong/sebagian/lengkap), satu section per langkah,
- * editor baris terstruktur, pratinjau dokumen + Teks Agent, publish gate.
- * Kontrak data TIDAK berubah — tetap PrdFields (store.tsx).
- */
+
 import { useMemo, useState } from 'react';
 import { tr } from './shared.tsx';
 import { Ic } from './icon.tsx';
@@ -64,7 +58,7 @@ function fromPrd(p: Prd | null): Draft {
 
 type Stat = 'e' | 'p' | 'd';
 
-/** Status kelengkapan per section (dot rail + publish gate). */
+
 function secStats(d: Draft): Stat[] {
   const filled = (xs: { a: string; b: string }[]) => {
     const full = xs.filter((x) => x.a.trim() && x.b.trim()).length;
@@ -87,7 +81,7 @@ function secStats(d: Draft): Stat[] {
   ];
 }
 
-/** Teks Agent: dokumen dalam sintaks kontrak RSAT yang mentah. */
+
 function agentText(d: Draft, t: (k: string) => string): string {
   const L: string[] = [`# ${d.title.trim() || t('prdwUntitledL')}`];
   if (d.summary.trim()) L.push(d.summary.trim());

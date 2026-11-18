@@ -1,11 +1,4 @@
-/**
- * agent__test_run — structured multi-runner test wrapper.
- *
- * F1.5: detects the project's test runner (vitest / jest / pytest / cargo / go)
- * from package.json scripts + devDeps and config files, falling back to
- * `node --import tsx --test`. Output is normalized to PASS/FAIL/SKIP counts
- * with per-failure names + messages. Requires terminal mode enabled.
- */
+
 import { statSync, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
@@ -13,6 +6,7 @@ import { str, num, truncateOutput, globToRegExp, requireWorkspace, resolveWithPe
 import { runProcess } from '../exec.js';
 import { auditToolCall } from '../audit.js';
 import { walkFiles } from './list.js';
+import { approveCommand } from './terminal.js';
 
 type RunnerKind = 'node' | 'vitest' | 'jest' | 'pytest' | 'cargo' | 'go';
 
@@ -76,7 +70,7 @@ function parseTapFailures(text: string): Array<{ name: string; message: string }
   return failures;
 }
 
-/** Jest/vitest JSON reporter → normalized failures. */
+
 function parseJsonRunnerOutput(text: string): { tests: number; pass: number; fail: number; skip: number; output: string } {
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
@@ -113,7 +107,7 @@ function parseJsonRunnerOutput(text: string): { tests: number; pass: number; fai
   }
 }
 
-/** Pytest `-q -rA` summary. */
+
 function parsePytestOutput(text: string): { tests: number; pass: number; fail: number; skip: number; output: string } {
   const summary = text.match(/(\d+) passed(?:, (\d+) failed)?(?:, (\d+) skipped)?/);
   const tests = summary ? Number(summary[1]) + (summary[2] ? Number(summary[2]) : 0) + (summary[3] ? Number(summary[3]) : 0) : 0;
@@ -123,7 +117,7 @@ function parsePytestOutput(text: string): { tests: number; pass: number; fail: n
   return { tests, pass: Number(summary?.[1] ?? 0), fail, skip, output: failedLines.join('\n') };
 }
 
-/** F1.5 — runner detection: explicit arg → package.json → config files. */
+
 function detectRunner(args: Record<string, unknown>, cwd: string): RunnerKind {
   const explicit = str(args, 'runner').trim().toLowerCase();
   if (explicit === 'vitest' || explicit === 'jest' || explicit === 'pytest' || explicit === 'cargo' || explicit === 'go' || explicit === 'node') {
@@ -211,6 +205,12 @@ export async function testRunTool(args: Record<string, unknown>, ctx: AgentToolC
 
   if (runner === 'node' && testFiles.length === 0) {
     return { ok: true, isError: false, text: 'No test files found. Use "files" to specify test file paths.' };
+  }
+
+  const testCmdLabel = `${runner} ${testFiles.length > 0 ? testFiles.join(' ') : 'all'}`;
+  const approved = await approveCommand('test_run', testCmdLabel, resolved.absolute, false, ctx);
+  if (!approved) {
+    return { ok: false, isError: true, text: `The user did not approve running tests (${testCmdLabel}).` };
   }
 
   const timeoutSec = Math.min(Math.max(num(args, 'timeoutSec') ?? 120, 10), 600);

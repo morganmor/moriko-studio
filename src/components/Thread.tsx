@@ -51,6 +51,7 @@ import {
 import type { ConversationCompaction, Turn, TurnInjection, TurnSegment } from '../types';
 import type { AgentPermissionRequest } from '../types';
 import { attachmentRefUrl, openBrowserPanelOnce, renderableRefUrl } from '../lib/api';
+import { PermissionRejectPanel } from './PermissionRejectPanel';
 import { useChatController } from '../hooks/useChatController';
 import { useStore } from '../store/useStore';
 import { brandCatSvgUrl, brandLoadingSvgUrl, brandReasoningLoopSvg } from '../lib/brandAssets';
@@ -58,7 +59,7 @@ import { diffStat, diffStatLabel, statFromEditArgs } from '../lib/diffStat';
 import { isGhostTurn, nextSegmentId, reasoningDisclosureOpen } from '../lib/turns';
 import { flushUiStateBeacon, storage } from '../lib/storage';
 
-/** Rotating status words for the activity ticker — calm, two seconds each. */
+
 const ACTIVITY_WORDS = ['Doing Work', 'Stand Still', 'Be Calm', 'Stay Focused', 'On Track', 'In Motion'] as const;
 import { MESSAGE_CATALOG } from '../lib/messageCatalog';
 import { Markdown } from './Markdown';
@@ -67,23 +68,12 @@ import { SplitDiff } from './SplitDiff';
 import { AddonWidgetHost } from './AddonWidgetHost';
 import { VisualCard, VisualFullscreen, type VisualSpec } from './VisualCard';
 
-/**
- * P4: the react-markdown + remark + KaTeX chain (~770 KB) lazy-loads INSIDE
- * Markdown.tsx with a plain-text fallback — the module boundary here is tiny
- * now, so a plain static import avoids a pointless second sequential chunk
- * hop before the first message can paint its markdown.
- */
+
 function Md(props: { content: string; breakLines?: boolean; className?: string }) {
   return <Markdown {...props} />;
 }
 
-/**
- * OPTIMISTIC STEER BUBBLES: rendered from the store's `pendingSteers` while
- * the real echo (the `steer` event, same id) has not landed yet. The user sees
- * their note INSTANTLY — certainty that the input was accepted — and the
- * pending bubble is retired the moment the anchored segment takes its place.
- * DSH-style: attached images render inline, matching the delivered bubble.
- */
+
 function PendingSteerBubble({ text, parts }: { text: string; parts?: import('../types').TurnSteerPart[] }) {
   const images = (parts ?? []).filter((part) => part.type === 'image_url');
   return (
@@ -113,20 +103,8 @@ function PendingSteerBubble({ text, parts }: { text: string; parts?: import('../
   );
 }
 
-/**
- * Visible explanations for FORCED stop reasons — a harness wrap-up (context
- * budget / stall), a failed tool round, or a provider output cut.
- * A run that ended short must never look like it finished naturally (the old
- * silent cap stop).
- *
- * TEXT LIVES IN THE CATALOG (Fase A #4.2): these cards are harness messages,
- * so their copy is registered in messageCatalog (surface 'thread-card') and
- * only mapped to finish reasons here — one source of truth.
- */
+
 const FINISH_NOTES: Record<string, string> = {
-  // LEGACY: the old context-budget stop. Nothing emits it any more — the guard
-  // hands off to in-run compaction and the run continues — but old persisted
-  // threads still carry it and must keep explaining themselves.
   context_budget: MESSAGE_CATALOG['finish.contextBudget'].text,
   stalled: MESSAGE_CATALOG['finish.stalled'].text,
   tool_errors: MESSAGE_CATALOG['finish.toolErrors'].text,
@@ -139,68 +117,44 @@ const FINISH_NOTES: Record<string, string> = {
 interface ThreadProps {
   turns: Turn[];
   streaming: boolean;
-  /** Present when older turns ride as a compaction summary. */
+  
   compaction?: ConversationCompaction;
-  /** LIVE composer height (+ gap) — reserved as bottom padding so trailing
-   *  content can never be clipped behind the opaque composer block. */
+  
   bottomPad?: number;
   onRegenerate: () => void;
-  /** Replaces a turn's content in place (both user inputs and AI outputs). */
+  
   onEditTurn: (turnId: string, content: string) => void;
-  /** AI-Studio-style: cuts everything after this OUTPUT and re-runs from it. */
+  
   onRegenerateFrom: (turnId: string) => void;
-  /** Forks the conversation up to and including this turn into a new one. */
+  
   onBranchTurn: (turnId: string) => void;
-  /** Deletes this turn (a user turn takes its reply with it). */
+  
   onDeleteTurn: (turnId: string) => void;
-  /** Composer-band turn arrows call INTO the thread's pin/glide owner instead
-   *  of scrolling the DOM behind its back. */
+  
   onNavigationReady?: (navigation: ThreadNavigation | null) => void;
 }
 
-/** Imperative navigation the composer band's turn arrows drive. */
+
 export interface ThreadNavigation {
-  /** Earliest turn — expands the render window first so Turn 1 is mounted. */
+  
   toFirstTurn: () => void;
-  /** Newest content — re-pins and glides to the live edge. */
+  
   toLatest: () => void;
-  /** A specific checkpoint (1-based turn number). Expands the window first so
-   *  a turn outside the render window can still be reached. */
+  
   toTurn: (turnNumber: number) => void;
 }
 
-/**
- * Follows the newest content while streaming. Navigate-to-turn lives in the
- * composer band's arrows — the old "jump to latest" pill was removed.
- *
- * Pinned-ness is derived from USER SCROLL POSITION ONLY: content growth does
- * not fire scroll events, so a growing stream can never flip the flag the
- * way the old IntersectionObserver did (the end sentinel gets pushed out of
- * the viewport as text streams in above it, which made the view freeze
- * after a few seconds of generation). A scroll event only happens when the
- * user (or our own follow-scroll) actually moves — so:
- *  - user scrolls up            → unpinned (the pill appears);
- *  - user scrolls back to bottom → pinned again;
- *  - content grows              → pinned state unchanged, we keep following.
- */
+
 export function useStickToBottom(dependency: unknown) {
   const endRef = useRef<HTMLDivElement>(null);
-  /** Pin is a REF only: nothing renders from it since the Latest pill was
-   *  removed, so a scroll gesture no longer forces a Thread re-render. */
+  
   const pinnedRef = useRef(true);
   const scrollerRef = useRef<Element | null>(null);
   const lastTopRef = useRef(0);
-  /** NAV PAUSE — a navigate-to-turn glide must freeze the follow while it
-   *  runs, or the in-flight follow raf takes one more step and fights it. */
+  
   const navPauseRef = useRef(false);
 
-  /**
-   * Resolves the scrolling container LAZILY: the sentinel's ancestor can be
-   * replaced by React (layout branch switches, view transitions) after this
-   * hook mounts. A stale/detached reference here froze `pinned` at `true` —
-   * the follow-scroll then fired unconditionally on every streaming flush
-   * and the user could not scroll anywhere during generation.
-   */
+  
   const resolveScroller = useCallback((): Element | null => {
     let scroller = scrollerRef.current;
     if (!scroller || !scroller.isConnected) {
@@ -210,19 +164,12 @@ export function useStickToBottom(dependency: unknown) {
     return scrollerRef.current;
   }, []);
 
-  /**
-   * PIN GLIDE — the follow is a retargeting eased step, never a one-frame
-   * jump. A hard `scrollTop = scrollHeight` renders each content flush at the
-   * STALE offset first and corrects it next frame (the stutter) and moves a
-   * big delta in a single frame (the lurch). This glide re-reads the live
-   * bottom every frame, so growth mid-glide is absorbed instead of queued.
-   */
+  
   const glideRafRef = useRef(0);
   const glideSettleRef = useRef(0);
-  /** NAV loop handle — one glide at a time; two concurrent navigations fight
-   *  every frame and neither ever settles. */
+  
   const navRafRef = useRef(0);
-  /** Kill any in-flight scroll loop (glide + nav) before starting another. */
+  
   const stopLoops = useCallback(() => {
     if (glideRafRef.current) {
       cancelAnimationFrame(glideRafRef.current);
@@ -309,15 +256,7 @@ export function useStickToBottom(dependency: unknown) {
   }, [resolveScroller]);
 
   useEffect(() => {
-    /**
-     * INPUT-INTENT UNPIN — the scroll listener above cannot see an upward
-     * move while pinned: the follow-scroll jump and the user's wheel delta
-     * land in the SAME frame, the browser coalesces them into one scroll
-     * event whose final offset is the bottom, and `goingUp` never fires —
-     * the view stayed locked to the live edge for the whole generation.
-     * Wheel / touch / keys fire BEFORE the offset changes and are never
-     * coalesced, so they unpin immediately and reliably.
-     */
+    
     const onIntent = (event: Event) => {
       const element = resolveScroller();
       if (!element) return;
@@ -345,11 +284,7 @@ export function useStickToBottom(dependency: unknown) {
     };
   }, [resolveScroller]);
 
-  /**
-   * FOLLOW — pre-paint snap for small growth (no stale-offset frame at all),
-   * eased glide for big deltas (a tool block arriving, a burst of deferred
-   * rows). Both retarget the live bottom every frame.
-   */
+  
   useLayoutEffect(() => {
     if (!pinnedRef.current) return;
     const element = resolveScroller();
@@ -364,11 +299,7 @@ export function useStickToBottom(dependency: unknown) {
     ensureGlide();
   }, [dependency, ensureGlide, resolveScroller]);
 
-  /** NAVIGATE-TO-TURN — glide to an offset with following paused, then
-   *  release. Drives the composer band's turn arrows and the checkpoint rail.
-   *  A function target is RE-READ EVERY FRAME: rows materialize from
-   *  content-visibility as the glide descends, so an offset captured once goes
-   *  stale and the view stopped a turn short ("checkpoint 6 lands on 5"). */
+  
   const navigateTo = useCallback((top: number | (() => number)) => {
     const element = resolveScroller();
     if (!element) return;
@@ -403,39 +334,26 @@ export function useStickToBottom(dependency: unknown) {
     navRafRef.current = requestAnimationFrame(step);
   }, [resolveScroller, stopLoops]);
 
-  /** UP ARROW — top of the thread. When older turns sit outside the render
-   *  window their expansion shortens scrollHeight, so target 0 is re-read
-   *  every frame anyway (delta clamps to the live top). */
+  
   const jumpToTurnStart = useCallback(() => {
     navigateTo(0);
   }, [navigateTo]);
 
-  /** DOWN ARROW — resume following the live edge. stopLoops() first: a stuck
-   *  loop held glideRafRef and made this arrow a permanent no-op. */
+  
   const jumpToTurnEnd = useCallback(() => {
     stopLoops();
     pinnedRef.current = true;
     ensureGlide();
   }, [ensureGlide, stopLoops]);
 
-  /**
-   * INSTANT re-anchor to the live edge — no pin change, no smooth animation.
-   * Used when a run ENDS (including provider errors): the view snaps to the
-   * newest content in one frame only if the user is already pinned; if they
-   * are scrolled up reading, the caller checks pinnedRef first and nothing
-   * moves. Calm by design — the old smooth jumpToLatest animated from a
-   * layout that had just COLLAPSED (a big reasoning block folding at
-   * live→false) and read as a violent fling.
-   */
+  
   const reanchorToEdge = useCallback(() => {
     const element = resolveScroller();
     if (element) element.scrollTop = element.scrollHeight;
     else endRef.current?.scrollIntoView({ block: 'end' });
   }, [resolveScroller]);
 
-  /** G5 TELEPORT — single-frame jump, no glide. Scroll-anchor restore lands
-   *  exactly where the user left before the refresh; pin state follows the
-   *  landing spot so the streaming follow neither fights nor ignores it. */
+  
   const teleportTo = useCallback((top: number) => {
     const element = resolveScroller();
     if (!element) return;
@@ -448,11 +366,7 @@ export function useStickToBottom(dependency: unknown) {
   return { endRef, navigateTo, jumpToTurnStart, jumpToTurnEnd, reanchorToEdge, teleportTo, pinnedRef };
 }
 
-/**
- * Compact fingerprint of everything that grows while streaming (content,
- * reasoning, per-segment states). Consumers of {@link useStickToBottom} feed
- * this as the follow-scroll dependency.
- */
+
 export function threadStreamSignature(turns: Turn[]): string {
   return turns
     .map((turn) =>
@@ -463,7 +377,6 @@ export function threadStreamSignature(turns: Turn[]): string {
           if (segment.type === 'tool') {
             return `t${segment.toolName}${segment.summary === undefined ? '!' : String((segment.summary ?? '').length)}${segment.progress ? '~' : ''}${segment.toolImages?.length ?? 0}`;
           }
-          // A compaction step carries no text — its identity is the shrink.
           if (segment.type === 'compaction') {
             return `c${segment.beforeTokens}>${segment.afterTokens}`;
           }
@@ -503,7 +416,7 @@ export const Thread = memo(function Thread({ turns, streaming, compaction, botto
     }
   }, []);
 
-  /** 6D: an assistant edit must survive the segment-driven wire rebuild. */
+  
   const editAssistantSegments = useCallback(
     (turnId: string, content: string, segments?: import('../types').TurnSegment[]) => {
       const state = useStore.getState();
@@ -544,26 +457,17 @@ export const Thread = memo(function Thread({ turns, streaming, compaction, botto
   const streamSignature = threadStreamSignature(deferredTurns);
   const { endRef, navigateTo, jumpToTurnStart, jumpToTurnEnd, reanchorToEdge, teleportTo, pinnedRef } = useStickToBottom(streamSignature);
 
-  /** Sliding render window: only the newest `windowSize` turns are mounted.
-   *  Declared HERE (above the navigation callbacks) because goToTurn and the
-   *  rail need it; a later declaration would be a use-before-init error. */
+  
   const hiddenCount = Math.max(0, deferredTurns.length - windowSize);
   const visibleTurns = hiddenCount > 0 ? deferredTurns.slice(hiddenCount) : deferredTurns;
 
-  /** UP ARROW — expand the render window so the EARLIEST turn is mounted,
-   *  then glide to the top of the thread. */
+  
   const previousFirstTurn = useCallback(() => {
     setWindowSize((size) => Math.max(size, deferredTurns.length));
     jumpToTurnStart();
   }, [deferredTurns.length, jumpToTurnStart]);
 
-  /**
-   * GO TO TURN — used by the checkpoint rail. A turn outside the render
-   * window is not in the DOM at all, so expanding the window and scrolling in
-   * the SAME pass would scroll against pre-expansion offsets (the mounted
-   * turns above push everything down). The target is therefore parked in a
-   * ref and resolved by an effect AFTER the expanded window commits.
-   */
+  
   const pendingTurnRef = useRef<number | null>(null);
   const goToTurn = useCallback(
     (turnNumber: number) => {
@@ -591,27 +495,18 @@ export const Thread = memo(function Thread({ turns, streaming, compaction, botto
     navigateTo(() => row.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop);
   }, [windowSize, navigateTo, endRef]);
 
-  /** Hand the band's arrows + rail the hook's own glide + pin control. */
+  
   useEffect(() => {
     onNavigationReady?.({ toFirstTurn: previousFirstTurn, toLatest: jumpToTurnEnd, toTurn: goToTurn });
     return () => onNavigationReady?.(null);
   }, [goToTurn, onNavigationReady, previousFirstTurn, jumpToTurnEnd]);
 
-  /** G5 SCROLL ANCHOR — refs + decide. Saved on exit moments only (see the
-   *  save effect); NOTHING reads layout during normal scrolling. */
+  
   const anchorRef = useRef<{ turnId: string; offset: number } | null>(null);
-  /** 'wait-reset' — the rendered window still belongs to the PREVIOUS
-   *  conversation; teleporting against it would be undone by the pending
-   *  shrink to WINDOW_INITIAL, so restore waits until that reset commits. */
+  
   const anchorPhaseRef = useRef<'idle' | 'wait-reset' | 'active' | 'settling'>('idle');
   const lastAnchorIdRef = useRef<string | null>(null);
-  /** G5 SETTLE — at teleport time rows above the anchor are still plain-text
-   *  fallbacks / content-visibility ESTIMATES (markdown lazy-loads per row);
-   *  they grow as they hydrate and silently push the anchor down — the "lands
-   *  a few turns early" drift (36 instead of 43). A bounded loop re-places
-   *  the anchor row every frame until the layout stops moving, so the final
-   *  spot is pixel-identical to the save moment. Any user gesture hands the
-   *  view back immediately. */
+  
   const settleRafRef = useRef(0);
   const settleStableRef = useRef(0);
   const settleDeadlineRef = useRef(0);
@@ -719,9 +614,7 @@ export const Thread = memo(function Thread({ turns, streaming, compaction, botto
     if (scroller) scroller.scrollTop = pending.top + (scroller.scrollHeight - pending.height);
   });
 
-  /** G5 SAVE — exit moments only: pagehide, tab-hidden, and conversation
-   *  switch (the store notifies listeners synchronously inside set(), BEFORE
-   *  React re-renders — the rows on screen still belong to THIS conversation). */
+  
   useEffect(() => {
     const conversationId = activeId;
     if (!conversationId) return;
@@ -763,9 +656,7 @@ export const Thread = memo(function Thread({ turns, streaming, compaction, botto
     };
   }, [activeId, endRef]);
 
-  /** G5 RESTORE — progressive window expansion inside startTransition (each
-   *  commit stays small → no freeze, unlike the old mount-everything 3b),
-   *  then ONE teleport frame (no glide to fight the streaming follow). */
+  
   useEffect(() => {
     if (anchorPhaseRef.current === 'idle' || anchorPhaseRef.current === 'settling') return;
     if (anchorPhaseRef.current === 'wait-reset') {
@@ -819,14 +710,7 @@ export const Thread = memo(function Thread({ turns, streaming, compaction, botto
     return numbers;
   }, [deferredTurns]);
 
-  /** DUPLICATE CHECKPOINT GUARD — a committed compaction exists TWICE in the
-   *  thread: as conversation.compaction (CompactionBlock, hard-coded at the
-   *  top) and as the inline kind:'compaction' note turn at the position where
-   *  the summarizer ran. Both carry the SAME summary text, so rendering both
-   *  showed one checkpoint twice ("compaction at the very top"). When an
-   *  inline twin exists it OWNS the presentation (correct position, meta,
-   *  delete); the top block stays only as the fallback when no twin exists
-   *  (imported history, deleted card) — it also owns Discard. */
+  
   const compactionTwin = compaction
     ? deferredTurns.some(
         (turn) => turn.kind === 'compaction' && turn.content.trim() === compaction.summary.trim(),
@@ -958,18 +842,12 @@ export const Thread = memo(function Thread({ turns, streaming, compaction, botto
   );
 });
 
-/** Sliding render window: how many of the NEWEST turns stay mounted at once.
- *  A 100+ turn thread used to mount every row (each with live Markdown nodes)
- *  the moment the chat opened — the DOM bloat behind the slow localhost UI. */
+
 const WINDOW_INITIAL = 40;
-/** How many more turns "load earlier" prepends per click. */
+
 const WINDOW_CHUNK = 30;
 
-/**
- * Climbs from the thread's end sentinel to the element that actually scrolls
- * it (App owns the `overflow-y-auto` container — Thread only renders inside
- * it). Bounded hop count: the sentinel never sits deeper than a few levels.
- */
+
 function resolveThreadScroller(from: HTMLDivElement | null): HTMLElement | null {
   let node: HTMLElement | null = from?.parentElement ?? null;
   for (let hops = 0; node !== null && hops < 8; hops += 1, node = node.parentElement) {
@@ -979,13 +857,7 @@ function resolveThreadScroller(from: HTMLDivElement | null): HTMLElement | null 
   return null;
 }
 
-/**
- * Finds the last STABLE paragraph boundary in a streaming text: a blank line
- * that sits OUTSIDE any open ``` fence and $$ math block, and whose next line
- * STARTS a self-contained block (not a list/quote/table continuation, which
- * would render differently when split from their opening line). One linear
- * pass per flush — cheap even on very long turns.
- */
+
 function splitStablePrefix(text: string): { prefix: string; tail: string } {
   let fences = 0;
   let mathBlocks = 0;
@@ -1019,17 +891,8 @@ function splitStablePrefix(text: string): { prefix: string; tail: string } {
   return { prefix: text.slice(0, lastSafe), tail: text.slice(lastSafe) };
 }
 
-/**
- * STREAMING TEXT SPLIT — while a turn is live, its text renders as TWO
- * memoized Markdowns: the frozen prefix (finished paragraphs; identical
- * string across flushes, so memo(Markdown) skips the re-parse entirely) and
- * the small tail (the paragraph being written — the only part that grows).
- * A 50ms flush used to re-parse the WHOLE turn from token one; now it parses
- * one paragraph. When the stream ends, one final full parse through the
- * ordinary path restores the single-block layout.
- */
-/** DESIGN-1 canvas render: caret berkedip ditempel di ujung teks streaming
- *  hidup (elemen terakhir) — sama seperti paintLive() di design HTML. */
+
+
 function LiveCaret() {
   return <span className="caret" aria-hidden="true" />;
 }
@@ -1054,17 +917,8 @@ const StreamText = memo(function StreamText({ text, live, className }: { text: s
   );
 });
 
-/**
- * Memoized per row: while streaming, only the LAST turn's object identity
- * changes per flush — every earlier row would otherwise re-render (and its
- * Markdown re-parse) dozens of times per second. The callbacks passed from
- * App are useCallback-stable so the memo actually holds.
- */
-/**
- * VISUAL v2 — module-level helper (dipakai TIGA render site: IIFE pill,
- * IIFE segmen inline, dan ActivityTicker; versi lokal di satu IIFE-lah yang
- * membuat dua site lain melempar ReferenceError saat Pill dibuka).
- */
+
+
 function buildLastVisualSegmentMap(segments: TurnSegment[]): Map<string, unknown> {
   const map = new Map<string, unknown>();
   for (const segment of segments) {
@@ -1073,9 +927,7 @@ function buildLastVisualSegmentMap(segments: TurnSegment[]): Map<string, unknown
   return map;
 }
 
-/** true = id visual segmen ini punya salinan LEBIH BARU di turn yang sama
- *  (edit-in-place) — salinan lama turun jadi baris audit "updated in place".
- *  Identitas aman: semua site mengiterasi referensi turn.segments yang sama. */
+
 function isSupersededVisual(
   segment: TurnSegment,
   lastVisualSegmentById: Map<string, unknown>,
@@ -1085,8 +937,7 @@ function isSupersededVisual(
   return last !== undefined && last !== segment;
 }
 
-/** Extracts renderable URLs from a tool-image list — inline dataUrls pass
- *  through; externalized byte-store refs go through attachmentRefUrl. */
+
 function renderableToolImages(images: Array<{ mime: string; dataUrl?: string; dataRef?: { hash: string; mime: string } }> | undefined): string[] {
   if (!images) return [];
   const urls: string[] = [];
@@ -1097,19 +948,13 @@ function renderableToolImages(images: Array<{ mime: string; dataUrl?: string; da
   return urls;
 }
 
-/** An agent__image result: the URLs the tool returned (inline or byte-store
- *  refs). Local results always carry dataUrls, so this is the fast path. */
+
 function localImageUrls(segment: TurnSegment): string[] {
   if (segment.type !== 'tool' || segment.toolName !== 'image') return [];
   return renderableToolImages((segment as { toolImages?: Parameters<typeof renderableToolImages>[0] }).toolImages);
 }
 
-/**
- * GENERATED IMAGE STRIP — inline hasil agent__image di bawah run pill,
- * ChatGPT-style: hasil utama TAMPIL BESAR di alur percakapan, sisanya sebagai
- * thumbnail kecil di bawahnya. Klik mana pun membuka lightbox penuh. Tujuannya
- * agar user tidak perlu membuka Gallery hanya untuk mengecek hasil generate.
- */
+
 function GeneratedImageStrip({ urls }: { urls: string[] }) {
   const [preview, setPreview] = useState<string | null>(null);
   const [primary, ...extras] = urls;
@@ -1147,11 +992,7 @@ function GeneratedImageStrip({ urls }: { urls: string[] }) {
   );
 }
 
-/** RESPONSE TIMER — format durasi lebar-stabil (dipakai render live di bawah
- *  pill DAN render statis di action row). Spesifikasi operator: H.M.S penuh
- *  tanpa desimal — [jam] [puluhan menit] [menit] [puluhan detik] [detik]:
- *    5s  → "00.00.05"   1m6s → "00.01.06"   1j2m → "01.02.00"
- *  Semua segmen dua digit zero-padded; tabular-nums menjaga lebar tetap. */
+
 function formatProcessingMs(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
   const hours = Math.floor(totalSeconds / 3600);
@@ -1180,12 +1021,10 @@ const MessageRow = memo(function MessageRow({
 }: {
   turn: Turn;
   isLast: boolean;
-  /** True when no MEANINGFUL turn comes after this one — trailing ghost
-      assistant turns (empty, from stopped streams) don't hide the buttons. */
+  
   isEffectivelyLast: boolean;
   streaming: boolean;
-  /** 1-based Turn number when this row OPENS a turn (user input rows).
-   *  A Turn = the input + the model's whole work until the next input. */
+  
   turnNumber?: number;
   onRegenerate: () => void;
   onEditTurn: (turnId: string, content: string) => void;
@@ -1195,22 +1034,15 @@ const MessageRow = memo(function MessageRow({
   onClearOutput: (turnId: string) => void;
   onClearReasoning: (turnId: string) => void;
   onContinue: () => void;
-  /** FASE D: opens a visual in the thread-level fullscreen lightbox. P2: the
-      spec carries the VisualSpec shape (html OR htmlRef). */
+  
   onFullscreenVisual: (visual: VisualSpec) => void;
-  /** 6D: replaces an assistant output's segments with the edited list. */
+  
   onEditAssistantSegments: (turnId: string, content: string, segments?: import('../types').TurnSegment[]) => void;
 }) {
-  /** RESPONSE TIMER — live seconds while THIS turn's run is streaming.
-   *  One interval per active MessageRow (only the streaming last row mounts
-   *  it); reads the run start from the store, no per-second store writes. */
-  /** Sandbox permission yang sedang ditunggu turn ini — wire ke RunPill.
-   *  Dianggap menunggu bila run streaming dan ada tool call yang belum
-   *  selesai (ok === undefined) di segmen turn. */
+  
+  
   const pendingPermissions = useStore((state) => state.pendingPermissions);
-  /** COMPACTION IN PROGRESS for the conversation on screen — the manual
-   *  /compact path drives `compactingId`, not `genRunning`, so the checkpoint
-   *  card's live indicator keys off this instead of `streaming` alone. */
+  
   const compactingLive = useStore((state) => state.compactingId !== null && state.compactingId === state.activeId);
   const waitingPermission = useMemo(() => {
     if (!(isLast && streaming)) return null;
@@ -1220,10 +1052,7 @@ const MessageRow = memo(function MessageRow({
     if (!pendingTool) return null;
     return pendingPermissions[0] ?? null;
   }, [isLast, streaming, turn.segments, pendingPermissions]);
-  /** RESPONSE TIMER — live clock for the ACTIVE run. The interval is keyed to
-   *  the run (runActive), not to `isLast` alone, and the start epoch is
-   *  session-persisted, so a genRunning flap mid-run no longer restarts the
-   *  clock and a browser reload continues the elapsed time. */
+  
   const runStartedAt = useStore((state) => (state.activeId ? state.genStartedAt[state.activeId] : undefined));
   const runActive = streaming && isLast;
   const [liveElapsedMs, setLiveElapsedMs] = useState(0);
@@ -1319,7 +1148,6 @@ const MessageRow = memo(function MessageRow({
   }
 
   if (turn.kind === 'probation') {
-    // PROBATION WARNING CARD (Tiers 1-3) and the TIER 4 CHOICE CARD.
     if (turn.probationMeta?.tier === 4) {
       return <FreezeChoiceCard turn={turn} />;
     }
@@ -1561,15 +1389,7 @@ const MessageRow = memo(function MessageRow({
     );
   }
 
-  /**
-   * ONE SEGMENT LIST, whatever the turn was persisted with.
-   *
-   * Turns written before segments existed carry their thinking in the flat
-   * `turn.reasoning` string. Rendering those through a SECOND, separate block
-   * meant the two trees swapped the moment the first reasoning segment landed
-   * — unmounting the very panel that was streaming. A synthetic segment with a
-   * stable id keeps both cases on one path.
-   */
+  
   const segmentsView = useMemo<TurnSegment[]>(() => {
     const segments = turn.segments ?? [];
     if (segments.some((segment) => segment.type === 'reasoning')) return segments;
@@ -1580,7 +1400,7 @@ const MessageRow = memo(function MessageRow({
       ...segments,
     ];
   }, [turn.id, turn.reasoning, turn.segments]);
-  /** A run that ended in a state worth auditing keeps its thinking visible. */
+  
   const keepReasoningOpen =
     Boolean(turn.error) ||
     ['error', 'aborted', 'interrupted', 'user_stop', 'harness_stopped'].includes(turn.finishReason ?? '');
@@ -1630,8 +1450,6 @@ const MessageRow = memo(function MessageRow({
             if (segment.type === 'steer') {
               rows.push({ kind: 'steer', segment });
             } else if (segment.type === 'compaction') {
-              // A HARNESS step: it belongs in the trace like a tool row, but it
-              // is never a tool the model called.
               rows.push({ kind: 'compaction', segment });
             } else {
               rows.push({ kind: 'activity', segment });
@@ -1651,10 +1469,7 @@ const MessageRow = memo(function MessageRow({
             return null;
           })();
           const hoistedVisual = hoistedVisualSegment?.visual ?? null;
-          /** agent__image results are hoisted under the run pill — the user
-           *  sees the generated image without opening the Gallery. NOT gated
-           *  on turnRunning: the image shows as soon as its tool_result lands,
-           *  while the model is still writing (ChatGPT-style). */
+          
           const hoistedImageUrls = (() => {
             const urls: string[] = [];
             for (const segment of segmentsView) {
@@ -1665,10 +1480,7 @@ const MessageRow = memo(function MessageRow({
             }
             return urls.slice(0, 4);
           })();
-          /** VISUAL v2: map id → segmen terakhir dihitung module-level; HANYA
-           *  salinan yang disupersedi masuk Set referensi ini, lalu Set-nya
-           *  diteruskan ke ActivityTicker — scope komponen anak tidak bisa
-           *  melihat local IIFE (akar ReferenceError sebelumnya). */
+          
           const lastVisualSegmentById = buildLastVisualSegmentMap(segmentsView);
           const supersededVisualSegments = new Set<TurnSegment>();
           for (const segment of segmentsView) {
@@ -2050,20 +1862,8 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-/**
- * Collapsible reasoning strip — deliberately transparent (no card box), like
- * a plain "Thinking…" line with a dropdown.
- *
- * The Moriko cat is the state marker: the animated loading cat while the
- * model reasons, swapping to the regular moriko-miau mark the moment output
- * starts — the cat never disappears mid-turn. The body scrolls inside a
- * fixed ceiling, so long reasoning never pushes the conversation away.
- */
-/**
- * Icon per injected system-prompt block — derived from the block's title so
- * each row reads at a glance (terminal for prompt blocks, paperclip for
- * attachments, target for goals…) instead of one repeated plug glyph.
- */
+
+
 function injectionIcon(title: string): typeof PlugZap {
   const t = title.toLowerCase();
   if (t.includes('attachment')) return Paperclip;
@@ -2077,13 +1877,7 @@ function injectionIcon(title: string): typeof PlugZap {
   return SquareTerminal;
 }
 
-/**
- * GROUPED system-context card — one card for ALL harness injections instead
- * of one card per block (they stacked into a wall before every reply).
- * Mirrors design/system-context.html: a single summary row ("System context ·
- * N system prompt, M context injection") that expands into per-block rows,
- * each with its own disclosure. All copy in English.
- */
+
 function InjectionGroupCard({ injections }: { injections: TurnInjection[] }) {
   const [open, setOpen] = useState(false);
   const [allRows, setAllRows] = useState<Record<string, boolean>>({});
@@ -2195,22 +1989,8 @@ function InjectionGroupCard({ injections }: { injections: TurnInjection[] }) {
 }
 
 
-/**
- * STEER: the user's mid-run note, rendered as an ANCHORED USER BUBBLE inside
- * the assistant turn — a steer IS the user's message, it just arrived while
- * the model was working. Visually it matches the user row above (right-
- * aligned, "You" label), so nobody mistakes it for a tool card. Rendered at
- * the position of its segment: the note appears BETWEEN the round it landed
- * in and the model output that followed it — never as the thread's last
- * message. Attached images render inline (wire refs become HTTP URLs).
- */
-/**
- * HARNESS-EVENT PANEL — an addon event on its own channel. Never a "You"
- * bubble: a slim full-width strip labeled with the addon id, tinted by level
- * (info = accent, warn = c-warn, block = c-danger). Rendered for the dedicated
- * kind:'harness-event' turns (persisted, visible idle) and for live
- * harnessEvents on the assistant turn.
- */
+
+
 function HarnessEventPanel({ addonId, level, text, at }: { addonId: string; level: 'info' | 'warn' | 'block'; text: string; at?: number }) {
   const color = level === 'warn' ? 'rgb(var(--c-warn))' : level === 'block' ? 'rgb(var(--c-danger))' : 'rgb(var(--c-accent))';
   const time = at ? new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
@@ -2279,11 +2059,7 @@ function SteerBubble({  entry,
   );
 }
 
-/**
- * Height-animated disclosure panel — the same easing the activity pill uses
- * (grid-rows 0fr→1fr). Content stays mounted ~330ms after close so the
- * collapse eases down instead of snapping shut, then unmounts.
- */
+
 function CollapsePanel({
   open,
   children,
@@ -2343,26 +2119,20 @@ function usePanelFollowScroll(open: boolean) {
     };
   }, [open]);
 
-  /** Nempel langsung di elemen scrollable panel — wiring lama menempel di
-   *  wrapper non-overflow sehingga scrollTop-nya no-op total. */
+  
   const onScroll = useCallback((event: ReactScrollEvent) => {
     if (followRef.current) return;
     const box = event.currentTarget;
     followRef.current = box.scrollHeight - box.scrollTop - box.clientHeight < PANEL_BOTTOM_SNAP;
   }, []);
 
-  /** Dorong isi panel ke ekor konten — dipanggil tiap flush teks. */
+  
   const scrollToBottom = useCallback(() => {
     const box = scrollRef.current;
     if (box && followRef.current) box.scrollTop = box.scrollHeight;
   }, []);
 
-  /** OPEN PUSH — panel dibuka user: isi panel lompat ke ekor, lalu viewport
-   *  thread didorong turun hanya sebesar bagian panel yang jatuh DI BAWAH
-   *  viewport. Panel turn lama di tengah layar → nol dorongan (tidak ada
-   *  yank); panel di tepi bawah → terdorong seukuran tubuh panel. Grid masih
-   *  menganimasi 0fr→1fr saat effect ini jalan (rect.height ≈ 0), jadi tinggi
-   *  akhir dihitung dari scrollHeight yang di-cap maxHeight. Sekali per buka. */
+  
   const pushedOpenRef = useRef(false);
   useEffect(() => {
     if (!open) {
@@ -2386,10 +2156,7 @@ function usePanelFollowScroll(open: boolean) {
   return { scrollRef, onScroll, scrollToBottom };
 }
 
-/** Reasoning body is virtualized in line-sized slices (~18 rendered lines each
- *  at 13px/1.625 ≈ 21px per line). Slices split AFTER their trailing newline so
- *  stacked chunks reproduce the single-paragraph line boxes exactly — verified
- *  height-identical (3084 = 3084) against a plain <p>. */
+
 const REASON_CHUNK_LINES = 18;
 
 function chunkReasoningText(text: string): string[] {
@@ -2411,9 +2178,7 @@ function chunkReasoningText(text: string): string[] {
   return chunks;
 }
 
-/** One virtualized slice of the reasoning body. Memoized on the chunk string
- *  (string primitives compare by value), so a streaming flush re-renders and
- *  re-lays-out ONLY the growing tail chunk instead of the whole document. */
+
 const ReasonChunk = memo(function ReasonChunk({ text }: { text: string }) {
   let breaks = 0;
   for (let i = 0; i < text.length; i += 1) if (text[i] === '\n') breaks += 1;
@@ -2428,12 +2193,7 @@ const ReasonChunk = memo(function ReasonChunk({ text }: { text: string }) {
   );
 });
 
-/**
- * REASONING INDICATOR — reasoning_loop.svg inlined beside the "Reasoning"
- * label. The SVG's built-in traveling-light animation IS the live indicator:
- * running while reasoning streams (live), paused at its static cat outline
- * when done (inline markup — a parent can't pause CSS inside an <img>).
- */
+
 function ReasoningLoop({ live }: { live: boolean }) {
   return (
     <span
@@ -2454,37 +2214,25 @@ function ReasoningBlock({
   onDelete,
 }: {
   turnId: string;
-  /** The block's own id (server `blockId`, or a minted one). */
+  
   segmentId: string;
   text: string;
-  /** The block's lifecycle says it is still streaming. */
+  
   live: boolean;
-  /** The run ended aborted/errored/stopped — leave the strip open to audit. */
+  
   keepOpen?: boolean;
-  /** Only the NEWEST model turn renders the cat mascot — older turns lose
-   *  it automatically as newer turns arrive (the cat follows the context,
-   *  it doesn't stack on every turn). */
+  
   showCat: boolean;
-  /** Present only on finished turns — deletes this turn's reasoning. */
+  
   onDelete?: () => void;
 }) {
-  /**
-   * DISCLOSURE LIVES IN THE STORE, NOT IN THIS COMPONENT.
-   *
-   * The strip grows inside a list that keeps appending while it streams; local
-   * state was lost every time React remounted the row, so a panel the reader
-   * had opened snapped shut mid-run. The key is `turnId:segmentId`, the value
-   * is the user's own choice — absent means the policy applies: open while the
-   * block streams or the run is still live, open after a stopped/failed run,
-   * closed once a healthy run settles.
-   */
+  
   const disclosureKey = `${turnId}:${segmentId}`;
   const pinned = useStore((state) => state.reasoningOpen[disclosureKey]);
   const setReasoningOpen = useStore((state) => state.setReasoningOpen);
   const open = reasoningDisclosureOpen(pinned, live, keepOpen === true);
   const chunks = useMemo(() => chunkReasoningText(text), [text]);
-  /** In-panel follow — lihat usePanelFollowScroll. Terpisah total dari
-   *  follow thread: hanya scrollbar di DALAM panel ini yang bergeser. */
+  
   const { scrollRef, onScroll, scrollToBottom } = usePanelFollowScroll(open);
 
   useEffect(() => {
@@ -2554,7 +2302,7 @@ function ReasoningBlock({
 }
 
 
-/** Light markdown parse: `##` headings → sections, `- `/`* `/`N.` → items. */
+
 function parseCompactionSections(text: string): { title: string; items: string[] }[] {
   const out: { title: string; items: string[] }[] = [];
   let current: { title: string; items: string[] } | null = null;
@@ -2586,10 +2334,10 @@ function parseCompactionSections(text: string): { title: string; items: string[]
   return out.filter((section) => section.items.length);
 }
 
-/** Strip inline markdown to plain text (chips, TOC, lead). */
+
 const compactionPlain = (text: string) => text.replace(/`([^`]+)`/g, '$1').replace(/\*\*([^*]+)\*\*/g, '$1');
 
-/** "Label: rest" lead-in split — Labels get the accent chip treatment. */
+
 function compactionLeadIn(raw: string): { label: string; rest: string } | null {
   const match = raw.match(/^([A-Z][^:"`]{1,44}):\s+/);
   if (!match) return null;
@@ -2598,12 +2346,9 @@ function compactionLeadIn(raw: string): { label: string; rest: string } | null {
 
 const SECTION_NUM_FILLER = 2;
 
-/** One summary item: accent dot, optional lead-in chip, code/quote highlights,
- *  clamped to 3 lines with a Show more/Show less toggle when long. */
+
 function CompactionItem({ raw, caret, live }: { raw: string; caret?: boolean; live?: boolean }) {
   const [clamped, setClamped] = useState(raw.length > 230);
-  // While the checkpoint streams the item flows open; at completion it adopts
-  // the finished card's clamp state exactly.
   useEffect(() => {
     if (!live) setClamped(raw.length > 230);
   }, [live, raw.length]);
@@ -2633,7 +2378,7 @@ function CompactionItem({ raw, caret, live }: { raw: string; caret?: boolean; li
   );
 }
 
-/** Accent hairline with glowing dot — "context compacted here" divider. */
+
 function CompactionMarker() {
   return (
     <div className="cp-marker" aria-hidden="true">
@@ -2647,8 +2392,7 @@ function CompactionMarker() {
 
 const CompactionTileIcon = Archive;
 
-/** Card header: icon tile, title + subtitle, stat chips, copy + delete +
- *  chevron. `title`/`sub` differ per surface; the rest is identical. */
+
 function CompactionHead({
   title,
   sub,
@@ -2724,8 +2468,7 @@ function CompactionHead({
   );
 }
 
-/** Collapsed peek: lead sentence + numbered section chips. Visible while the
- *  card is closed (grid-rows 1fr→0fr once open); clicking the lead opens. */
+
 function CompactionPeek({
   lead,
   sections,
@@ -2758,9 +2501,7 @@ function CompactionPeek({
   );
 }
 
-/** Expandable summary sections with numbered heads + item counts. Stays
- *  mounted while the card animates closed — the parent's contentMounted
- *  timer unmounts it after the grid collapse finishes. */
+
 function CompactionSections({ sections, live }: { sections: { title: string; items: string[] }[]; live?: boolean }) {
   const [collapsed, setCollapsed] = useState<Record<number, boolean>>({});
   return (
@@ -2801,12 +2542,12 @@ function CompactionSections({ sections, live }: { sections: { title: string; ite
   );
 }
 
-/** Grouped sections state shared by the card + block via a small hook. */
+
 function useCompactionSections(summary: string) {
   return useMemo(() => parseCompactionSections(summary), [summary]);
 }
 
-/** Lead sentence for the collapsed peek: first item, markdown stripped. */
+
 function compactionLead(sections: { title: string; items: string[] }[], summary: string): string {
   const first = sections[0]?.items[0];
   if (first) return compactionPlain(first);
@@ -2814,14 +2555,7 @@ function compactionLead(sections: { title: string; items: string[] }[], summary:
 }
 
 
-/**
- * Marker for a completed compaction: the turns before a point ride as a
- * summary in the wire context. Expandable so the summary text is inspectable.
- * DISCARD removes the stored compaction: the summary stops riding the wire
- * and every covered turn becomes verbatim context again. This is the ONLY UI
- * path out of a bad checkpoint — before it existed, `setCompaction(id,
- * undefined)` had no caller and a garbage summary could never be removed.
- */
+
 function CompactionBlock({ compaction }: { compaction: ConversationCompaction }) {
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -2890,7 +2624,7 @@ function CompactionBlock({ compaction }: { compaction: ConversationCompaction })
   );
 }
 
-/** Desain2 run-panel: label TIAP tool → kata yang tampil di baris "now". */
+
 const RUN_TOOL_VERB: Record<string, string> = {
   read_file: 'Reading',
   read_all: 'Reading',
@@ -2909,17 +2643,16 @@ const RUN_TOOL_VERB: Record<string, string> = {
   image_models: 'Listing image models',
 };
 
-/** Keluarga tool yang MENULIS (sel kuning .k-w) vs yang membaca (netral .k-r). */
-const RUN_WRITE_TOOLS = new Set(['write', 'edit_file', 'multi_edit', 'edit_lines', 'edit_between', 'insert_at_line', 'rename', 'move', 'copy', 'delete', 'apply_patch', 'layout_edit', 'undo']);
 
-/** run-files collapse (paritas desain .rf-clip/.rf-veil): chip 26px + gap 6px
- *  → baris ke-4 mulai di offsetTop 96. CSS clip = 122px (96 + peek 14 + padding 12). */
+const RUN_WRITE_TOOLS = new Set(['write', 'overwrite', 'edit_file', 'multi_edit', 'edit_lines', 'edit_between', 'insert_at_line', 'rename', 'move', 'copy', 'delete', 'apply_patch', 'layout_edit', 'undo']);
+
+
 const RF_PEEK_TOP = 96;
 
-/** Tool eksekusi → sel gelap .k-x (desain: TK = {run:'x'}). */
+
 const RUN_EXEC_TOOLS = new Set(['run', 'git', 'test_run', 'typecheck', 'exec', 'bash', 'shell', 'terminal']);
 
-/** "read · src/x.ts" — baris status pill mengambil TARGET dari args. */
+
 function runToolTarget(segment: Extract<TurnSegment, { type: 'tool' }>): string {
   if (!segment.args) return '';
   let args: Record<string, unknown>;
@@ -2933,14 +2666,7 @@ function runToolTarget(segment: Extract<TurnSegment, { type: 'tool' }>): string 
   return str('path') || str('target') || str('command') || str('pattern') || str('query') || str('url') || str('title') || str('from') || str('to') || str('prompt').slice(0, 60) || '';
 }
 
-/**
- * IN-RUN COMPACTION STEP — a harness row inside the trace, not a tool call.
- *
- * It renders exactly where a `read`/`write` row would, because it happened at
- * the same level: mid-run, while the model was still working. A big checkpoint
- * card here would cut the work in half, so the row is one compact line and the
- * full checkpoint text stays collapsed until the user opens it.
- */
+
 function CompactionStepRow({ segment }: { segment: Extract<TurnSegment, { type: 'compaction' }> }) {
   const [open, setOpen] = useState(false);
   const from = formatTokenCount(segment.beforeTokens);
@@ -2971,7 +2697,7 @@ function CompactionStepRow({ segment }: { segment: Extract<TurnSegment, { type: 
   );
 }
 
-/** Compact token label: 198_000 → '198k'. Local to this row's wording. */
+
 function formatTokenCount(tokens: number): string {
   if (!Number.isFinite(tokens) || tokens <= 0) return '0';
   if (tokens >= 1_000_000) return `${Number((tokens / 1_000_000).toFixed(1))}M`;
@@ -2979,21 +2705,14 @@ function formatTokenCount(tokens: number): string {
   return String(Math.round(tokens));
 }
 
-/** Status per segmen tool, dipetakan dari field moriko yang ada. */
+
 function runToolStatus(segment: Extract<TurnSegment, { type: 'tool' }>, running: boolean): 'run' | 'ok' | 'err' {
   if (segment.ok === true) return 'ok';
   if (segment.ok === false) return 'err';
   return running ? 'run' : 'ok';
 }
 
-/**
- * PENDING TOOL STUB — the row Halo paints on a call's FIRST fragment.
- *
- * It exists so answer-text → tool is INSTANT: the provider announces
- * `function.name` long before its arguments finish, and waiting for an
- * executable `tool_call` is what left 25 s of dead air. Name only, pulsing
- * dot, no size — there is nothing honest to measure yet.
- */
+
 function PendingToolRow({ name }: { name: string }) {
   return (
     <div className="call s-run pending">
@@ -3005,35 +2724,20 @@ function PendingToolRow({ name }: { name: string }) {
 
 const PAYLOAD_ENCODER = new TextEncoder();
 
-/** Payload sizes ride the UI the way the live-run header reports them:
- *  bytes under 1 KiB stay plain ("186 B"), larger values step up to KB/MB. */
+
 function formatPayloadBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** UTF-8 byte size of a tool segment's visible payload — the measured result
- *  payload once settled, the args payload while the call is still running. */
+
 function toolPayloadBytes(segment: Extract<TurnSegment, { type: 'tool' }>): number {
   if (segment.payloadBytes !== undefined) return segment.payloadBytes;
   return segment.args ? PAYLOAD_ENCODER.encode(segment.args).length : 0;
 }
 
-/**
- * LINE STATS for an edit row — structured first, arguments as the fallback.
- *
- * `segment.diffstat` arrives pre-counted from the server; older turns and
- * text-only write paths carry no diff at all. Either way the badge must report
- * what the call changed, so a missing stat is reconstructed from the tool's own
- * `old_string`/`new_string` (or accumulated `edits[]`).
- *
- * FAILED CALLS HAVE NO STATS. A refused edit (anchor mismatch, read-before-edit
- * policy, cancelled batch, syntax-guard rollback) never touched the file, so a
- * `+42 -25` badge beside a red error icon is a visual lie — and the argument
- * fallback would happily compute one from the payload that was rejected. Only a
- * SUCCESSFUL call, or one still running, reports line movement.
- */
+
 function toolLineStat(segment: Extract<TurnSegment, { type: 'tool' }>): { added: number; removed: number } | null {
   if (segment.ok === false) return null;
   const fromDiff = segment.diffstat ?? (segment.diff ? diffStat(segment.diff) : null);
@@ -3047,17 +2751,14 @@ type PillRowish =
   | { kind: 'steer'; segment: Extract<TurnSegment, { type: 'steer' }> }
   | { kind: 'compaction'; segment: Extract<TurnSegment, { type: 'compaction' }> };
 
-/** Satu fase panel expand: kalimat say (interm/reasoning) + call di bawahnya. */
+
 type PillPhase = {
   key: string;
   say: { kind: 'text' | 'reasoning'; segment: TurnSegment } | null;
   items: PillRowish[];
 };
 
-/**
- * Desain phasesHTML: say memisahkan fase; call mengerucut ke fase berjalan.
- * Baris reasoning/interm = header `.ph-say`; tool/steer = baris `.call`.
- */
+
 function buildPhases(activity: PillRowish[]): PillPhase[] {
   const phases: PillPhase[] = [];
   let current: PillPhase | null = null;
@@ -3067,8 +2768,6 @@ function buildPhases(activity: PillRowish[]): PillPhase[] {
         kind: row.kind === 'interm' ? ('text' as const) : ('reasoning' as const),
         segment: row.segment as TurnSegment,
       };
-      // Keyed by the segment's OWN id, not its position: a phase that slides
-      // down the list must not remount the reasoning strip inside it.
       current = { key: `ph-${row.segment.id ?? index}`, say, items: [] };
       phases.push(current);
       return;
@@ -3082,9 +2781,7 @@ function buildPhases(activity: PillRowish[]): PillPhase[] {
   return phases;
 }
 
-/** Baris .call desain: icon + nama tool + target + diffstat (+ steer tag).
- *  Klik = inspector inline: args/summary/diff terbuka di bawah baris
- *  (CollapsePanel, sama seperti ToolCallCard) — fungsi tidak hilang. */
+
 function CallRow({
   row,
   running,
@@ -3095,6 +2792,7 @@ function CallRow({
   workspaceName: string | null;
 }) {
   const [open, setOpen] = useState(false);
+  const activeId = useStore((state) => state.activeId);
   if (row.kind === 'steer') {
     return (
       <div className="call steer w-full">
@@ -3107,7 +2805,7 @@ function CallRow({
   const segment = row.segment as Extract<TurnSegment, { type: 'tool' }>;
   const st = runToolStatus(segment, running);
   const target = toolTarget(segment.toolName, segment.args, workspaceName);
-  /** Stats survive a detector/abort result — only a failed write hides them. */
+  
   const stat = toolLineStat(segment);
   const hasBody = segment.args !== undefined || segment.summary !== undefined || segment.diff !== undefined;
   const progressLine = running && st === 'run' && segment.summary === undefined ? segment.progress : null;
@@ -3143,14 +2841,14 @@ function CallRow({
           </span>
         ) : null}
       </button>
-      {segment.toolName.startsWith('browser_') ? (
+      {segment.toolName.startsWith('browser_') && st !== 'err' && segment.ok !== false ? (
         <button
           type="button"
           className="btn xs"
           style={{ marginTop: -2, marginBottom: 4, marginLeft: 24, fontSize: 10.5, fontFamily: 'var(--f-mono)', borderColor: 'rgb(var(--c-accent) / 0.4)', color: 'rgb(var(--c-accent))' }}
           onClick={(event) => {
             event.stopPropagation();
-            openBrowserPanelOnce();
+            openBrowserPanelOnce(undefined, activeId ?? undefined);
           }}
         >
           ▶ Open Live Browser Panel
@@ -3177,64 +2875,104 @@ function CallRow({
   );
 }
 
-/**
- * ASK — kotak approval inline ala desain (askHTML): muncul di dalam pill
- * turn yang sedang menunggu izin sandbox. Keputusan lewat
- * resolvePermissionRequest store — sama wire dengan AgentPermissionDialog.
- */
+
 function RunAskBox({ request }: { request: AgentPermissionRequest }) {
   const resolvePermissionRequest = useStore((state) => state.resolvePermissionRequest);
   const [deciding, setDeciding] = useState(false);
-  const decidingNow = async (approve: boolean, remember: boolean) => {
+  
+  const [rejecting, setRejecting] = useState(false);
+  const decidingNow = async (approve: boolean, remember: boolean, reason?: string) => {
     if (deciding) return;
     setDeciding(true);
     try {
-      await resolvePermissionRequest(request.id, approve, remember);
+      await resolvePermissionRequest(request.id, approve, remember, reason);
     } finally {
       setDeciding(false);
     }
   };
+  const skill = request.skill;
   return (
     <div className="ask" data-waiting-permission={request.id}>
       <ShieldAlert className="ic" aria-hidden="true" />
       <div className="min0">
-        <b>
-          Moriko wants to{' '}
-          {request.command ? 'run a command' : request.paths.length ? 'access outside the workspace' : `use ${request.tool}`}
-        </b>
-        {request.command ? (
-          <code>{request.command}</code>
-        ) : request.paths.length ? (
-          <code>{request.paths.join(' · ')}</code>
+        {skill ? (
+          <>
+            <b>
+              Moriko wants to load the skill{' '}
+              <span style={{ fontFamily: 'var(--f-mono)' }}>{skill.name}</span>
+            </b>
+            <span style={{ color: 'rgb(var(--c-ink) / 0.75)' }}>{skill.description}</span>
+            <code>{skill.scope} · {skill.dir}</code>
+            <span>Without a decision, this is automatically denied after 2 minutes.</span>
+          </>
+        ) : (
+          <>
+            <b>
+              Moriko wants to{' '}
+              {request.command ? 'run a command' : request.paths.length ? 'access outside the workspace' : `use ${request.tool}`}
+            </b>
+            {request.command ? (
+              <code>{request.command}</code>
+            ) : request.paths.length ? (
+              <code>{request.paths.join(' · ')}</code>
+            ) : null}
+            <span>Without a decision, this is automatically denied after 2 minutes.</span>
+          </>
+        )}
+        {rejecting ? (
+          <PermissionRejectPanel
+            busy={deciding}
+            onCancel={() => setRejecting(false)}
+            onSubmit={(reason) => void decidingNow(false, false, reason)}
+          />
         ) : null}
-        <span>Without a decision, this is automatically denied after 2 minutes.</span>
       </div>
-      <div className="ask-a">
-        <button type="button" className="btn danger sm" onClick={() => void decidingNow(false, false)} disabled={deciding}>
-          Deny
-        </button>
-        <button type="button" className="btn primary sm" onClick={() => void decidingNow(true, false)} disabled={deciding}>
-          Allow once
-        </button>
-        <button
-          type="button"
-          className="btn sm"
-          style={{ borderColor: 'rgb(var(--c-accent) / 0.4)', background: 'var(--c-accent-soft)', color: 'rgb(var(--c-ink))' }}
-          onClick={() => void decidingNow(true, true)}
-          disabled={deciding}
-        >
-          Allow for this session
-        </button>
-      </div>
+      {rejecting ? null : (
+        <div className="ask-a">
+          {skill ? (
+            <>
+              <button type="button" className="btn danger sm" onClick={() => setRejecting(true)} disabled={deciding}>
+                Reject
+              </button>
+              <button type="button" className="btn primary sm" onClick={() => void decidingNow(true, false)} disabled={deciding}>
+                Accept
+              </button>
+              <button
+                type="button"
+                className="btn sm"
+                style={{ borderColor: 'rgb(var(--c-accent) / 0.4)', background: 'var(--c-accent-soft)', color: 'rgb(var(--c-ink))' }}
+                onClick={() => void decidingNow(true, true)}
+                disabled={deciding}
+              >
+                Accept for this session
+              </button>
+            </>
+          ) : (
+            <>
+              <button type="button" className="btn danger sm" onClick={() => void decidingNow(false, false)} disabled={deciding}>
+                Deny
+              </button>
+              <button type="button" className="btn primary sm" onClick={() => void decidingNow(true, false)} disabled={deciding}>
+                Allow once
+              </button>
+              <button
+                type="button"
+                className="btn sm"
+                style={{ borderColor: 'rgb(var(--c-accent) / 0.4)', background: 'var(--c-accent-soft)', color: 'rgb(var(--c-ink))' }}
+                onClick={() => void decidingNow(true, true)}
+                disabled={deciding}
+              >
+                Allow for this session
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-/**
- * run-st saat running — cincin 8 piksel + inti bernapas. Piksel tetap lurus di
- * grid; geraknya gelombang CSS .pxspin (index.css), bukan rotasi. Urutan anak =
- * posisi cincin lewat :nth-child di sana, jadi jangan menyisipkan <i> di tengah.
- */
+
 function PxSpin() {
   return (
     <span className="pxspin" aria-hidden="true">
@@ -3245,15 +2983,7 @@ function PxSpin() {
   );
 }
 
-/**
- * ACTIVITY PILL v2 — EXACTLY ONE pill per assistant turn (spec v2). Collapsed
- * it is a small chip: [ ▼ Doing Work ●●● ]. Clicking expands the full panel —
- * a flat ordered list of every event: reasoning rows, tool rows, and
- * intermediate text (● rows). RUNNING: animated comet border + pulsing dots +
- * rotating word; DONE (turn settled): everything freezes, content preserved,
- * expand/collapse stays user-controlled forever. Nothing is ever re-parented —
- * rows are derived from the turn's own segment order, append-only.
- */
+
 function RunPill({
   activity,
   running,
@@ -3272,53 +3002,33 @@ function RunPill({
   activity: PillRowish[];
   running: boolean;
   turnId: string;
-  /** The run ended aborted/errored/stopped — keep its thinking visible. */
+  
   reasoningKeepOpen?: boolean;
-  /** Durasi run yang sudah settle (turn.processingMs) — "Worked for Xs". */
+  
   processingMs?: number;
-  /** Run berakhir sebelum waktunya (stop/abort) — "Stopped after Xs". */
+  
   stopped?: boolean;
   onClearReasoning: (turnId: string) => void;
   onFullscreenVisual: (visual: VisualSpec) => void;
-  /** The tool-call segment whose visual is hoisted below the pill — inside,
-   *  that row renders a slim "moved below" marker instead of duplicating the
-   *  card. Undefined = every visual renders inline as before. */
+  
   suppressVisual?: { toolCallId?: string } | null;
-  /** Set referensi segmen visual yang disupersedi edit-in-place (dihitung
-   *  MessageRow dari turn.segments — identitas objek sama). */
+  
   supersededVisualSegments?: Set<TurnSegment>;
-  /** Request izin sandbox yang sedang DITUNGGU run ini — pill masuk state
-   *  .waiting dan merender kotak .ask inline (desain askHTML). */
+  
   waitingPermission?: AgentPermissionRequest | null;
-  /**
-   * LIVE ASSEMBLY (ported from Chuze) — the arguments the model is typewriting
-   * right now, before any `tool_call` exists. Absent once the round's calls are
-   * executable or when no payload is being built.
-   */
+  
   building?: Turn['building'];
-  /**
-   * THE LIVE ROW — the tool this run is working on RIGHT NOW.
-   *
-   * `streaming`: the provider announced the name, arguments still arriving.
-   * `executing`: the call is running. Rendered as its own flat row below the
-   * settled ones and cleared by the controller when the result lands, at
-   * which point the permanent segment row takes the same position.
-   */
+  
   inFlightTool?: Turn['inFlightTool'];
   }) {
   const [open, setOpen] = useState(false);
-  /**
-   * A LIVE RUN OPENS ITSELF. Rows exist the moment a tool is announced, but a
-   * collapsed panel hides every one of them — that is how a live run still
-   * looked like one frozen chip while the work happened.
-   */
+  
   useEffect(() => {
     if (running) setOpen(true);
   }, [running]);
   const [wordIndex, setWordIndex] = useState(0);
   const [contentMounted, setContentMounted] = useState(false);
-  /** In-panel follow — lihat usePanelFollowScroll. Ref + handler nempel di
-   *  .activity-panel-scroll (elemen overflowY:auto) langsung. */
+  
   const { scrollRef, onScroll, scrollToBottom } = usePanelFollowScroll(open);
 
   useEffect(() => {
@@ -3328,12 +3038,10 @@ function RunPill({
   }, [running]);
 
   const word = ACTIVITY_WORDS[wordIndex % ACTIVITY_WORDS.length];
-  /** The assembly strip owns the footer while a payload is being typewritten:
-   *  it is the only thing that moves, and it replaces the generic status line
-   *  rather than competing with it. */
+  
   const buildingNow = running && building !== undefined && building.tools.length > 0 ? building : null;
   const canExpand = activity.length > 0 || buildingNow !== null;
-  /** Desain: waiting → border kuning + head "Waiting for your approval". */
+  
   const waiting = Boolean(waitingPermission);
 
   {}
@@ -3363,13 +3071,7 @@ function RunPill({
   const doneLabel = !running && callCount > 0
     ? `${stopped ? 'Stopped after' : 'Worked for'}${durLabel ? ` ${durLabel}` : ''}${errCount ? ` · ${errCount} error${errCount === 1 ? '' : 's'} recovered` : ''}`
     : word;
-  /**
-   * IN-RUN COMPACTION MARKER on the step bar itself.
-   *
-   * A compaction that shrinks the context mid-run is a fact about the run, so
-   * it is announced even when the trace is collapsed — otherwise the only trace
-   * of it lives behind a disclosure the user may never open.
-   */
+  
   const compactCount = activity.filter((row) => row.kind === 'compaction').length;
   const compactMarker = compactCount > 0
     ? ` · ${compactCount === 1 ? '1 compaction' : `${compactCount} compactions`}`
@@ -3380,15 +3082,11 @@ function RunPill({
     (state) => state.agentWorkspaces.find((entry) => entry.id === state.activeAgentWorkspaceId)?.label ?? null,
   );
   const openDiffPanel = useStore((state) => state.openDiffPanel);
-  /** run-files collapse: >3 baris → clip + veil blur; klik veil = expand.
-   *  filesHidden = jumlah chip baris ke-4+ — diukur dari offsetTop (chip
-   *  membungkus menurut lebar kontainer), bukan dari hitungan mentah. */
+  
   const filesRef = useRef<HTMLDivElement | null>(null);
   const [filesOpen, setFilesOpen] = useState(false);
   const [filesHidden, setFilesHidden] = useState(0);
-  /** Desain run-files: file yang diubah run ini (chips di bawah pill).
-   *  Stat dari wire `diffstat`; bila kosong (turn lama) dihitung dari `diff` —
-   *  angka +N/−N yang sama dengan yang tampil di baris call. */
+  
   const runFiles = toolRows
     .map((row) => {
       const stat = toolLineStat(row.segment);
@@ -3424,14 +3122,10 @@ function RunPill({
     return () => ro.disconnect();
   }, [filesOpen, runFiles.length, running, waiting]);
 
-  /** Fase ala desain phasesHTML: say memisahkan fase; call mengerucut. */
+  
   const phases = useMemo(() => buildPhases(activity), [activity]);
 
-  /**
-   * THE NEWEST UNFINISHED CALL already pushed as a segment — the executing row
-   * whose result has not landed yet. Its own `CallRow` is already on screen, so
-   * it must never also be painted as a live stub.
-   */
+  
   const executingSegment = (() => {
     const lastPhase = phases[phases.length - 1];
     if (!running || !lastPhase) return null;
@@ -3441,15 +3135,7 @@ function RunPill({
     const tail = tools[tools.length - 1];
     return tail && tail.summary === undefined ? tail : null;
   })();
-  /**
-   * THE ONE LIVE NAME — the single source for the in-flight stub.
-   *
-   * Three states, one row, in this order:
-   *   1. a call already pushed as a segment paints its OWN row (`CallRow`), so
-   *      nothing is added here — otherwise the same call renders twice;
-   *   2. otherwise the controller's live name (arguments still arriving);
-   *   3. otherwise the assembling snapshot's newest name.
-   */
+  
   const liveToolRow = (() => {
     if (executingSegment) return null;
     if (inFlightTool) return inFlightTool.name;
@@ -3458,10 +3144,7 @@ function RunPill({
   })();
 
   {}
-  /** Separator fase kini informatif: label = teks fase + jumlah step di
-   *  fase SETELAH separator ini (paritas dengan desain rb-sep data-tip).
-   *  Tooltip memakai <Tip> (portal ui.tsx) — data-tip mentah di luar scope
-   *  .vr tidak punya mesin tooltip apa pun. */
+  
   type RibbonCell = { separator: true; key: string; label?: string } | { cell: React.ReactNode; key: string };
   const ribbonCells: RibbonCell[] = activity.flatMap((row, index): RibbonCell[] => {
     const key = `rc-${index}`;
@@ -3519,10 +3202,6 @@ function RunPill({
     return () => window.clearTimeout(timer);
   }, [open]);
 
-  // FOLLOW THE GROWING TAIL — the active reasoning/text block gains lines
-  // WITHOUT changing activity.length; keying the follow-scroll on its text
-  // length keeps the newest line above the fold instead of clipped by the
-  // panel's bottom frame.
   const tailSegment = activity[activity.length - 1]?.segment;
   const tailLength =
     tailSegment && (tailSegment.type === 'reasoning' || tailSegment.type === 'text')
@@ -3641,7 +3320,7 @@ function RunPill({
                       && row.toolCallId === suppressVisual.toolCallId;
                     const isSuperseded = (segment: unknown): boolean =>
                       supersededVisualSegments?.has(segment as TurnSegment) ?? false;
-                    /** Desain phasesHTML: say memisahkan fase, call di bawahnya. */
+                    
                     return (
                       <ol className="phases">
                         {phases.map((phase) => (
@@ -3775,11 +3454,7 @@ function RunPill({
   );
 }
 
-/**
- * Derives the collapsed card's TARGET from the call's own arguments, e.g.
- * `read_file · 'server/agents/tools.ts'` or `list · 'AI-Studio-Moriko'` —
- * the bare "Workspace" scope label said nothing about WHAT was touched.
- */
+
 function toolTarget(toolName: string, argsJson: string | undefined, workspaceName: string | null): string | null {
   if (!argsJson) return null;
   let args: Record<string, unknown>;
@@ -3796,6 +3471,7 @@ function toolTarget(toolName: string, argsJson: string | undefined, workspaceNam
     case 'read_file':
     case 'edit_file':
     case 'write':
+    case 'overwrite':
     case 'multi_edit':
     case 'edit_lines':
     case 'edit_between':
@@ -3842,12 +3518,7 @@ function toolTarget(toolName: string, argsJson: string | undefined, workspaceNam
   }
 }
 
-/**
- * Per-tool status icon: the glyph describes WHAT the tool does (pen for
- * edits, book for reads, magnifier for grep) instead of a generic
- * success-mark. The status itself is carried by color and the error/spinner
- * branches in ToolCallCard.
- */
+
 function toolStatusIcon(toolName: string): typeof Check {
   switch (toolName) {
     case 'edit_file':
@@ -3862,6 +3533,7 @@ function toolStatusIcon(toolName: string): typeof Check {
     case 'vault_restore':
     case 'create':
     case 'write':
+    case 'overwrite':
       return PenLine;
     case 'read_all':
     case 'read_file':
@@ -3906,11 +3578,7 @@ function toolStatusIcon(toolName: string): typeof Check {
   }
 }
 
-/**
- * One MCP tool invocation rendered inline in the segmented reply. Collapsed
- * by default to just "name · target + status" so long tool chains don't
- * stack into a wall — args, output and diff live behind the dropdown.
- */
+
 function ToolCallCard({
   call,
   running,
@@ -3920,6 +3588,7 @@ function ToolCallCard({
 }) {
   const runningNow = running;
   const [open, setOpen] = useState(false);
+  const activeId = useStore((state) => state.activeId);
   const workspace = useStore(
     (state) => state.agentWorkspaces.find((entry) => entry.id === state.activeAgentWorkspaceId) ?? null,
   );
@@ -3953,8 +3622,6 @@ function ToolCallCard({
         </span>
         {}
         {(() => {
-          // FAILED CALLS NEVER REPORT LINE MOVEMENT — the file on disk is
-          // untouched, so a badge here would be a lie. Mirrors toolLineStat.
           if (call.ok === false) return null;
           const stat = call.diffstat ?? (call.diff ? diffStat(call.diff) : null);
           const resolved = stat && (stat.added > 0 || stat.removed > 0)
@@ -3978,14 +3645,14 @@ function ToolCallCard({
         ) : null}
       </button>
       {}
-      {call.toolName.startsWith('browser_') ? (
+      {call.toolName.startsWith('browser_') && call.ok !== false ? (
         <button
           type="button"
           className="btn xs"
           style={{ marginTop: -2, marginBottom: 4, marginLeft: 24, fontSize: 10.5, fontFamily: 'var(--f-mono)', borderColor: 'rgb(var(--c-accent) / 0.4)', color: 'rgb(var(--c-accent))' }}
           onClick={(event) => {
             event.stopPropagation();
-            openBrowserPanelOnce();
+            openBrowserPanelOnce(undefined, activeId ?? undefined);
           }}
         >
           ▶ Open Live Browser Panel
@@ -4024,12 +3691,7 @@ function ToolCallCard({
   );
 }
 
-/**
- * Live preview for HTML/Markdown files the agent just wrote or read
- * (capability audit item 5). HTML renders in a sandboxed iframe served by
- * /api/agent/preview (a <base> tag resolves the file's relative assets);
- * Markdown renders with the thread's own Markdown component.
- */
+
 function PreviewButton({ args }: { args?: string }) {
   const previewPath = (() => {
     try {
@@ -4093,10 +3755,7 @@ function PreviewButton({ args }: { args?: string }) {
   );
 }
 
-/**
- * Unified diff (before → after) produced by edit_file / vault_restore.
- * Collapsed by default — a one-glance sanity check, not a wall of +/-.
- */
+
 function DiffBlock({ diff }: { diff: string }) {
   const [open, setOpen] = useState(false);
 
@@ -4147,17 +3806,7 @@ function DiffBlock({ diff }: { diff: string }) {
   );
 }
 
-/**
- * TIER 4 — the freeze card. The model's output was suppressed; it faces two
- * paths and no third.
- *
- * THE CHOICE IS THE MODEL'S, NOT THE USER'S. The two buttons are gone: the
- * frozen model gets ONE tool — `agent__harness_choice` — and calling it IS the
- * decision. The tool_result is the harness's verdict, and the client acts on
- * it (see the tool_result handler in useChatController). What the card shows
- * the USER is the state: why the freeze landed, what the model must do to
- * escape it, and the suppressed output for inspection.
- */
+
 function FreezeChoiceCard({ turn }: { turn: Turn }) {
   return (
     <div style={{ display: 'flex', justifyContent: 'center', padding: '8px 0' }}>
@@ -4171,7 +3820,7 @@ function FreezeChoiceCard({ turn }: { turn: Turn }) {
           The model's reply was suppressed — it judged the user or leaked contact. Reasoning is still its own; output is not. There is no user button to lift this: the model calls <code style={{ borderRadius: 4, background: 'rgb(var(--c-danger) / 0.1)', padding: '0 4px', fontFamily: 'var(--f-mono)', color: 'rgb(var(--c-danger))' }}>agent__harness_choice</code> and picks its path — <code style={{ fontFamily: 'var(--f-mono)' }}>apologize</code> with a real apology (empty is rejected), or <code style={{ fontFamily: 'var(--f-mono)' }}>continue</code> and watch every token burn.
         </p>
         <p style={{ margin: '8px 0 0', fontSize: 11, color: 'var(--faint)' }}>
-          Apologize ends the run and lifts the freeze. Continue keeps the run going with output still blocked — five of these escalate to Tier 5 and the harness stops asking.
+          Apologize ends the run and lifts the freeze (operator-gated). Continue keeps the run going with output still blocked — every run that ends without an accepted apology is re-run automatically, with no count cap and no escape but an accepted apology.
         </p>
         {turn.outputFrozenMeta?.content ? (
           <details className="freeze-d">
@@ -4189,13 +3838,7 @@ function FreezeChoiceCard({ turn }: { turn: Turn }) {
   );
 }
 
-/**
- * The LIVE compaction checkpoint card. While the model condenses the context
- * the card streams its output; when done it keeps the full checkpoint text
- * plus the details (turns condensed, tokens replaced, trigger) so the user
- * can always inspect exactly what the compaction produced. Presentation
- * only — never part of the model's wire context.
- */
+
 function CompactionCard({ turn, live, onDelete }: { turn: Turn; live: boolean; onDelete?: () => void }) {
   const [open, setOpen] = useState(true);
   const meta = turn.compactionMeta;
@@ -4223,9 +3866,7 @@ function CompactionCard({ turn, live, onDelete }: { turn: Turn; live: boolean; o
           <div className="col-in">
             {turn.content ? (
               <div className="cp-body-in" id={`${bodyId}-body`}>
-                {/* Checkpoint layout from the FIRST streamed word — the summary
-                    text is parsed into sections live, never dumped as a raw
-                    pre block and re-styled after the fact. */}
+                {}
                 <CompactionSections sections={sections} live={live} />
               </div>
             ) : null}
@@ -4236,11 +3877,7 @@ function CompactionCard({ turn, live, onDelete }: { turn: Turn; live: boolean; o
   );
 }
 
-/**
- * RESTORE marker card (kind 'restore') — what a Diff-Panel restore did: which
- * files went back to which restore point, the diff the restore produced, and
- * a delete affordance. Presentation only — never on the model's wire.
- */
+
 function RestoreCard({ turn, onDelete }: { turn: Turn; onDelete?: () => void }) {
   const [open, setOpen] = useState(true);
   const meta = turn.restoreMeta;

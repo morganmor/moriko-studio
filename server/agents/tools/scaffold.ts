@@ -1,8 +1,4 @@
-/**
- * F4.4 — agent__scaffold: instantiate project templates from
- * server/agents/templates/<id>/*.tpl ({{name}}, {{Name}}, {{name_kebab}}),
- * refusing to overwrite, all writes vaulted. Template list via { "list": true }.
- */
+
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,7 +18,7 @@ function fill(tpl: string, vars: Record<string, string>): string {
     .replace(/\{\{name\}\}/g, vars.name ?? '');
 }
 
-/** Render a template's file list: dir => [templateFile, targetPath(out)]. */
+
 function renderTemplate(id: string, dest: string, vars: Record<string, string>): Array<{ tplFile: string; target: string; content: string }> {
   const root = path.join(templatesRoot(), id);
   const out: Array<{ tplFile: string; target: string; content: string }> = [];

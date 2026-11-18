@@ -1,55 +1,17 @@
-/**
- * LIVENESS PRIMITIVES — the single owner of "how long is too long".
- *
- * Why this module exists (see docs/FREEZE-RESILIENCE.md):
- *
- * Before it, every bound in the server was a hand-rolled `new
- * AbortController()` + `setTimeout` + `clearTimeout`, written six different
- * ways in six files, each with its own idea of what to do when the clock ran
- * out. Two consequences showed up in production:
- *
- *  - a STALLED upstream could not be told apart from a SLOW one, because no
- *    bound distinguished "no bytes yet" from "no bytes for a while";
- *  - nothing carried a MACHINE-READABLE reason, so a killed request, a user
- *    abort, and a network error all arrived as the same shapeless Error.
- *
- * The two shapes a bound can take are genuinely different, so they are two
- * functions here rather than one with a flag:
- *
- *  - `deadline()` — a TOTAL budget. The work gets `ms`, no matter how healthy
- *    it looks.
- *  - `idle()`     — a SILENCE budget. The timer resets on every sign of life,
- *    so a long generation that keeps streaming is never killed while one that
- *    stopped talking is. This is the shape a model stream needs.
- *
- * Both compose with a PARENT signal (a user Stop) and keep the two causes
- * distinguishable: `signal.reason` is a `LivenessTimeout` when the clock ran
- * out, and the parent's own reason when the user aborted. That distinction is
- * what lets the watchdog report honestly instead of guessing.
- *
- * Contract: `ms <= 0` means "no timer" — the bound is disabled. This matches
- * the "empty = unlimited" convention the rest of the settings follow.
- */
 
-/**
- * Silence budget for provider streaming: if NO chunk arrives for this many
- * milliseconds, the stream is considered stalled (not slow) and is aborted
- * with a machine-readable LivenessTimeout("STREAM_IDLE"). 120s is well above
- * the bursty-stall window typical of overloaded providers (30-60s) yet below
- * the 180s subscriber-grace and 240s stall-sweeper in streamRegistry, so the
- * idle bound reports honestly before the blunt sweepers fire.
- */
+
+
 export const STREAM_IDLE_MS = 600_000;
 
-/** Node clamps timers above 2^31-1 ms to 1 ms — refuse the value instead. */
+
 const MAX_TIMER_MS = 2_147_483_647;
 
-/** `30s` / `1500ms` — the message a human reads in a tool result. */
+
 function formatDuration(ms: number): string {
   return ms >= 1000 && ms % 1000 === 0 ? `${ms / 1000}s` : `${ms}ms`;
 }
 
-/** The clock ran out. Carries the code and the budget for logs and reports. */
+
 export class LivenessTimeout extends Error {
   readonly code: string;
   readonly timeoutMs: number;
@@ -62,34 +24,26 @@ export class LivenessTimeout extends Error {
   }
 }
 
-/**
- * True for our own `LivenessTimeout` AND for the platform's abort error.
- *
- * `fetch` rejects with `signal.reason` when one is set, but some runtimes and
- * some internal paths still surface a bare `AbortError`/`TimeoutError`
- * DOMException. Callers that want "was this a bound expiring?" should ask this
- * predicate rather than compare names themselves — that comparison is exactly
- * the duplicated knowledge this module exists to remove.
- */
+
 export function isAbortLike(value: unknown): boolean {
   if (value instanceof LivenessTimeout) return true;
   return value instanceof Error && (value.name === 'AbortError' || value.name === 'TimeoutError');
 }
 
-/** True when this specific bound expired (code omitted = any bound). */
+
 export function isLivenessTimeout(value: unknown, code?: string): value is LivenessTimeout {
   return value instanceof LivenessTimeout && (code === undefined || value.code === code);
 }
 
 export interface Deadline {
-  /** Pass to the work being bounded. Aborts on timeout or on parent abort. */
+  
   readonly signal: AbortSignal;
   readonly code: string;
-  /** The budget that was requested (`<= 0` = no timer was armed). */
+  
   readonly timeoutMs: number;
-  /** True only when THIS bound's timer expired (not a parent abort). */
+  
   readonly expired: boolean;
-  /** Cancels the timer. Idempotent — call it when the work finished early. */
+  
   clear(): void;
 }
 
@@ -99,15 +53,12 @@ function assertBudget(ms: number, code: string): void {
   }
 }
 
-/** A signal that never aborts, for bounds with no parent. */
+
 function detachedSignal(): AbortSignal {
   return new AbortController().signal;
 }
 
-/**
- * A TOTAL budget: `ms` milliseconds from now, whatever happens in between.
- * Use for one-shot work (a request, an RPC, a page download).
- */
+
 export function deadline(parent: AbortSignal | undefined, ms: number, code: string): Deadline {
   assertBudget(ms, code);
   const controller = new AbortController();
@@ -153,14 +104,11 @@ export function deadline(parent: AbortSignal | undefined, ms: number, code: stri
 }
 
 export interface IdleBound extends Deadline {
-  /** Re-arms the timer. Call on every sign of life (each chunk received). */
+  
   reset(): void;
 }
 
-/**
- * A SILENCE budget: `ms` of no activity. `reset()` on every chunk. Use for
- * streams, where a long transfer is healthy but a quiet one is not.
- */
+
 export function idle(parent: AbortSignal | undefined, ms: number, code: string): IdleBound {
   assertBudget(ms, code);
   const controller = new AbortController();
@@ -210,14 +158,7 @@ export function idle(parent: AbortSignal | undefined, ms: number, code: string):
   };
 }
 
-/**
- * Promise-shaped total budget: runs `work` with a bounded signal and rejects
- * with `LivenessTimeout` when the clock runs out first.
- *
- * The work's own settlement is never awaited after the bound expires — a
- * late rejection is absorbed, so a slow-then-failing operation cannot become
- * an unhandled rejection just because we stopped listening.
- */
+
 export async function withDeadline<T>(
   ms: number,
   code: string,
@@ -265,5 +206,5 @@ export async function withDeadline<T>(
   }
 }
 
-/** Re-exported so callers can build a parent-less signal without a controller. */
+
 export { detachedSignal };

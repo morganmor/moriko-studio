@@ -1,10 +1,4 @@
-/**
- * Vision tool configuration store.
- *
- * One row: which PROVIDER + multimodal MODEL answers `agent__vision` calls.
- * Kept in `~/.moriko/vision.json` (see paths.ts) so a restart keeps it, and
- * the UI panel saves/loads through /api/vision/config.
- */
+
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';

@@ -1,7 +1,4 @@
-/**
- * Mococraft scanner — runs the rule catalog over file content, computes the
- * Slop Index and the radar dimensions, and produces a punch list.
- */
+
 
 import { rulesFor, COPY_CLICHES, PLACEHOLDER_NAMES, type SlopRule } from './rules.js';
 
@@ -19,9 +16,9 @@ export interface ScanReport {
   file: string;
   hits: SlopHit[];
   copyHits: Array<{ phrase: string; line: number }>;
-  slopIndex: number; // 0-100
+  slopIndex: number;
   verdict: 'clean' | 'watch' | 'slop';
-  radar: Record<string, number>; // dimension name -> penalty points
+  radar: Record<string, number>;
 }
 
 const UI_FILE_RE = /\.(?:tsx|jsx|ts|js|css|html|svelte|vue)$/i;
@@ -54,7 +51,6 @@ export function scanContent(path: string, content: string, sensitivity: number):
   for (const rule of rulesFor() as SlopRule[]) {
     const m = rule.re.exec(content);
     if (!m) continue;
-    // Multiple matches: count them, report the first.
     const global = content.match(new RegExp(rule.re.source, 'gi'));
     const count = global?.length ?? 1;
     hits.push({
@@ -83,7 +79,6 @@ export function scanContent(path: string, content: string, sensitivity: number):
   }
   if (copyHits.length > 0) radar['Copy'] = copyHits.length;
 
-  // Slop index: criticals weigh 18, warns 8, copy clichés 4. Capped at 100.
   let score = 0;
   for (const h of hits) score += h.severity === 'critical' ? 18 : 8;
   score += copyHits.length * 4;

@@ -1,7 +1,4 @@
-/**
- * F4.1 — agent__arch_map: module-level architecture map (fan-in/out,
- * instability, cycles, mermaid) from the deps graph.
- */
+
 import type { AgentToolContext, HarnessToolResult } from './shared.js';
 import { str, num, truncateOutput, requireWorkspace, resolveWithPermission } from './shared.js';
 import { buildArchMap, renderMermaid, renderText } from '../arch.js';

@@ -1,21 +1,4 @@
-/**
- * agent__apply_patch — apply a unified diff (multi-file, multi-hunk) as ONE
- * atomic operation. If ANY hunk fails to match its context, NO files are
- * written — partial patches never land. Each file touched is snapshotted to
- * the vault first.
- *
- * Hardening over the original:
- *  - fuzzy context matching: whitespace-only differences (tab/space/CRLF) are
- *    ACCEPTED, because re-formatting tools and hand-written patches disagree
- *    on whitespace constantly. Real differences get a side-by-side diagnosis.
- *  - read-window enforcement: every hunk must lie inside a window the model
- *    actually READ this session (same posture as edit_file) — the #1 cause
- *    of patch failure was patching from memory of stale content.
- *  - per-hunk status: on failure, every hunk is reported (ok / mismatch /
- *    outside window / error) so the model knows exactly which one to fix.
- *  - `diff --git a/x b/x` is the authoritative path source (---/+++ fallback).
- *  - `\ No newline at end of file` handling.
- */
+
 import { readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
@@ -24,7 +7,8 @@ import { healEditedContent, formatHealNotes } from '../edit-heal.js';
 import { snapshotFile } from '../vault.js';
 import { buildUnifiedDiff, diffStatFromOps } from '../diff.js';
 import { recordAfterWrite, getReadEntry, hasCurrentRead, readRequiredMessage, staleReadMessage } from '../read-policy.js';
-import { getActiveWorkspace, isInsideRoot } from '../workspace.js';
+import { getActiveWorkspace, isInsideRoot, addonsSrcRoot } from '../workspace.js';
+import { requestApproval } from '../permissions.js';
 
 interface PatchHunk {
   oldStart: number;
@@ -32,9 +16,9 @@ interface PatchHunk {
   newStart: number;
   newLines: number;
   lines: string[];
-  /** True when the hunk body contained a `\ No newline at end of file` marker. */
+  
   noNewline?: boolean;
-  /** Filled by validation, read by the renderer. */
+  
   status?: 'ok' | 'outside' | 'stale' | 'unread' | 'error';
   error?: string;
 }
@@ -50,27 +34,24 @@ export interface ParsedPatchResult {
   errors: string[];
 }
 
-/** Normalize all whitespace runs so reformatting does not fail a context match. */
+
 function squashWhitespace(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
-/**
- * Two strings that differ ONLY in whitespace (tabs vs spaces, CRLF vs LF,
- * indentation width) count as the same line for context matching.
- */
+
 function whitespaceEquivalent(expected: string, actual: string): boolean {
   return squashWhitespace(expected) === squashWhitespace(actual) && squashWhitespace(expected) !== '';
 }
 
-/** Parse a unified diff (git-style) into structured patch files and explicit syntax errors. */
+
 export function parsePatch(patchText: string): ParsedPatchResult {
   const files: PatchFile[] = [];
   const errors: string[] = [];
   const lines = patchText.replace(/\r\n/g, '\n').split('\n');
   let i = 0;
 
-  /** `diff --git a/x b/x` is the authoritative path; fall back to ---/+++. */
+  
   const stripPrefix = (value: string): string => {
     const m = value.match(/^[ab]\//);
     return m ? value.slice(2) : value;
@@ -190,7 +171,7 @@ export class PatchMismatch extends Error {
   }
 }
 
-/** Apply one hunk to a line array, throwing PatchMismatch on hard failure. */
+
 export function applyHunk(lines: string[], hunk: PatchHunk, hunkIndex: number): string[] {
   const result: string[] = [];
   let currentLine = 0;
@@ -236,12 +217,7 @@ export function applyHunk(lines: string[], hunk: PatchHunk, hunkIndex: number): 
   return result;
 }
 
-/**
- * READ-WINDOW ENFORCEMENT for patches (edit_file has had this all along;
- * apply_patch never did). A hunk may only touch lines the model actually saw
- * on the current revision, so patching from stale memory is refused instead
- * of silently misapplied.
- */
+
 function verifyReadBeforePatch(
   relative: string,
   hunk: PatchHunk,
@@ -302,6 +278,7 @@ export async function applyPatchTool(args: Record<string, unknown>, ctx: AgentTo
 
   const ws = getActiveWorkspace(ctx.sessionId);
   const targets: Array<{ relPath: string; absolute: string; file: PatchFile }> = [];
+  const addonsSrcTargets: string[] = [];
   for (const file of files) {
     const relPath = file.newPath || file.oldPath;
     const addonsSrc = resolveAddonsSrcTarget(relPath);
@@ -309,6 +286,7 @@ export async function applyPatchTool(args: Record<string, unknown>, ctx: AgentTo
     if (absolute === null) return { ok: false, isError: true, text: 'No active workspace (and no addons-src target in the patch).' };
     if (addonsSrc) {
       targets.push({ relPath: addonsSrc.relative, absolute, file });
+      addonsSrcTargets.push(absolute);
       continue;
     }
     if (!isInsideRoot(absolute, ws!.path)) {
@@ -316,6 +294,27 @@ export async function applyPatchTool(args: Record<string, unknown>, ctx: AgentTo
     }
     snapshotFile(ctx.sessionId, absolute, 'apply_patch');
     targets.push({ relPath, absolute, file });
+  }
+
+  if (addonsSrcTargets.length > 0) {
+    const decision = await requestApproval(
+      {
+        tool: 'apply_patch',
+        paths: addonsSrcTargets,
+        root: ws?.path ?? addonsSrcRoot() ?? process.cwd(),
+        intent: 'write',
+        command: `Patch ${addonsSrcTargets.length} addons-src file(s)`,
+      },
+      ctx,
+    );
+    if (!decision.granted) {
+      return {
+        ok: false,
+        isError: true,
+        errorCode: 'approval_denied',
+        text: `The user did not approve patching addons-src files.${decision.reason ? ` Reason: "${decision.reason}".` : ''}`,
+      };
+    }
   }
 
   const applied: Array<{ relPath: string; absolute: string; newContent: string }> = [];
@@ -406,8 +405,6 @@ export async function applyPatchTool(args: Record<string, unknown>, ctx: AgentTo
       } catch {
         beforeContent = '';
       }
-      // POST-EDIT HEAL — same duplicate / delimiter / syntax pass as the
-      // single-file edit tools, applied per patched file before writing.
       const heal = healEditedContent(beforeContent, newContent, absolute);
       if (heal.repairs.length > 0 || heal.warnings.length > 0) {
         healNotes.push(`${relPath}${formatHealNotes(heal)}`);

@@ -1,20 +1,11 @@
-/**
- * Moco Canvas — server entry (P1).
- *
- * Wires: the `moco_canvas` agent tool, panel RPC, the prompt fragment that
- * teaches the op language, the /canvas command, and the bus topic that keeps
- * the panel in step with agent edits.
- *
- * P1 scope: engine, persistence (.moriko/moco-canvas/), readout. Measurement
- * (P2) and Mococraft DNA/export regions (P3) are NOT wired here.
- */
+
 import { DNA_IDS } from '../client/scene.ts';
 import { TEMPLATES } from '../client/templates.ts';
 import { toolDef } from './tool.ts';
 import { rpcHandlers } from './rpc.ts';
 import { listDocs, resolveWorkspace } from './store.ts';
 
-/** Lines an agent needs on every turn to work the canvas correctly. */
+
 function canvasFragment(api: any) {
   return (ctx: { sessionId?: string }): string[] => {
     let docs: string[] = [];
@@ -67,7 +58,6 @@ export async function activate(ctx: any) {
     openView: 'addon:moco-canvas/canvas',
   }));
 
-  // The panel subscribes to this topic; every commit (agent or user) fires it.
   api.bus.subscribe('moco-canvas.commit', async (message: Record<string, unknown>) => {
     api.ui.invalidate('canvas');
     void message;

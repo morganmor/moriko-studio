@@ -1,9 +1,4 @@
-/**
- * F3.9 — agent__verify: ONE verification gate called ONCE at the end of a
- * task. quick: diagnostics(touched) → review_diff(session).
- * full: + typecheck + arch_rules check (when configured).
- * Composes the other quality tools' internals — never re-spawns per edit.
- */
+
 import type { AgentToolContext, HarnessToolResult } from './shared.js';
 import { str, truncateOutput, requireWorkspace } from './shared.js';
 import { runShellCommand } from '../exec.js';
@@ -12,6 +7,7 @@ import path from 'node:path';
 import { defineTool } from './registry.js';
 import { touchedFiles } from './diagnostics.js';
 import { RULES_HINT } from './review-rules.js';
+import { approveCommand } from './terminal.js';
 
 interface StepResult {
   step: string;
@@ -63,16 +59,28 @@ async function verifyTool(args: Record<string, unknown>, ctx: AgentToolContext):
   }
 
   if (level === 'full') {
-    try {
-      const outcome = await runShellCommand('pnpm typecheck', { cwd: root, timeoutMs: 180_000 });
-      const errorCount = (outcome.stdout + outcome.stderr).split('\n').filter((l) => /error TS\d+/.test(l)).length;
-      steps.push({
-        step: 'typecheck(full)',
-        ok: outcome.exitCode === 0,
-        summary: outcome.exitCode === 0 ? 'clean' : `${errorCount} error(s) (last lines):\n${(outcome.stdout + outcome.stderr).trimEnd().split('\n').slice(-8).join('\n')}`,
-      });
-    } catch (error) {
-      steps.push({ step: 'typecheck(full)', ok: false, summary: `failed (${error instanceof Error ? error.message : 'error'})` });
+    const termMode = ctx.terminalMode ?? 'auto';
+    if (termMode === 'off') {
+      steps.push({ step: 'typecheck(full)', ok: false, summary: 'skipped (terminal execution is OFF)' });
+    } else if (!(await approveCommand('verify', 'pnpm typecheck', root, false, ctx))) {
+      steps.push({ step: 'typecheck(full)', ok: false, summary: 'skipped (user did not approve pnpm typecheck)' });
+    } else {
+      try {
+        const outcome = await runShellCommand('pnpm typecheck', {
+          cwd: root,
+          timeoutMs: 180_000,
+          signal: ctx.signal,
+          sandbox: { workspaceRoot: root, policy: 'workspace-write' },
+        });
+        const errorCount = (outcome.stdout + outcome.stderr).split('\n').filter((l) => /error TS\d+/.test(l)).length;
+        steps.push({
+          step: 'typecheck(full)',
+          ok: outcome.exitCode === 0,
+          summary: outcome.exitCode === 0 ? 'clean' : `${errorCount} error(s) (last lines):\n${(outcome.stdout + outcome.stderr).trimEnd().split('\n').slice(-8).join('\n')}`,
+        });
+      } catch (error) {
+        steps.push({ step: 'typecheck(full)', ok: false, summary: `failed (${error instanceof Error ? error.message : 'error'})` });
+      }
     }
 
     const archPath = path.join(root, '.moriko', 'architecture.json');

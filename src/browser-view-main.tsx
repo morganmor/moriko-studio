@@ -1,57 +1,7 @@
-/**
- * Browser View panel — the user's live window into the built-in browser.
- *
- * MOUNTED ONLY IN browser-view.html (a separate tab/window the SPA opens) —
- * never inside the chat SPA. The panel is deliberately standalone: no store,
- * no api client, no app CSS dependencies; only React + the WebSocket.
- *
- *   ┌──────────────────────────────────────────────────────┐
- *   │ ● Agent   https://example.com                     ⋯  │  ← slim bar
- *   ├──────────────────────────────────────────────────────┤
- *   │                                                      │
- *   │       <video> WebRTC (tab capture, GPU-encoded)      │  ← live stream
- *   │       harness cursor = blue ring overlay             │
- *   │                                                      │
- *   └──────────────────────────────────────────────────────┘
- *
- * Agent mode:      frames + cursorUpdate/cursorClick render; input ignored.
- * Takeover mode:   the user's mouse/keyboard forward over the WS; the harness
- *                  cursor hides; the OS cursor takes over.
- *
- * VIDEO TRANSPORT: WebRTC P2P — the harness browser's active tab captures
- * itself and streams directly to this panel (Node relays SDP/ICE only).
- * NO CDP screencast exists; there is no fallback path by design.
- *
- * Reconnect: exponential backoff (1s → 2s → 4s → 8s → 16s, capped), so a
- * harness server reload (self-edit resilience) survives the panel too.
- */
 import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import './styles/browser-view.css';
-
-/** Default CSS-pixel coordinate space — replaced at runtime by the server's
- *  `viewport` message (dynamic viewport sync). */
-const VIEWPORT = { width: 1920, height: 1080 };
-/** Live viewport ref — imperative cursor/overlay math reads this. */
-const viewportRef = { current: { ...VIEWPORT } };
-
-/** Size .bp-frame to the stage while preserving the viewport aspect ratio —
- *  the video then fills the frame EXACTLY (no stretch, no letterbox), so the
- *  browser renders 1:1 and cursor mapping (rect → viewport) stays correct.
- *  PURELY LOCAL — this never sends anything to the server: the panel is a
- *  passive viewer and must never drive the browser viewport (a feedback loop
- *  here oscillated the canvas dozens of times per second; see ADR-0001). */
-function fitFrame(): void {
-  const stage = document.querySelector('.bp-stage');
-  const frame = document.querySelector<HTMLElement>('.bp-frame');
-  if (!stage || !frame) return;
-  const vp = viewportRef.current;
-  if (!(vp.width > 0) || !(vp.height > 0)) return;
-  const scale = Math.min(stage.clientWidth / vp.width, stage.clientHeight / vp.height);
-  frame.style.width = `${Math.max(1, Math.floor(vp.width * scale))}px`;
-  frame.style.height = `${Math.max(1, Math.floor(vp.height * scale))}px`;
-}
 
 type PanelMode = 'agent' | 'takeover';
 
@@ -60,86 +10,288 @@ interface PanelTab {
   url: string;
   title: string;
   active: boolean;
+  loading?: boolean;
+}
+
+interface PendingDialogState {
+  id: string;
+  dialogType: string;
+  message: string;
+  defaultValue: string;
+}
+
+interface PendingFileChooserState {
+  id: string;
+  multiple: boolean;
+}
+
+interface DownloadItem {
+  id: string;
+  filename: string;
+  size?: number;
+  downloadUrl?: string;
+  error?: string;
+  status: 'done' | 'failed';
+}
+
+interface ToastMessage {
+  id: number;
+  text: string;
+  kind: 'info' | 'error';
 }
 
 interface PanelState {
   mode: PanelMode;
-  url: string;
-  title: string;
+  handoverMessage: string;
+  activeUrl: string;
   cursor: { x: number; y: number; visible: boolean };
   userCursor: { x: number; y: number; visible: boolean };
   tabs: PanelTab[];
+  loading: boolean;
   connected: boolean;
 }
 
-function wsUrl(): string {
-  const params = new URLSearchParams(window.location.search);
-  const session = params.get('session') ?? '';
+function getSessionParam(): string {
+  return new URLSearchParams(window.location.search).get('session') ?? '';
+}
+
+function buildWsUrl(): string {
+  const session = getSessionParam();
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const query = session ? `?session=${encodeURIComponent(session)}` : '';
   return `${proto}//${window.location.host}/api/browser/ws${query}`;
 }
 
+function uint8ToBase64(bytes: Uint8Array): string {
+  const CHUNK = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+function formatBytes(bytes?: number): string {
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes)) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function mapMouseButton(btn: number): 'left' | 'middle' | 'right' {
+  if (btn === 1) return 'middle';
+  if (btn === 2) return 'right';
+  return 'left';
+}
+
+const MIN_DESKTOP_VIEWPORT_WIDTH = 1280;
+const MIN_VIEWPORT_WIDTH = 320;
+const MAX_VIEWPORT_WIDTH = 3840;
+const MIN_VIEWPORT_HEIGHT = 240;
+const MAX_VIEWPORT_HEIGHT = 2160;
+
+/**
+ * Computes a desktop-proportioned Playwright viewport (`>= 1280px` wide unless
+ * constrained by the vertical 2160px cap) matching `.bp-stage`'s exact aspect
+ * ratio so smaller popup windows downscale a full desktop layout cleanly
+ * without UI collisions, black bars, or stretched elements.
+ */
+function computeAspectMatchedViewport(stageWidth: number, stageHeight: number): { width: number; height: number } {
+  const safeW = Math.max(1, stageWidth);
+  const safeH = Math.max(1, stageHeight);
+  const aspect = safeW / safeH;
+
+  let width = Math.max(MIN_DESKTOP_VIEWPORT_WIDTH, safeW);
+  let height = width / aspect;
+
+  if (width > MAX_VIEWPORT_WIDTH || height > MAX_VIEWPORT_HEIGHT) {
+    const scale = Math.min(MAX_VIEWPORT_WIDTH / width, MAX_VIEWPORT_HEIGHT / height);
+    width *= scale;
+    height *= scale;
+  }
+
+  const alignedW = Math.min(MAX_VIEWPORT_WIDTH, Math.max(MIN_VIEWPORT_WIDTH, Math.round(width / 2) * 2));
+  const alignedH = Math.min(MAX_VIEWPORT_HEIGHT, Math.max(MIN_VIEWPORT_HEIGHT, Math.round(alignedW / aspect / 2) * 2));
+  return { width: alignedW, height: alignedH };
+}
+
 function BrowserView() {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const stageRef = useRef<HTMLElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const cursorRef = useRef<HTMLDivElement | null>(null);
+  const userCursorRef = useRef<HTMLDivElement | null>(null);
   const rippleLayerRef = useRef<HTMLDivElement | null>(null);
-  const ripplesRef = useRef<number>(0);
+  const omniboxRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const viewportRef = useRef({ width: 1280, height: 720 });
+  const lastSentResizeRef = useRef<{ width: number; height: number } | null>(null);
   const modeRef = useRef<PanelMode>('agent');
-  const [state, setState] = useState<PanelState>({
-    mode: 'agent',
-    url: '',
-    title: '',
-    cursor: { x: 0, y: 0, visible: false },
-    userCursor: { x: 0, y: 0, visible: false },
-    tabs: [],
-    connected: false,
-  });
-  const [drawMode, setDrawMode] = useState(false);
+  const ripplesRef = useRef(0);
+  const omniboxFocusedRef = useRef(false);
+  const activeMouseBtnRef = useRef<'left' | 'middle' | 'right' | null>(null);
 
   const sendRef = useRef<((msg: Record<string, unknown>) => void) | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const iceQueueRef = useRef<RTCIceCandidateInit[]>([]);
   const cursorPosRef = useRef({ x: 0, y: 0, visible: false });
   const userCursorPosRef = useRef({ x: 0, y: 0, visible: false });
-  const userCursorRef = useRef<HTMLDivElement | null>(null);
-  /** WebRTC video transport status shown as overlay + menu info. */
+  const statsBaselineRef = useRef<{ bytes: number; ts: number } | null>(null);
+
+  const pendingMoveRef = useRef<{ kind: 'mouseMove' | 'userCursorMove'; x: number; y: number } | null>(null);
+  const moveRafRef = useRef<number | null>(null);
+  const pendingScrollRef = useRef<{ deltaX: number; deltaY: number } | null>(null);
+  const scrollRafRef = useRef<number | null>(null);
+
+  const drawStartRef = useRef<{ x: number; y: number } | null>(null);
+  const drawGhostRef = useRef<HTMLDivElement | null>(null);
+
+  const [state, setState] = useState<PanelState>({
+    mode: 'agent',
+    handoverMessage: '',
+    activeUrl: '',
+    cursor: { x: 0, y: 0, visible: false },
+    userCursor: { x: 0, y: 0, visible: false },
+    tabs: [],
+    loading: false,
+    connected: false,
+  });
+  const [omniboxText, setOmniboxText] = useState('');
+  const [drawMode, setDrawMode] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [video, setVideo] = useState<{ status: 'connecting' | 'live' | 'error'; msg: string; stats: string }>({
     status: 'connecting',
-    msg: '',
+    msg: 'Connecting…',
     stats: '',
   });
+  const [pendingDialog, setPendingDialog] = useState<PendingDialogState | null>(null);
+  const [promptInput, setPromptInput] = useState('');
+  const [pendingFileChooser, setPendingFileChooser] = useState<PendingFileChooserState | null>(null);
+  const [downloads, setDownloads] = useState<DownloadItem[]>([]);
+  const [toast, setToast] = useState<ToastMessage | null>(null);
 
+  const showToast = useCallback((text: string, kind: 'info' | 'error' = 'info') => {
+    const id = Date.now() + Math.random();
+    setToast({ id, text, kind });
+    window.setTimeout(() => {
+      setToast((cur) => (cur?.id === id ? null : cur));
+    }, 4200);
+  }, []);
+
+  const syncOmniboxFromUrl = useCallback((url: string) => {
+    if (!omniboxFocusedRef.current) {
+      setOmniboxText(url);
+    }
+  }, []);
+
+  const spawnAnnotationRect = useCallback((x: number, y: number, w: number, h: number) => {
+    const layer = rippleLayerRef.current;
+    if (!layer || (w < 4 && h < 4)) return;
+    const rect = document.createElement('div');
+    rect.className = 'bp-annotation';
+    rect.style.left = `${(x / viewportRef.current.width) * 100}%`;
+    rect.style.top = `${(y / viewportRef.current.height) * 100}%`;
+    rect.style.width = `${(w / viewportRef.current.width) * 100}%`;
+    rect.style.height = `${(h / viewportRef.current.height) * 100}%`;
+    layer.appendChild(rect);
+    window.setTimeout(() => rect.remove(), 4500);
+  }, []);
+
+  const spawnRipple = useCallback((x: number, y: number) => {
+    const layer = rippleLayerRef.current;
+    if (!layer || ripplesRef.current > 4) return;
+    ripplesRef.current += 1;
+    const ripple = document.createElement('div');
+    ripple.className = 'bp-ripple';
+    ripple.style.left = `${(x / viewportRef.current.width) * 100}%`;
+    ripple.style.top = `${(y / viewportRef.current.height) * 100}%`;
+    layer.appendChild(ripple);
+    window.setTimeout(() => {
+      ripple.remove();
+      ripplesRef.current = Math.max(0, ripplesRef.current - 1);
+    }, 550);
+  }, []);
+
+  const spawnDragTrail = useCallback((points?: Array<{ x: number; y: number }>) => {
+    const layer = rippleLayerRef.current;
+    if (!layer || !points || points.length < 2) return;
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.classList.add('bp-drag-trail');
+    svg.setAttribute('viewBox', `0 0 ${viewportRef.current.width} ${viewportRef.current.height}`);
+    svg.setAttribute('preserveAspectRatio', 'none');
+    const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+    poly.setAttribute('points', points.map((p) => `${p.x},${p.y}`).join(' '));
+    svg.appendChild(poly);
+    layer.appendChild(svg);
+    window.setTimeout(() => svg.remove(), 650);
+  }, []);
+
+  const toViewport = useCallback((clientX: number, clientY: number): { x: number; y: number } => {
+    const targetEl = videoRef.current ?? stageRef.current;
+    if (!targetEl) return { x: 0, y: 0 };
+    const rect = targetEl.getBoundingClientRect();
+    if (!(rect.width > 0) || !(rect.height > 0)) return { x: 0, y: 0 };
+    const x = ((clientX - rect.left) / rect.width) * viewportRef.current.width;
+    const y = ((clientY - rect.top) / rect.height) * viewportRef.current.height;
+    return {
+      x: Math.min(Math.max(x, 0), viewportRef.current.width),
+      y: Math.min(Math.max(y, 0), viewportRef.current.height),
+    };
+  }, []);
+
+  const syncCursorPositions = useCallback(() => {
+    const vp = viewportRef.current;
+    if (!(vp.width > 0) || !(vp.height > 0)) return;
+    const cEl = cursorRef.current;
+    if (cEl) {
+      const c = cursorPosRef.current;
+      cEl.style.left = `${(c.x / vp.width) * 100}%`;
+      cEl.style.top = `${(c.y / vp.height) * 100}%`;
+      cEl.style.opacity = c.visible && modeRef.current === 'agent' ? '1' : '0';
+    }
+    const uEl = userCursorRef.current;
+    if (uEl) {
+      const u = userCursorPosRef.current;
+      uEl.style.left = `${(u.x / vp.width) * 100}%`;
+      uEl.style.top = `${(u.y / vp.height) * 100}%`;
+      uEl.style.opacity = u.visible && modeRef.current === 'agent' ? '1' : '0';
+    }
+  }, []);
+
+  // Measure only the outer .bp-stage wrapper so <video> intrinsic size cannot feedback-lock layout.
+  const pushStageViewport = useCallback((force = false) => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const stageWidth = stage.clientWidth;
+    const stageHeight = stage.clientHeight;
+    if (!(stageWidth > 0) || !(stageHeight > 0)) return;
+    const { width, height } = computeAspectMatchedViewport(stageWidth, stageHeight);
+    const prev = lastSentResizeRef.current;
+    if (!force && prev && prev.width === width && prev.height === height) return;
+    lastSentResizeRef.current = { width, height };
+    viewportRef.current = { width, height };
+    syncCursorPositions();
+    sendRef.current?.({ type: 'resize', width, height });
+  }, [syncCursorPositions]);
+
+  // Main WebSocket + WebRTC lifecycle
   useEffect(() => {
     let ws: WebSocket | null = null;
     let closed = false;
     let attempt = 0;
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
-    let resizeTimer: ReturnType<typeof setTimeout> | undefined;
-    const onWindowResize = () => {
-      if (resizeTimer) clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => {
-        fitFrame();
-      }, 150);
-    };
-    window.addEventListener('resize', onWindowResize);
-
     const connect = () => {
       if (closed) return;
-      ws = new WebSocket(wsUrl());
+      ws = new WebSocket(buildWsUrl());
 
       ws.onopen = () => {
         attempt = 0;
+        lastSentResizeRef.current = null;
         setState((s) => ({ ...s, connected: true }));
         ws?.send(JSON.stringify({ type: 'ping' }));
-        ws?.send(JSON.stringify({
-          type: 'screen-info',
-          width: screen.availWidth,
-          height: screen.availHeight,
-          dpr: window.devicePixelRatio || 1,
-        }));
-        fitFrame();
+        pushStageViewport(true);
       };
 
       ws.onmessage = (event) => {
@@ -157,8 +309,12 @@ function BrowserView() {
               pcRef.current.close();
               pcRef.current = null;
             }
-            setVideo({ status: 'error', msg: String(msg.reason ?? '') === 'web-access-off' ? 'Web access was turned off.' : 'The browser was closed.', stats: '' });
-            setTimeout(() => window.close(), 400);
+            setVideo({
+              status: 'error',
+              msg: String(msg.reason ?? '') === 'web-access-off' ? 'Web access was turned off.' : 'The browser was closed.',
+              stats: '',
+            });
+            window.setTimeout(() => window.close(), 400);
             break;
           }
           case 'hello': {
@@ -166,61 +322,100 @@ function BrowserView() {
             modeRef.current = mode;
             const helloCursor = msg.cursor as { x: number; y: number; visible: boolean } | undefined;
             if (helloCursor) cursorPosRef.current = helloCursor;
+
             const vp = msg.viewport as { width: number; height: number } | undefined;
-            if (vp && vp.width > 0 && vp.height > 0) {
+            const st = stageRef.current;
+            if ((!st || !(st.clientWidth > 0) || !(st.clientHeight > 0)) && vp && vp.width > 0 && vp.height > 0) {
               viewportRef.current = { width: vp.width, height: vp.height };
+              syncCursorPositions();
             }
-            fitFrame();
+            // Reconcile server viewport immediately with current .bp-stage geometry
+            pushStageViewport(true);
+
+            const tabs = (msg.tabs as PanelTab[]) ?? [];
+            const activeTab = tabs.find((t) => t.active) ?? tabs[0];
+            const activeUrl = activeTab?.url ?? '';
+            syncOmniboxFromUrl(activeUrl);
+
+            const pDialog = msg.pendingDialog as PendingDialogState | null | undefined;
+            if (pDialog) {
+              setPendingDialog(pDialog);
+              setPromptInput(pDialog.defaultValue ?? '');
+            } else {
+              setPendingDialog(null);
+            }
+
+            const pChooser = msg.pendingFileChooser as PendingFileChooserState | null | undefined;
+            setPendingFileChooser(pChooser ?? null);
+
             setState((s) => ({
               ...s,
               mode,
-              url: String(msg.url ?? ''),
-              title: String(msg.title ?? ''),
-              cursor: (msg.cursor as PanelState['cursor']) ?? s.cursor,
-              tabs: (msg.tabs as PanelTab[]) ?? [],
+              handoverMessage: String(msg.handoverMessage ?? ''),
+              activeUrl,
+              cursor: helloCursor ?? s.cursor,
+              tabs,
+              loading: Boolean(activeTab?.loading),
             }));
             break;
           }
           case 'statusChange': {
             const mode = (msg.mode as PanelMode) ?? 'agent';
             modeRef.current = mode;
-            setState((s) => ({ ...s, mode, url: String(msg.url ?? s.url), title: String(msg.title ?? s.title) }));
+            const handoverMessage = typeof msg.message === 'string' ? msg.message : '';
+            setState((s) => ({
+              ...s,
+              mode,
+              handoverMessage,
+              activeUrl: typeof msg.url === 'string' ? msg.url : s.activeUrl,
+            }));
+            if (typeof msg.url === 'string') syncOmniboxFromUrl(msg.url);
             break;
           }
           case 'tabList': {
-            setState((s) => ({ ...s, tabs: (msg.tabs as PanelTab[]) ?? [] }));
+            const tabs = (msg.tabs as PanelTab[]) ?? [];
+            const activeTab = tabs.find((t) => t.active) ?? tabs[0];
+            const activeUrl = activeTab?.url ?? '';
+            syncOmniboxFromUrl(activeUrl);
+            setState((s) => ({
+              ...s,
+              tabs,
+              activeUrl: activeUrl || s.activeUrl,
+              loading: Boolean(activeTab?.loading),
+            }));
+            break;
+          }
+          case 'nav-state': {
+            const loading = msg.loading === true;
+            const url = typeof msg.url === 'string' ? msg.url : '';
+            if (url) syncOmniboxFromUrl(url);
+            setState((s) => ({
+              ...s,
+              loading,
+              activeUrl: url || s.activeUrl,
+            }));
             break;
           }
           case 'viewport': {
-            const vp = msg.viewport as { width: number; height: number } | undefined
-              ?? (typeof msg.width === 'number' && typeof msg.height === 'number'
-                ? { width: msg.width, height: msg.height }
-                : undefined);
-            if (vp && vp.width > 0 && vp.height > 0) viewportRef.current = { ...vp };
-            fitFrame();
+            const width = Number(msg.width);
+            const height = Number(msg.height);
+            if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+              viewportRef.current = { width, height };
+              syncCursorPositions();
+            }
             break;
           }
           case 'cursorUpdate': {
             const cursor = msg.cursor as { x: number; y: number; visible: boolean } | undefined;
             if (!cursor) break;
             cursorPosRef.current = cursor;
-            const el = cursorRef.current;
-            if (el) {
-              el.style.left = `${(cursor.x / viewportRef.current.width) * 100}%`;
-              el.style.top = `${(cursor.y / viewportRef.current.height) * 100}%`;
-              el.style.opacity = cursor.visible && modeRef.current === 'agent' ? '1' : '0';
-            }
+            syncCursorPositions();
             break;
           }
           case 'userCursor': {
             const pos = { x: Number(msg.x) || 0, y: Number(msg.y) || 0, visible: msg.visible !== false };
             userCursorPosRef.current = pos;
-            const el = userCursorRef.current;
-            if (el) {
-              el.style.left = `${(pos.x / viewportRef.current.width) * 100}%`;
-              el.style.top = `${(pos.y / viewportRef.current.height) * 100}%`;
-              el.style.opacity = pos.visible && modeRef.current === 'agent' ? '1' : '0';
-            }
+            syncCursorPositions();
             break;
           }
           case 'annotation': {
@@ -235,6 +430,80 @@ function BrowserView() {
             spawnDragTrail(msg.points as Array<{ x: number; y: number }> | undefined);
             break;
           }
+          case 'clipboard-copy': {
+            const text = typeof msg.text === 'string' ? msg.text : '';
+            if (text) {
+              void navigator.clipboard?.writeText(text).then(
+                () => showToast('Copied page selection to clipboard.'),
+                () => showToast('Could not write to clipboard.', 'error'),
+              );
+            }
+            break;
+          }
+          case 'dialog-open': {
+            const dlg: PendingDialogState = {
+              id: String(msg.id ?? ''),
+              dialogType: String(msg.dialogType ?? 'alert'),
+              message: String(msg.message ?? ''),
+              defaultValue: String(msg.defaultValue ?? ''),
+            };
+            setPendingDialog(dlg);
+            setPromptInput(dlg.defaultValue);
+            break;
+          }
+          case 'dialog-closed': {
+            const id = String(msg.id ?? '');
+            setPendingDialog((cur) => (!id || cur?.id === id ? null : cur));
+            break;
+          }
+          case 'file-chooser': {
+            const chooser: PendingFileChooserState = {
+              id: String(msg.id ?? ''),
+              multiple: msg.multiple === true,
+            };
+            setPendingFileChooser(chooser);
+            // Trigger native picker automatically when possible; floating bar remains as fallback
+            window.setTimeout(() => {
+              try {
+                fileInputRef.current?.click();
+              } catch {
+              }
+            }, 0);
+            break;
+          }
+          case 'file-chooser-closed': {
+            const id = String(msg.id ?? '');
+            setPendingFileChooser((cur) => (!id || cur?.id === id ? null : cur));
+            break;
+          }
+          case 'download-complete': {
+            const item: DownloadItem = {
+              id: String(msg.id ?? ''),
+              filename: String(msg.filename ?? 'download.bin'),
+              size: typeof msg.size === 'number' ? msg.size : undefined,
+              downloadUrl: typeof msg.downloadUrl === 'string' ? msg.downloadUrl : undefined,
+              status: 'done',
+            };
+            setDownloads((prev) => [item, ...prev.filter((d) => d.id !== item.id)].slice(0, 6));
+            showToast(`Downloaded ${item.filename}`);
+            break;
+          }
+          case 'download-failed': {
+            const item: DownloadItem = {
+              id: String(msg.id ?? ''),
+              filename: String(msg.filename ?? 'download'),
+              error: String(msg.error ?? 'Download failed'),
+              status: 'failed',
+            };
+            setDownloads((prev) => [item, ...prev.filter((d) => d.id !== item.id)].slice(0, 6));
+            showToast(`Download failed: ${item.filename}`, 'error');
+            break;
+          }
+          case 'error': {
+            const text = String(msg.message ?? 'Browser panel error');
+            showToast(text, 'error');
+            break;
+          }
           case 'rtc-offer': {
             const sdp = String(msg.sdp ?? '');
             if (!sdp) break;
@@ -244,18 +513,22 @@ function BrowserView() {
                   pcRef.current.close();
                   pcRef.current = null;
                 }
+                statsBaselineRef.current = null;
                 iceQueueRef.current = [];
                 setVideo((v) => ({ ...v, status: 'connecting', msg: '' }));
                 const pc = new RTCPeerConnection({ iceServers: [] });
                 pcRef.current = pc;
-                pc.ontrack = (event) => {
+                pc.ontrack = (e) => {
                   const vid = videoRef.current;
-                  if (vid) vid.srcObject = event.streams[0];
+                  if (vid) {
+                    vid.srcObject = e.streams[0] ?? new MediaStream([e.track]);
+                    void vid.play().catch(() => undefined);
+                  }
                   setVideo((v) => ({ ...v, status: 'live', msg: '' }));
                 };
-                pc.onicecandidate = (event) => {
-                  if (event.candidate) {
-                    ws?.send(JSON.stringify({ type: 'rtc-ice', candidate: event.candidate.toJSON() }));
+                pc.onicecandidate = (e) => {
+                  if (e.candidate && ws?.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'rtc-ice', candidate: e.candidate.toJSON() }));
                   }
                 };
                 await pc.setRemoteDescription({ type: 'offer', sdp });
@@ -264,9 +537,13 @@ function BrowserView() {
                 }
                 const answer = await pc.createAnswer();
                 await pc.setLocalDescription(answer);
-                ws?.send(JSON.stringify({ type: 'rtc-answer', sdp: pc.localDescription?.sdp ?? '' }));
+                if (ws?.readyState === WebSocket.OPEN) {
+                  ws.send(JSON.stringify({ type: 'rtc-answer', sdp: pc.localDescription?.sdp ?? '' }));
+                }
               } catch {
-                ws?.send(JSON.stringify({ type: 'rtc-restart' }));
+                if (ws?.readyState === WebSocket.OPEN) {
+                  ws.send(JSON.stringify({ type: 'rtc-restart' }));
+                }
               }
             })();
             break;
@@ -285,29 +562,20 @@ function BrowserView() {
           case 'rtc-state': {
             const st = String(msg.state ?? '');
             if (st === 'connected') {
-              setVideo((v) => (v.status === 'connecting' ? { ...v, status: 'live' } : v));
+              setVideo((v) => (v.status === 'connecting' ? { ...v, status: 'live', msg: '' } : v));
             } else if (st === 'acquiring') {
-              setVideo((v) => ({ ...v, status: 'connecting', msg: 'navigating…' }));
+              setVideo((v) => ({ ...v, status: 'connecting', msg: 'Capturing tab…' }));
             } else if (st === 'acquire-failed') {
-              setVideo((v) => ({ ...v, status: 'connecting', msg: String(msg.error ?? '') }));
+              setVideo((v) => ({ ...v, status: 'connecting', msg: String(msg.error ?? 'Retrying capture…') }));
             } else if (st === 'superseded') {
               setVideo({ status: 'error', msg: 'Video stream moved to another panel window.', stats: '' });
             } else if (st === 'capture-ended') {
-              setVideo((v) => ({ ...v, status: 'connecting' }));
+              setVideo((v) => ({ ...v, status: 'connecting', msg: 'Reconnecting stream…' }));
               ws?.send(JSON.stringify({ type: 'rtc-restart' }));
             } else if (st === 'failed' || st === 'disconnected' || st === 'closed') {
               setVideo({ status: 'error', msg: `WebRTC ${st}.`, stats: '' });
               ws?.send(JSON.stringify({ type: 'rtc-restart' }));
             }
-            break;
-          }
-          case 'rtc-stats': {
-            const parts = [
-              typeof msg.fps === 'number' && msg.fps > 0 ? `${msg.fps} fps` : '',
-              typeof msg.kbps === 'number' && msg.kbps > 0 ? `${(msg.kbps / 1000).toFixed(1)} Mbps` : '',
-              typeof msg.width === 'number' && typeof msg.height === 'number' && msg.width > 0 ? `${msg.width}×${msg.height}` : '',
-            ].filter(Boolean);
-            if (parts.length) setVideo((v) => ({ ...v, stats: parts.join(' · ') }));
             break;
           }
           case 'rtc-log':
@@ -329,8 +597,9 @@ function BrowserView() {
         if (closed) return;
         attempt += 1;
         const delay = Math.min(1000 * 2 ** Math.min(attempt - 1, 4), 16_000);
-        reconnectTimer = setTimeout(connect, delay);
+        reconnectTimer = window.setTimeout(connect, delay);
       };
+
       ws.onerror = () => {
         ws?.close();
       };
@@ -344,7 +613,6 @@ function BrowserView() {
     return () => {
       closed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
-      window.removeEventListener('resize', onWindowResize);
       sendRef.current = null;
       if (pcRef.current) {
         pcRef.current.close();
@@ -352,65 +620,132 @@ function BrowserView() {
       }
       ws?.close();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps — wsUrl() is derived
-  }, []);
+  }, [pushStageViewport, showToast, spawnAnnotationRect, spawnDragTrail, spawnRipple, syncCursorPositions, syncOmniboxFromUrl]);
 
-  const spawnAnnotationRect = useCallback((x: number, y: number, w: number, h: number) => {
-    const layer = rippleLayerRef.current;
-    if (!layer || (w < 4 && h < 4)) return;
-    const rect = document.createElement('div');
-    rect.className = 'bp-annotation';
-    rect.style.left = `${(x / viewportRef.current.width) * 100}%`;
-    rect.style.top = `${(y / viewportRef.current.height) * 100}%`;
-    rect.style.width = `${(w / viewportRef.current.width) * 100}%`;
-    rect.style.height = `${(h / viewportRef.current.height) * 100}%`;
-    layer.appendChild(rect);
-    setTimeout(() => rect.remove(), 4500);
-  }, []);
-
-  const spawnRipple = useCallback((x: number, y: number) => {
-    const layer = rippleLayerRef.current;
-    if (!layer || ripplesRef.current > 4) return;
-    ripplesRef.current += 1;
-    const ripple = document.createElement('div');
-    ripple.className = 'bp-ripple';
-    ripple.style.left = `${(x / viewportRef.current.width) * 100}%`;
-    ripple.style.top = `${(y / viewportRef.current.height) * 100}%`;
-    layer.appendChild(ripple);
-    setTimeout(() => {
-      ripple.remove();
-      ripplesRef.current = Math.max(0, ripplesRef.current - 1);
-    }, 550);
-  }, []);
-
-  const spawnDragTrail = useCallback((points?: Array<{ x: number; y: number }>) => {
-    const layer = rippleLayerRef.current;
-    if (!layer || !points || points.length < 2) return;
-    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.classList.add('bp-drag-trail');
-    svg.setAttribute('viewBox', `0 0 ${viewportRef.current.width} ${viewportRef.current.height}`);
-    svg.setAttribute('preserveAspectRatio', 'none');
-    const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
-    poly.setAttribute('points', points.map((p) => `${p.x},${p.y}`).join(' '));
-    svg.appendChild(poly);
-    layer.appendChild(svg);
-    setTimeout(() => svg.remove(), 650);
-  }, []);
-
-  const toViewport = (clientX: number, clientY: number): { x: number; y: number } => {
-    const video = videoRef.current;
-    if (!video) return { x: 0, y: 0 };
-    const rect = video.getBoundingClientRect();
-    const x = ((clientX - rect.left) / rect.width) * viewportRef.current.width;
-    const y = ((clientY - rect.top) / rect.height) * viewportRef.current.height;
-    return {
-      x: Math.min(Math.max(x, 0), viewportRef.current.width),
-      y: Math.min(Math.max(y, 0), viewportRef.current.height),
+  // Observe .bp-stage directly with debounce (~50ms) so Playwright viewport matches aspect ratio
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const ro = new ResizeObserver(() => {
+      if (timer) clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        pushStageViewport(false);
+      }, 50);
+    });
+    ro.observe(stage);
+    pushStageViewport(false);
+    return () => {
+      if (timer) clearTimeout(timer);
+      ro.disconnect();
     };
-  };
+  }, [pushStageViewport]);
 
-  const drawStartRef = useRef<{ x: number; y: number } | null>(null);
-  const drawGhostRef = useRef<HTMLDivElement | null>(null);
+  // Poll client-side RTCPeerConnection stats every 1.5s instead of running getStats() inside target page DOM
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const pc = pcRef.current;
+      if (!pc || pc.connectionState !== 'connected') return;
+      void pc.getStats().then((report) => {
+        let fps = 0;
+        let width = videoRef.current?.videoWidth ?? 0;
+        let height = videoRef.current?.videoHeight ?? 0;
+        let kbps = 0;
+
+        for (const stat of report.values()) {
+          if (stat.type === 'inbound-rtp' && (stat as RTCInboundRtpStreamStats).kind === 'video') {
+            const inbound = stat as RTCInboundRtpStreamStats & {
+              frameWidth?: number;
+              frameHeight?: number;
+              framesPerSecond?: number;
+              bytesReceived?: number;
+            };
+            if (typeof inbound.framesPerSecond === 'number') fps = Math.round(inbound.framesPerSecond);
+            if (typeof inbound.frameWidth === 'number' && inbound.frameWidth > 0) width = inbound.frameWidth;
+            if (typeof inbound.frameHeight === 'number' && inbound.frameHeight > 0) height = inbound.frameHeight;
+            if (typeof inbound.bytesReceived === 'number') {
+              const now = performance.now();
+              const prev = statsBaselineRef.current;
+              if (prev && now > prev.ts && inbound.bytesReceived >= prev.bytes) {
+                kbps = Math.round(((inbound.bytesReceived - prev.bytes) * 8) / (now - prev.ts));
+              }
+              statsBaselineRef.current = { bytes: inbound.bytesReceived, ts: now };
+            }
+          }
+        }
+
+        const parts = [
+          width > 0 && height > 0 ? `${width}×${height}` : '',
+          fps > 0 ? `${fps} fps` : '',
+          kbps > 0 ? `${kbps >= 1000 ? `${(kbps / 1000).toFixed(1)} Mbps` : `${kbps} kbps`}` : '',
+        ].filter(Boolean);
+        if (parts.length > 0) {
+          setVideo((v) => (v.stats === parts.join(' · ') ? v : { ...v, stats: parts.join(' · ') }));
+        }
+      }).catch(() => undefined);
+    }, 1500);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Non-passive wheel listener on .bp-stage coalesced by rAF so scroll never triggers browser passive warning
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const onWheel = (event: WheelEvent) => {
+      if (modeRef.current !== 'takeover') return;
+      event.preventDefault();
+      if (pendingScrollRef.current) {
+        pendingScrollRef.current.deltaX += event.deltaX;
+        pendingScrollRef.current.deltaY += event.deltaY;
+      } else {
+        pendingScrollRef.current = { deltaX: event.deltaX, deltaY: event.deltaY };
+      }
+      if (scrollRafRef.current === null) {
+        scrollRafRef.current = window.requestAnimationFrame(() => {
+          scrollRafRef.current = null;
+          const delta = pendingScrollRef.current;
+          pendingScrollRef.current = null;
+          if (delta) {
+            sendRef.current?.({ type: 'scroll', deltaX: delta.deltaX, deltaY: delta.deltaY });
+          }
+        });
+      }
+    };
+    stage.addEventListener('wheel', onWheel, { passive: false });
+    return () => {
+      stage.removeEventListener('wheel', onWheel);
+      if (scrollRafRef.current !== null) {
+        cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = null;
+      }
+    };
+  }, []);
+
+  // Release held mouse buttons cleanly if cursor leaves window before mouseup
+  useEffect(() => {
+    const onWindowMouseUp = (event: MouseEvent) => {
+      if (!activeMouseBtnRef.current) return;
+      const btn = activeMouseBtnRef.current;
+      activeMouseBtnRef.current = null;
+      if (modeRef.current !== 'takeover') return;
+      const { x, y } = toViewport(event.clientX, event.clientY);
+      sendRef.current?.({ type: 'mouseUp', x, y, button: btn });
+    };
+    window.addEventListener('mouseup', onWindowMouseUp);
+    return () => window.removeEventListener('mouseup', onWindowMouseUp);
+  }, [toViewport]);
+
+  const queuePointerMove = useCallback((kind: 'mouseMove' | 'userCursorMove', x: number, y: number) => {
+    pendingMoveRef.current = { kind, x, y };
+    if (moveRafRef.current === null) {
+      moveRafRef.current = window.requestAnimationFrame(() => {
+        moveRafRef.current = null;
+        const next = pendingMoveRef.current;
+        pendingMoveRef.current = null;
+        if (next) sendRef.current?.({ type: next.kind, x: next.x, y: next.y });
+      });
+    }
+  }, []);
 
   const handleDrawDown = (event: React.MouseEvent) => {
     if (!drawMode) return;
@@ -460,61 +795,142 @@ function BrowserView() {
     spawnAnnotationRect(rect.x, rect.y, rect.w, rect.h);
   };
 
-  const handleMouseMove = (event: React.MouseEvent) => {
+  const handleVideoMouseMove = (event: React.MouseEvent) => {
     if (drawMode) {
       handleDrawMove(event);
       return;
     }
-    if (modeRef.current !== 'takeover') {
-      const { x, y } = toViewport(event.clientX, event.clientY);
-      sendRef.current?.({ type: 'userCursorMove', x, y });
-      return;
-    }
     const { x, y } = toViewport(event.clientX, event.clientY);
-    sendRef.current?.({ type: 'mouseMove', x, y });
+    queuePointerMove(modeRef.current === 'takeover' ? 'mouseMove' : 'userCursorMove', x, y);
   };
 
-  const handleClick = (event: React.MouseEvent) => {
+  const handleVideoMouseDown = (event: React.MouseEvent) => {
+    rootRef.current?.focus();
+    if (drawMode) {
+      handleDrawDown(event);
+      return;
+    }
+    if (modeRef.current !== 'takeover') return;
+    event.preventDefault();
+    const button = mapMouseButton(event.button);
+    activeMouseBtnRef.current = button;
+    const { x, y } = toViewport(event.clientX, event.clientY);
+    sendRef.current?.({ type: 'mouseDown', x, y, button });
+  };
+
+  const handleVideoMouseUp = (event: React.MouseEvent) => {
     if (drawMode) {
       handleDrawUp(event);
       return;
     }
     if (modeRef.current !== 'takeover') return;
-    if (event.button === 2) {
-      const { x, y } = toViewport(event.clientX, event.clientY);
-      sendRef.current?.({ type: 'mouseClick', x, y, button: 'right' });
-    }
-  };
-
-  const handleMouseDown = (event: React.MouseEvent) => {
-    if (drawMode) { handleDrawDown(event); return; }
-    if (modeRef.current !== 'takeover') return;
-    if (event.button !== 0) return;
+    const button = activeMouseBtnRef.current ?? mapMouseButton(event.button);
+    activeMouseBtnRef.current = null;
     const { x, y } = toViewport(event.clientX, event.clientY);
-    sendRef.current?.({ type: 'mouseClick', x, y, button: 'left' });
-  };
-
-  const handleWheel = (event: React.WheelEvent) => {
-    if (modeRef.current !== 'takeover') return;
-    event.preventDefault();
-    sendRef.current?.({ type: 'scroll', deltaX: event.deltaX, deltaY: event.deltaY });
+    sendRef.current?.({ type: 'mouseUp', x, y, button });
   };
 
   const handleKeyDown = (event: React.KeyboardEvent) => {
-    if (modeRef.current !== 'takeover') return;
     const target = event.target as HTMLElement;
-    const typing = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';
-    if (typing && event.key.length === 1) {
+    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+    if (pendingDialog) return;
+    if (modeRef.current !== 'takeover') return;
+
+    const mod = event.ctrlKey || event.metaKey;
+    if (mod && !event.altKey && event.key.toLowerCase() === 'v') {
+      // Allow browser's native onPaste handler on .bp-root to deliver clipboard text cleanly
+      return;
+    }
+    if (mod && !event.altKey && event.key.toLowerCase() === 'c') {
+      sendRef.current?.({ type: 'clipboard-copy-req' });
+      sendRef.current?.({
+        type: 'keyboardPress',
+        key: 'c',
+        ctrlKey: event.ctrlKey,
+        altKey: event.altKey,
+        shiftKey: event.shiftKey,
+        metaKey: event.metaKey,
+      });
+      event.preventDefault();
+      return;
+    }
+
+    if (!event.ctrlKey && !event.altKey && !event.metaKey && event.key.length === 1) {
       event.preventDefault();
       sendRef.current?.({ type: 'keyboardType', text: event.key });
       return;
     }
+
     event.preventDefault();
-    sendRef.current?.({ type: 'keyboardPress', key: event.key });
+    sendRef.current?.({
+      type: 'keyboardPress',
+      key: event.key === ' ' ? 'Space' : event.key,
+      ctrlKey: event.ctrlKey,
+      altKey: event.altKey,
+      shiftKey: event.shiftKey,
+      metaKey: event.metaKey,
+    });
   };
 
-  const focusPanel = () => {
-    (videoRef.current?.parentElement as HTMLDivElement | null)?.focus?.();
+  const handlePaste = (event: React.ClipboardEvent) => {
+    const target = event.target as HTMLElement;
+    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+    if (modeRef.current !== 'takeover') return;
+    const text = event.clipboardData?.getData('text/plain') ?? '';
+    if (!text) return;
+    event.preventDefault();
+    sendRef.current?.({ type: 'paste', text });
+  };
+
+  const handleOmniboxSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    const raw = omniboxText.trim();
+    if (!raw) return;
+    sendRef.current?.({ type: 'goto', url: raw });
+    omniboxRef.current?.blur();
+    rootRef.current?.focus();
+  };
+
+  const handleDialogRespond = (accept: boolean) => {
+    if (!pendingDialog) return;
+    sendRef.current?.({
+      type: 'dialog-response',
+      id: pendingDialog.id,
+      accept,
+      promptText: pendingDialog.dialogType === 'prompt' ? promptInput : undefined,
+    });
+    setPendingDialog(null);
+  };
+
+  const handleFileInputChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const chooser = pendingFileChooser;
+    const fileList = event.target.files;
+    event.target.value = '';
+    if (!chooser) return;
+    if (!fileList || fileList.length === 0) {
+      sendRef.current?.({ type: 'file-chooser-cancel', id: chooser.id });
+      setPendingFileChooser(null);
+      return;
+    }
+    try {
+      const selected = Array.from(fileList).slice(0, 10);
+      const totalBytes = selected.reduce((sum, f) => sum + f.size, 0);
+      if (totalBytes > 22 * 1024 * 1024) {
+        showToast('Selected files exceed 22 MB transfer limit.', 'error');
+        return;
+      }
+      const encoded = await Promise.all(
+        selected.map(async (file) => ({
+          name: file.name,
+          mimeType: file.type || 'application/octet-stream',
+          bufferBase64: uint8ToBase64(new Uint8Array(await file.arrayBuffer())),
+        })),
+      );
+      sendRef.current?.({ type: 'file-chooser-upload', id: chooser.id, files: encoded });
+      setPendingFileChooser(null);
+    } catch {
+      showToast('Failed to read selected file(s).', 'error');
+    }
   };
 
   const userCursorEl = useMemo(
@@ -549,39 +965,176 @@ function BrowserView() {
     [state.mode],
   );
 
-  const activeTabUrl = state.tabs.find((t) => t.active)?.url ?? state.url;
-
-  const [menuOpen, setMenuOpen] = useState(false);
+  const isHttps = /^https:\/\//i.test(state.activeUrl);
 
   return (
-    <div className="bp-root" tabIndex={-1} onKeyDown={handleKeyDown} onMouseDown={focusPanel}>
-      {}
-      <header className="bp-bar">
+    <div
+      ref={rootRef}
+      className="bp-root"
+      tabIndex={-1}
+      onKeyDown={handleKeyDown}
+      onPaste={handlePaste}
+    >
+      {/* Multi-tab strip */}
+      <div className="bp-tabstrip">
+        <div className="bp-tabs" role="tablist" aria-label="Browser tabs">
+          {state.tabs.map((tab) => {
+            const label = tab.title?.trim() || tab.url?.replace(/^https?:\/\//i, '').split('/')[0] || 'New Tab';
+            return (
+              <div
+                key={tab.id}
+                role="tab"
+                aria-selected={tab.active}
+                className={`bp-tab${tab.active ? ' active' : ''}`}
+                onClick={() => sendRef.current?.({ type: 'switch-tab', tabId: tab.id })}
+              >
+                {tab.loading ? (
+                  <span className="bp-tab-spin" aria-hidden="true" />
+                ) : (
+                  <span className="bp-tab-indicator" aria-hidden="true" />
+                )}
+                <span className="bp-tab-title">{label}</span>
+                <button
+                  type="button"
+                  className="bp-tab-close"
+                  aria-label={`Close ${label}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    sendRef.current?.({ type: 'close-tab', tabId: tab.id });
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
+          <button
+            type="button"
+            className="bp-tab-add"
+            aria-label="New tab"
+            onClick={() => sendRef.current?.({ type: 'new-tab' })}
+          >
+            +
+          </button>
+        </div>
+
+        <div className="bp-tabstrip-meta">
+          {video.stats ? <span className="bp-stats">{video.stats}</span> : null}
+          <span
+            className={`bp-conn ${state.connected ? 'bp-conn-ok' : 'bp-conn-down'}`}
+            aria-label={state.connected ? 'Connected' : 'Reconnecting'}
+          />
+        </div>
+      </div>
+
+      {/* Navigation toolbar + synchronized omnibox */}
+      <header className="bp-toolbar">
+        <div className="bp-nav-btns">
+          <button
+            type="button"
+            className="bp-icon-btn"
+            aria-label="Back"
+            onClick={() => sendRef.current?.({ type: 'back' })}
+          >
+            ←
+          </button>
+          <button
+            type="button"
+            className="bp-icon-btn"
+            aria-label="Forward"
+            onClick={() => sendRef.current?.({ type: 'forward' })}
+          >
+            →
+          </button>
+          <button
+            type="button"
+            className="bp-icon-btn"
+            aria-label={state.loading ? 'Stop loading' : 'Reload'}
+            onClick={() => sendRef.current?.({ type: state.loading ? 'stop' : 'reload' })}
+          >
+            {state.loading ? '✕' : '↻'}
+          </button>
+        </div>
+
+        <form className="bp-omnibox" onSubmit={handleOmniboxSubmit}>
+          <span className={`bp-omnibox-scheme${isHttps ? ' secure' : ''}`}>
+            {isHttps ? 'HTTPS' : 'URL'}
+          </span>
+          <input
+            ref={omniboxRef}
+            type="text"
+            value={omniboxText}
+            aria-label="Address bar"
+            placeholder={state.connected ? 'Enter URL and press Enter' : 'Reconnecting…'}
+            onFocus={(e) => {
+              omniboxFocusedRef.current = true;
+              e.currentTarget.select();
+            }}
+            onBlur={() => {
+              omniboxFocusedRef.current = false;
+              setOmniboxText(state.activeUrl);
+            }}
+            onChange={(e) => setOmniboxText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                setOmniboxText(state.activeUrl);
+                e.currentTarget.blur();
+                rootRef.current?.focus();
+              }
+            }}
+          />
+        </form>
+
         <span className={`bp-mode bp-mode-${state.mode}`}>
           <span className="bp-mode-dot" />
           {state.mode === 'agent' ? 'Agent' : 'Takeover'}
         </span>
-        <span className="bp-url" title={activeTabUrl}>
-          {state.connected ? activeTabUrl || 'about:blank' : 'reconnecting…'}
-        </span>
-        <span
-          className={`bp-conn ${state.connected ? 'bp-conn-ok' : 'bp-conn-down'}`}
-          title={state.connected ? 'Connected' : 'Reconnecting…'}
-        />
+
+        <button
+          type="button"
+          className={`bp-takeover-btn${state.mode === 'takeover' ? ' active' : ''}`}
+          onClick={() => {
+            if (state.mode === 'takeover') {
+              sendRef.current?.({ type: 'release' });
+            } else {
+              setDrawMode(false);
+              sendRef.current?.({ type: 'takeover' });
+            }
+          }}
+        >
+          {state.mode === 'takeover' ? 'Hand Back to Agent' : 'Take Control'}
+        </button>
+
         <div className="bp-menu-wrap">
           <button
             type="button"
             className="bp-kebab"
-            aria-label="Panel menu"
+            aria-label="Panel options"
             onClick={() => setMenuOpen((open) => !open)}
           >
-            ⋯
+            ⋮
           </button>
           {menuOpen ? (
             <>
               <div className="bp-backdrop" onClick={() => setMenuOpen(false)} />
               <div className="bp-menu" role="menu">
                 {video.stats ? <div className="bp-menu-info">{video.stats}</div> : null}
+                <button
+                  type="button"
+                  className="bp-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    if (state.activeUrl) {
+                      void navigator.clipboard?.writeText(state.activeUrl).then(
+                        () => showToast('URL copied.'),
+                        () => showToast('Could not copy URL.', 'error'),
+                      );
+                    }
+                  }}
+                >
+                  Copy URL
+                </button>
                 <button
                   type="button"
                   className={`bp-menu-item${drawMode ? ' bp-menu-active' : ''}`}
@@ -591,7 +1144,7 @@ function BrowserView() {
                     setMenuOpen(false);
                   }}
                 >
-                  {drawMode ? 'Stop drawing' : 'Draw on page'}
+                  {drawMode ? 'Stop annotating' : 'Annotate for agent'}
                 </button>
                 <button
                   type="button"
@@ -599,10 +1152,11 @@ function BrowserView() {
                   role="menuitem"
                   onClick={() => {
                     setMenuOpen(false);
-                    sendRef.current?.({ type: state.mode === 'agent' ? 'takeover' : 'release' });
+                    setVideo((v) => ({ ...v, status: 'connecting', msg: 'Restarting stream…' }));
+                    sendRef.current?.({ type: 'rtc-restart' });
                   }}
                 >
-                  {state.mode === 'agent' ? 'Take control' : 'Release to agent'}
+                  Restart video stream
                 </button>
                 <button
                   type="button"
@@ -619,20 +1173,71 @@ function BrowserView() {
             </>
           ) : null}
         </div>
+
+        <div className={`bp-progress${state.loading ? ' active' : ''}`} aria-hidden="true" />
       </header>
 
-      {}
-      <main className="bp-stage" onWheel={handleWheel}>
-        <div className="bp-frame">
+      {/* Agent handover prompt banner */}
+      {state.mode === 'takeover' && state.handoverMessage ? (
+        <div className="bp-handover-banner">
+          <div className="bp-handover-msg">{state.handoverMessage}</div>
+          <button
+            type="button"
+            className="bp-handover-done"
+            onClick={() => sendRef.current?.({ type: 'release' })}
+          >
+            Done — Hand Back
+          </button>
+        </div>
+      ) : null}
+
+      {/* File chooser upload fallback bar */}
+      {pendingFileChooser ? (
+        <div className="bp-file-bar">
+          <span>The page opened a file upload chooser ({pendingFileChooser.multiple ? 'multiple files' : 'single file'}).</span>
+          <div className="bp-file-bar-actions">
+            <button
+              type="button"
+              className="bp-btn bp-btn-primary"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              Choose File
+            </button>
+            <button
+              type="button"
+              className="bp-btn"
+              onClick={() => {
+                sendRef.current?.({ type: 'file-chooser-cancel', id: pendingFileChooser.id });
+                setPendingFileChooser(null);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        hidden
+        multiple={pendingFileChooser?.multiple === true}
+        onChange={(e) => {
+          void handleFileInputChange(e);
+        }}
+      />
+
+      {/* 1:1 viewport-synchronized video stage */}
+      <main ref={stageRef} className="bp-stage">
+        <div className={`bp-frame${state.mode === 'takeover' ? ' takeover' : ''}`}>
           <video
             ref={videoRef}
             autoPlay
             muted
             playsInline
-            className="bp-video"
-            onMouseMove={handleMouseMove}
-            onMouseDown={handleMouseDown}
-            onClick={handleClick}
+            onMouseMove={handleVideoMouseMove}
+            onMouseDown={handleVideoMouseDown}
+            onMouseUp={handleVideoMouseUp}
             onContextMenu={(e) => {
               if (modeRef.current === 'takeover') e.preventDefault();
             }}
@@ -645,7 +1250,7 @@ function BrowserView() {
                   <button
                     type="button"
                     onClick={() => {
-                      setVideo((v) => ({ ...v, status: 'connecting', msg: '' }));
+                      setVideo((v) => ({ ...v, status: 'connecting', msg: 'Retrying…' }));
                       sendRef.current?.({ type: 'rtc-restart' });
                     }}
                   >
@@ -660,23 +1265,84 @@ function BrowserView() {
           {cursorEl}
           {userCursorEl}
           <div ref={rippleLayerRef} className="bp-ripples" />
-          {state.mode === 'takeover' ? (
-            <div className="bp-urlbar">
-              <input
-                type="text"
-                placeholder="Search Google or type a URL"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    const value = (e.target as HTMLInputElement).value.trim();
-                    if (value) sendRef.current?.({ type: 'goto', url: value });
-                  }
-                  e.stopPropagation();
-                }}
-              />
-            </div>
-          ) : null}
         </div>
       </main>
+
+      {/* Download shelf */}
+      {downloads.length > 0 ? (
+        <div className="bp-downloads">
+          {downloads.map((d) => (
+            <div key={d.id} className={`bp-download-chip${d.status === 'failed' ? ' failed' : ''}`}>
+              {d.status === 'done' && d.downloadUrl ? (
+                <a href={d.downloadUrl} download={d.filename}>
+                  ↓ {d.filename}
+                </a>
+              ) : (
+                <span>✕ {d.filename}</span>
+              )}
+              {d.size !== undefined ? <span>{formatBytes(d.size)}</span> : null}
+              <button
+                type="button"
+                className="bp-download-dismiss"
+                aria-label={`Dismiss ${d.filename}`}
+                onClick={() => setDownloads((prev) => prev.filter((item) => item.id !== d.id))}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {/* Native alert / confirm / prompt modal */}
+      {pendingDialog ? (
+        <div className="bp-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="bp-modal">
+            <div className="bp-modal-title">
+              Page {pendingDialog.dialogType}
+            </div>
+            <div className="bp-modal-msg">{pendingDialog.message || '(Empty message)'}</div>
+            {pendingDialog.dialogType === 'prompt' ? (
+              <input
+                type="text"
+                className="bp-modal-input"
+                autoFocus
+                value={promptInput}
+                onChange={(e) => setPromptInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleDialogRespond(true);
+                  if (e.key === 'Escape') handleDialogRespond(false);
+                }}
+              />
+            ) : null}
+            <div className="bp-modal-actions">
+              {pendingDialog.dialogType !== 'alert' ? (
+                <button
+                  type="button"
+                  className="bp-btn"
+                  onClick={() => handleDialogRespond(false)}
+                >
+                  Cancel
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="bp-btn bp-btn-primary"
+                onClick={() => handleDialogRespond(true)}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Toast message */}
+      {toast ? (
+        <div className={`bp-toast${toast.kind === 'error' ? ' error' : ''}`}>
+          {toast.text}
+        </div>
+      ) : null}
     </div>
   );
 }

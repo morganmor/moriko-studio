@@ -1,9 +1,4 @@
-/**
- * uiExport — saves the single-file UI HTML snapshot (built client-side by
- * src/lib/exportUi.ts) into ui-exports/ in the workspace, so other agents can
- * open and redesign it directly. Keeps a timestamped copy plus latest.html
- * (stable path for agents) and prunes old timestamped copies.
- */
+
 import express, { Router } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';

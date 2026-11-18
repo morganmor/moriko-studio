@@ -1,11 +1,4 @@
-/**
- * listAgentToolDefs() — the single authoritative catalogue of built-in agent tools.
- *
- * SINGLE SOURCE OF TOOL DOCUMENTATION: the harness System Prompt carries ONLY
- * general policy, discipline, and execution gates — every tool's function,
- * modes, parameters, and technical usage rules live HERE and are rendered once
- * under `## Built-in tools`.
- */
+
 import type { AgentToolDef } from './shared.js';
 import { listAddonToolDefs } from '../../addons/registry.js';
 import { builtinAddonIds } from '../../addons/seed.js';
@@ -33,7 +26,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__grep',
-      description: 'Regex content search ("path:line: text"; pattern or patterns[] in one walk). context: 0-10 or wholeLines: true returns whole-line windows WITH edit read receipts (edit directly without read_file). Scope FIRST via subpath/subpaths and glob/globs (follow concentration hints in footer; anchor broad keywords with \\b); supports caseSensitive, maxResults (100), sort "path"|"density" ("density" is not paginable), continueFrom "g:file:line".',
+      description: 'Regex content search ("path:line: text"; pattern or patterns[] in one walk). context: 0-10 or wholeLines: true returns whole-line windows WITH edit read receipts (edit directly without read_file). Scope FIRST via subpath/subpaths and glob/globs (follow concentration hints in footer; anchor broad keywords with \\b); target-aware budgets — single_file: maxMatches ≤200 (default 200); multi_file: ≤100 per file (default 100, total = cap × files); single_folder: ≤20 matches + ≤10 files; multi_folder/root: ≤100 matches + ≤10 files, ≤20 per file; supports caseSensitive, sort "path"|"density" ("density" is not paginable), continueFrom "g:file:line".',
       inputSchema: {
         type: 'object',
         properties: {
@@ -44,7 +37,8 @@ export function listAgentToolDefs(): AgentToolDef[] {
           subpath: { type: 'string', description: 'File/dir scope (alias "path").' },
           subpaths: { type: 'array', items: { type: 'string' }, description: 'Multiple scopes, merged.' },
           caseSensitive: { type: 'boolean', description: 'Default false.' },
-          maxResults: { type: 'number', description: 'Cap (default 100).' },
+          maxMatches: { type: 'number', description: 'Match budget, target-aware: 1 explicit file ≤200 (default 200), N explicit files ≤100 PER FILE (default 100), one sub-folder ≤20 (default 20), root/multi-folder ≤100 (default 100). Alias: max_results/maxResults.' },
+          maxFiles: { type: 'number', description: 'File cap for folder/multi-folder scopes (default 10, max 10); explicit files are never capped below their count.' },
           context: { type: 'number', description: 'Context lines 0-10 (receipt mode).' },
           wholeLines: { type: 'boolean', description: 'Whole match lines (receipt mode).' },
           sort: { type: 'string', enum: ['path', 'density'], description: '"path" (default) or "density".' },
@@ -106,13 +100,27 @@ export function listAgentToolDefs(): AgentToolDef[] {
     },
     {
       wireName: 'agent__write',
-      description: 'Create a brand-new file (refuses to overwrite existing files unless overwrite: true + prior read receipt); supports dryRun and verifySyntax (default true).',
+      description: 'Create a brand-new file (refuses if the file already exists — replace it with agent__overwrite instead); supports dryRun and verifySyntax (default true).',
       inputSchema: {
         type: 'object',
         properties: {
           path: { type: 'string', description: 'File path (must be new).' },
           content: { type: 'string', description: 'Full text to write.' },
-          overwrite: { type: 'boolean', description: 'Replace an existing file (needs a prior read).' },
+          dryRun: { type: 'boolean', description: 'Preview only.' },
+          verifySyntax: { type: 'boolean', description: 'Syntax probe + rollback (default true).' },
+        },
+        required: ['path', 'content'],
+      },
+    },
+    {
+      wireName: 'agent__overwrite',
+      description: 'Replace the FULL content of an existing file (read-before-overwrite gate: needs a current read receipt, optional expectedReadHash; prior content vaulted; syntax probe + rollback).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Existing file path.' },
+          content: { type: 'string', description: 'Full replacement text.' },
+          expectedReadHash: { type: 'string', description: 'sha256 from the read_file footer (race-safe overwrite).' },
           dryRun: { type: 'boolean', description: 'Preview only.' },
           verifySyntax: { type: 'boolean', description: 'Syntax probe + rollback (default true).' },
         },
@@ -301,7 +309,7 @@ export function listAgentToolDefs(): AgentToolDef[] {
         type: 'object',
         properties: {
           todoId: { type: 'string', description: 'Todo id.' },
-          state: { type: 'string', enum: ['pending', 'in_progress', 'completed'], description: 'Explicit state. pending to completed is refused — pass through in_progress.' },
+          state: { type: 'string', enum: ['pending', 'in_progress', 'completed'], description: 'Explicit state. pending to completed is allowed (the build gate still applies); in_progress requires activeForm.' },
           activeForm: { type: 'string', description: 'REQUIRED for in_progress: present-continuous description of the work happening now.' },
           text: { type: 'string', description: 'New text.' },
           done: { type: 'boolean', description: 'Legacy shorthand: true = completed, false = pending (same invariants apply).' },

@@ -1,13 +1,10 @@
-/**
- * RS-PRD v1 model + validation (RSA/T R1). Self-contained: runs inside the
- * harness process via tsx with NO imports from server/ — the addon contract.
- */
+
 
 export const FORMAT_ID = 'rs-prd';
 export const FORMAT_VERSION = 1;
 export const MAX_HISTORY = 500;
 
-/** Actor = who did it. `user` is the ONLY kind allowed to delete. */
+
 export function actor(kind, name, extra) {
   return { kind, name: name || undefined, ...(extra || {}) };
 }
@@ -46,7 +43,7 @@ export function newPrdDoc(user) {
   };
 }
 
-/** Validate the document shape; returns a list of readable problems. */
+
 export function validateDoc(doc) {
   const problems = [];
   if (!doc || typeof doc !== 'object') return ['document is not an object'];
@@ -91,16 +88,13 @@ export function validateDoc(doc) {
   return problems;
 }
 
-/** Migrate an older doc forward. v1 is the first version — future-proof hook. */
+
 export function migrate(doc) {
   if (doc.version === 1) return doc;
   return doc;
 }
 
-/** Normalize a raw "module" line (string or {name, desc}).
- *  Architecture modules divide the PRD into self-contained parts whose
- *  achievements can be worked in parallel by different agents without
- *  colliding. Each achievement may point at its module via `moduleId`. */
+
 export function normModules(list) {
   if (!Array.isArray(list)) return undefined;
   return list.slice(0, 60).map((m, idx) => {
@@ -120,7 +114,7 @@ export function normModules(list) {
   }).filter((m) => m.name);
 }
 
-/** Normalize achievement symbol contracts ({ provides: string[], consumes: string[] }). */
+
 export function normContracts(raw) {
   if (!raw || typeof raw !== 'object') return undefined;
   const provides = Array.isArray(raw.provides) ? raw.provides.map((x) => String(x).trim()).filter(Boolean).slice(0, 30) : [];
@@ -128,10 +122,7 @@ export function normContracts(raw) {
   return { provides, consumes };
 }
 
-/** Normalize a milestone line (string or {title, goal, target}).
- *  Milestones are delivery checkpoints used by the orchestrator to sequence
- *  large architectural work — an achievement can `dependsOn` a milestone id
- *  the same way it depends on another achievement. */
+
 export function normMilestones(list) {
   if (!Array.isArray(list)) return undefined;
   return list.slice(0, 30).map((m) => {
@@ -144,7 +135,7 @@ export function normMilestones(list) {
   }).filter((m) => m.title);
 }
 
-/** Non-functional requirements: measurable cross-cutting qualities. */
+
 export function normNonFunctional(list) {
   if (!Array.isArray(list)) return undefined;
   return list.slice(0, 40).map((n, idx) => {
@@ -157,7 +148,7 @@ export function normNonFunctional(list) {
   }).filter((n) => n.text);
 }
 
-/** Risks with likelihood/impact so the orchestrator can plan mitigation. */
+
 export function normRisks(list) {
   if (!Array.isArray(list)) return undefined;
   return list.slice(0, 40).map((r, idx) => {
@@ -171,7 +162,7 @@ export function normRisks(list) {
   }).filter((r) => r.text);
 }
 
-/** Normalize technical decisions (string or {text, reason}). */
+
 export function normTechnicalDecisions(list) {
   if (!Array.isArray(list)) return undefined;
   return list.slice(0, 30).map((td) => {
@@ -184,7 +175,7 @@ export function normTechnicalDecisions(list) {
   }).filter((td) => td.text);
 }
 
-/** Minimal glob → RegExp (no deps): **, *, segment-boundaries only. */
+
 export function globToRegExp(glob) {
   let out = '';
   for (let i = 0; i < glob.length; i++) {
@@ -198,7 +189,7 @@ export function globToRegExp(glob) {
   return new RegExp(`^${out}$`);
 }
 
-/** Does `path` match the scope (include minus exclude)? */
+
 export function inScope(scope, relPath) {
   if (!scope) return true;
   const inc = (scope.include || []).map(globToRegExp);
@@ -207,7 +198,7 @@ export function inScope(scope, relPath) {
   return !exc.some((re) => re.test(relPath));
 }
 
-/** Compute derived state hints: which achievements are unlocked now. */
+
 export function unlocked(doc, achievement) {
   return (achievement.dependsOn || []).every((dep) => {
     const target = doc.achievements.find((a) => a.id === dep);

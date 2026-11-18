@@ -18,7 +18,7 @@ import { storage } from '../lib/storage';
 import { EmptyState } from './ui';
 import { UsageChart } from './UsageChart';
 
-/** Server-side ledger windows — the selector's options (1 day .. 12 months). */
+
 const USAGE_WINDOW_LABELS: Record<string, string> = {
   '1d': '1 day',
   '3d': '3 days',
@@ -30,7 +30,7 @@ const USAGE_WINDOW_LABELS: Record<string, string> = {
   '12mo': '12 months',
 };
 
-/** Design's range tabs are compact (1D / 7D / 3M) — long labels stay for prose. */
+
 const USAGE_TAB_LABELS: Record<string, string> = {
   '1d': '1D',
   '3d': '3D',
@@ -42,7 +42,7 @@ const USAGE_TAB_LABELS: Record<string, string> = {
   '12mo': '12M',
 };
 
-/** Design's fmtN(): 12.4M / 340k / 950 — compact KPI and sumline numbers. */
+
 function fmtN(value: number): string {
   if (value >= 1e9) return `${(value / 1e9).toFixed(2)}B`;
   if (value >= 1e6) return `${(value / 1e6).toFixed(value >= 1e8 ? 0 : 1)}M`;
@@ -64,14 +64,11 @@ interface UsagePayload {
   window: string;
   providers: UsageProvider[];
   totals: { requests: number; prompt: number; completion: number; total: number; cacheRead: number };
-  /** Per-calendar-day series (zero-filled, oldest → newest) for the chart. */
+  
   daily?: Array<{ date: string; requests: number; prompt: number; completion: number; total: number; cacheRead: number }>;
 }
 
-/** Which providers fold into the big total — checked per provider.
- *  PRIVACY (2026-10): device state via storage.ts (ui-state.json), NOT
- *  localStorage — the browser stores nothing (see AGENTS.md privacy rule).
- *  Legacy dashboard.usage.* keys are adopted+erased by adoptLegacyBrowserState. */
+
 function loadCheckedProviders(): string[] {
   return storage.loadDashboardUsageProviders();
 }
@@ -80,15 +77,7 @@ function saveCheckedProviders(ids: string[]): void {
   storage.saveDashboardUsageProviders(ids);
 }
 
-/**
- * Dashboard: environment health at a glance, laid out like
- * design/dashboard/moriko-design-1-panel-dashboard.html — KPI cards with the
- * count-up roll, a panel with range tabs over the grow-animated bar chart,
- * the By provider / Provider status pair, and the on-device rows.
- *
- * The point is to answer "why can't I send a message?" without making the user
- * open a terminal.
- */
+
 export function DashboardView({ onOpenProviders }: { onOpenProviders: () => void }) {
   const providers = useStore((state) => state.providers);
   const conversations = useStore((state) => state.conversations);
@@ -144,7 +133,7 @@ export function DashboardView({ onOpenProviders }: { onOpenProviders: () => void
     () => selectedProviders.reduce((sum, entry) => sum + entry.requests, 0),
     [selectedProviders],
   );
-  /** Prompt/output/cache of the CHECKED subset — headline, breakdown and chart stay consistent. */
+  
   const selectedBreakdown = useMemo(
     () =>
       selectedProviders.reduce(
@@ -177,7 +166,7 @@ export function DashboardView({ onOpenProviders }: { onOpenProviders: () => void
   const missing = providers.filter((provider) => !provider.hasServerKey);
   const keyRatio = providers.length > 0 ? (ready.length / providers.length) * 100 : 0;
 
-  /** Design's .spot — an accent radial follows the pointer inside a KPI card. */
+  
   const handleSpotMove = (event: React.PointerEvent<HTMLDivElement>): void => {
     const card = (event.target as HTMLElement).closest<HTMLElement>('.spot');
     if (!card) return;
@@ -436,7 +425,7 @@ export function DashboardView({ onOpenProviders }: { onOpenProviders: () => void
   );
 }
 
-/** Design's KPI card: .kpi.spot with .kl label, .kv value, .ks hint. */
+
 function Kpi({
   icon,
   label,
@@ -460,11 +449,7 @@ function Kpi({
   );
 }
 
-/**
- * Design's countUp(): a 700ms ease-out-cubic roll from the previous value, so
- * KPI numbers animate up when data (or the range) changes instead of jumping.
- * Honors the reduce setting — an explicit choice or the OS preference.
- */
+
 function CountUp({
   value,
   pending,

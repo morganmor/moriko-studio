@@ -5,25 +5,11 @@ import { randomUUID } from 'node:crypto';
 import { atomicWriteJson } from '../atomicWrite.js';
 import { agentsFile, conversationDir, morikoHome } from '../paths.js';
 
-/**
- * Registry of AGENT WORKSPACES: directories on this machine the user has
- * explicitly granted to the built-in agent harness (grep / read_file /
- * edit_file). Everything the harness touches is resolved against the ACTIVE
- * workspace root and rejected when it would escape that root — a workspace
- * is an allowlist entry, not a suggestion.
- *
- * Persisted to `~/.moriko/agents.json` (machine-level config; same
- * defensive-read pattern as every other store — see paths.ts).
- */
+
 
 const CONFIG_FILE = agentsFile;
 
-/**
- * ADDON MANAGER — the builtin addon source root (`addons-src/` next to the
- * server). The Addon Manager mechanism (always-allowed jail + search index
- * union + addon_manage source redirect) hangs off this one path; null in
- * packaged builds, where the repo layout does not exist.
- */
+
 export function addonsSrcRoot(): string | null {
   try {
     const dir = path.resolve(process.cwd(), 'addons-src');
@@ -35,18 +21,12 @@ export function addonsSrcRoot(): string | null {
 
 export interface AgentWorkspace {
   id: string;
-  /** Human label shown by the picker; defaults to the folder name. */
+  
   label: string;
-  /** Absolute, normalized root path on this machine. */
+  
   path: string;
   createdAt: string;
-  /**
-   * True when the workspace IS this app (Moriko Studio's own source). The
-   * harness then refuses to touch secrets (.env*), app state (.data/) and
-   * dependency/VCS internals (node_modules/, .git/) — see assertSelfHostAccess.
-   * Auto-detected from package.json at registration; legacy entries without
-   * the flag are detected lazily on first use.
-   */
+  
   selfHosted?: boolean;
 }
 
@@ -54,15 +34,9 @@ interface AgentsFile {
   version: 1;
   workspaces: AgentWorkspace[];
   activeId: string | null;
-  /**
-   * PER-SESSION workspace override: chat id → workspace id. The browser
-   * passes `?sessionId=<conversationId>` on every workspace API call, so two
-   * conversations can hold different folders at the same time (and switching
-   * chats never drags the other chat's folder along). A session without an
-   * entry falls back to the global `activeId`.
-   */
+  
   sessionWorkspaces?: Record<string, string>;
-  /** Folders the user whitelisted for friction-free access OUTSIDE the active workspace. */
+  
   allowedDirs?: string[];
 }
 
@@ -114,7 +88,7 @@ export function getActiveWorkspace(sessionId?: string): AgentWorkspace | undefin
   return store.workspaces.find((workspace) => workspace.id === store.activeId);
 }
 
-/** Validates a user-supplied path: must exist and be a directory. Returns it absolute + normalized. */
+
 function normalizeDirectory(inputPath: string): string {
   const resolved = path.resolve(inputPath.trim());
   let stats;
@@ -127,7 +101,7 @@ function normalizeDirectory(inputPath: string): string {
   return resolved;
 }
 
-/** Registers (or re-returns) a workspace directory. Same path → same entry. */
+
 export function addWorkspace(inputPath: string, label?: string): AgentWorkspace {
   const normalized = normalizeDirectory(inputPath);
   const store = load();
@@ -177,12 +151,7 @@ export function removeWorkspace(id: string): boolean {
   return true;
 }
 
-/**
- * Activates a workspace — globally when no `sessionId` is given, or as a
- * PER-SESSION binding when one is. The browser always passes the active chat's
- * id, so every workspace switch is scoped to the conversation the user is
- * looking at and never leaks into other sessions.
- */
+
 export function setActiveWorkspace(id: string, sessionId?: string): AgentWorkspace {
   const store = load();
   const workspace = store.workspaces.find((entry) => entry.id === id);
@@ -202,25 +171,19 @@ export function setActiveWorkspace(id: string, sessionId?: string): AgentWorkspa
   return workspace;
 }
 
-/** The session-bound workspace id (null when the session has no override). */
+
 export function getSessionWorkspaceId(sessionId: string): string | null {
   return load().sessionWorkspaces?.[sessionId] ?? null;
 }
 
-/**
- * Case-tolerant path equality for Windows (`c:\a` and `C:\A` are the same
- * directory); exact comparison elsewhere.
- */
+
 function pathsEqual(a: string, b: string): boolean {
   return process.platform === 'win32'
     ? a.toLowerCase() === b.toLowerCase()
     : a === b;
 }
 
-/**
- * True when `absolute` lives inside `root` — case-tolerant on Windows
- * (`c:\a` and `C:\A` are the same directory); exact prefix elsewhere.
- */
+
 export function isInsideRoot(absolute: string, root: string): boolean {
   return (
     pathsEqual(absolute, root) ||
@@ -242,7 +205,7 @@ function detectSelfHost(dir: string): boolean {
 
 const selfHostCache = new Map<string, boolean>();
 
-/** True when this workspace holds Moriko Studio's own source. */
+
 export function isSelfHostedWorkspace(workspace: AgentWorkspace | undefined): boolean {
   if (!workspace) return false;
   if (workspace.selfHosted === true) return true;
@@ -258,14 +221,7 @@ export function isSelfHostedWorkspace(workspace: AgentWorkspace | undefined): bo
 
 export type ProtectedLevel = 'no-access' | 'no-write';
 
-/**
- * Classifies a workspace-relative path inside a self-hosted workspace:
- *   - 'no-access' — .env* (API keys), .data/ and ~/.moriko (app state and
- *     stores): blocked for READS too, because file content leaks into the
- *     model.
- *   - 'no-write'  — node_modules/ and .git/: reads are fine, mutations must
- *     go through the run/git tools instead of the file tools.
- */
+
 export function protectedPathLevel(relative: string): ProtectedLevel | null {
   const rel = relative.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
   if (!rel || rel === '.') return null;
@@ -277,20 +233,14 @@ export function protectedPathLevel(relative: string): ProtectedLevel | null {
   return null;
 }
 
-/** True when the absolute path lands inside the app's own `~/.moriko` state. */
+
 function isInsideMorikoHome(absolute: string): boolean {
   const normalized = path.resolve(absolute);
   const root = path.resolve(morikoHome);
   return normalized === root || normalized.startsWith(root + path.sep);
 }
 
-/**
- * Throws when `absolute` lands on a protected path of ANY registered
- * self-hosted workspace — or on the app's own `~/.moriko` state, which sits
- * OUTSIDE every workspace and must never be reachable through the harness
- * (it holds API keys, conversation metadata and the harness's own journals).
- * Called by every harness tool before touching disk.
- */
+
 export function assertSelfHostAccess(absolute: string, intent: 'read' | 'write'): void {
   if (isInsideMorikoHome(absolute)) {
     throw new Error(
@@ -342,19 +292,12 @@ export function removeAllowedDir(inputPath: string): string[] {
   return next;
 }
 
-/** True when the path lives inside (or equals) one of the whitelisted folders. */
+
 export function isInsideAllowedDir(absolute: string): boolean {
   return listAllowedDirs().some((dir) => isInsideRoot(absolute, dir));
 }
 
-/**
- * CONVERSATION-ATTACHMENT EXEMPTION (v2 layout): uploads live under the app's
- * conversation store — `conversation/chat-XXX/attachment/attachment-NNN.ext`
- * — which sits OUTSIDE every workspace. Attachments belong to the
- * conversation, not to a workspace: READING them is always allowed without
- * approval (writes/edits/deletes stay refused — only the user may touch the
- * app's own store, matching the self-host guard's spirit).
- */
+
 export function isAttachmentPath(absolute: string): boolean {
   const rel = path.relative(conversationDir, absolute);
   if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return false;
@@ -362,11 +305,7 @@ export function isAttachmentPath(absolute: string): boolean {
   return parts.length >= 3 && parts[0].startsWith('chat-') && parts[1] === 'attachment';
 }
 
-/**
- * Resolves a harness-tool path against the ACTIVE workspace root and refuses
- * anything outside it. Accepts relative paths (the normal case) and absolute
- * paths that live inside the root.
- */
+
 export function resolveInWorkspace(inputPath: string): { absolute: string; relative: string } {
   const workspace = getActiveWorkspace();
   if (!workspace) {

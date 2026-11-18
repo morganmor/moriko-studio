@@ -1,14 +1,4 @@
-/**
- * Moco Canvas — Mococraft bridge (P3, plan §11).
- *
- * Consumes the mod API exposed by mococraft (api.api.use('mococraft')) for:
- *  - the locked Design DNA → scene tokens/fonts (mapping --moco-* → tokens),
- *  - the slop scan on compiled output before `export` (the write-tool gate
- *    does NOT see addon-written files, so this scan is mandatory — plan §17).
- *
- * Moco Canvas MUST run without Mococraft: every function here degrades to a
- * neutral fallback with a note, never throws.
- */
+
 
 export interface CraftDna {
   id: string;
@@ -18,7 +8,7 @@ export interface CraftDna {
 
 export interface CraftScan {
   ran: boolean;
-  /** slop index 0–100 when the scan ran */
+  
   slopIndex?: number;
   verdict?: string;
   notes: string[];
@@ -42,7 +32,7 @@ interface MococraftApi {
   isUiFile(path: string): boolean;
 }
 
-/** null when mococraft is absent or has not exposed its mod API yet. */
+
 export function craftApi(api: any): MococraftApi | null {
   try {
     const mod = api?.api?.use?.('mococraft');
@@ -52,7 +42,7 @@ export function craftApi(api: any): MococraftApi | null {
   }
 }
 
-/** The locked Mococraft DNA mapped to scene shape — null when unavailable. */
+
 export function craftDna(api: any): CraftDna | null {
   const mod = craftApi(api);
   if (!mod) return null;
@@ -63,7 +53,6 @@ export function craftDna(api: any): CraftDna | null {
     if (!dna) return null;
     const tokens: Record<string, string> = {};
     for (const [key, value] of Object.entries(dna.palette)) {
-      // "--moco-canvas" → canvas, "--moco-ink" → ink …
       tokens[key.replace(/^--moco-/, '')] = value;
     }
     return { id: dna.id, tokens, fonts: { display: dna.displayFont, body: dna.bodyFont } };
@@ -72,10 +61,7 @@ export function craftDna(api: any): CraftDna | null {
   }
 }
 
-/**
- * Mandatory pre-export slop scan (plan §11/§17). Returns a ran:false result
- * with a note when Mococraft is not installed — export proceeds, honestly.
- */
+
 export function scanForExport(api: any, path: string, content: string): CraftScan {
   const mod = craftApi(api);
   if (!mod) {

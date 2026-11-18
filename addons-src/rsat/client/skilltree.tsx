@@ -1,10 +1,4 @@
-/**
- * RSA/T Skill tree — achievement map (permintaan user): TANPA scroll.
- * Kamera transform translate+scale — pan dengan drag mouse (pointer events,
- * grip pixel), zoom dengan wheel (non-passive, memperbesar ke arah kursor).
- * Data node dari store bersama (useRsat) — ikut berubah saat quest dibuat/diubah.
- * Topologi/garis/medal/tip tetap port 1:1 desain rsat-panel-skill-tree.html.
- */
+
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { tr } from './shared.tsx';
 import { Spr, sa } from './sprites.tsx';
@@ -12,7 +6,7 @@ import { eff, prog, useRsat, type Ach } from './store.tsx';
 
 type Pos = { c: number; r: number };
 
-/** Layout desain (baris 197–209): depth memo → kolom; row = rata-rata parent, di-spasi. */
+
 function layout(list: Ach[]): Record<string, Pos> {
   const dp: Record<string, number> = {};
   const by = (id: string) => list.find((a) => a.id === id);
@@ -41,9 +35,7 @@ function layout(list: Ach[]): Record<string, Pos> {
   return pos;
 }
 
-/** Kamera map: pan (drag) + zoom (wheel di posisi kursor).
- *  transform-origin:0 0 → koordinat kamera: world = (viewport − t)/z.
- *  Clamp: tepi map tak boleh keluar viewport (margin 120px). */
+
 const ZMIN = 0.5, ZMAX = 2.25, MARG = 120;
 const lim = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 function clampCam(z: number, x: number, y: number, vw: number, vh: number, W: number, H: number): { x: number; y: number } {

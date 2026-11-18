@@ -1,15 +1,4 @@
-/**
- * Mococraft — server main (v2 activate).
- *
- * Wires:
- *  1. SLOPGATE: on('tool.call') middleware over write tools — scans UI file
- *     content for named AI tells; advisory notes or strict deny.
- *  2. CONTEXT: api.prompt.fragment injects the active Design DNA into every
- *     agent-mode session so agents cannot drift back to defaults.
- *  3. TOOLS: mococraft_scan, mococraft_dna, mococraft_macro dynamic tools.
- *  4. RPC: state / setDna / scanPath / punchlist for the sidebar panel.
- *  5. BUS: mococraft.changed broadcast when DNA or verdicts change.
- */
+
 import { rulesFor, COPY_CLICHES } from './rules.js';
 import { DNA_LIB, dnaById } from './dna.js';
 import { MACROSTRUCTURES } from './macros.js';
@@ -20,7 +9,7 @@ const WRITE_TOOLS = new Set([
   'agent__edit_between', 'agent__insert_at_line', 'agent__apply_patch',
 ]);
 
-/** Which arg of each write tool carries file content. */
+
 function contentOf(tool: string, args: Record<string, unknown>): Array<{ path: string; content: string }> {
   const out: Array<{ path: string; content: string }> = [];
   const p = typeof args.path === 'string' ? args.path : '';
@@ -43,14 +32,10 @@ function contentOf(tool: string, args: Record<string, unknown>): Array<{ path: s
   return out;
 }
 
-/** Last-scan memory per file, for the radar panel. */
+
 const lastScans = new Map<string, ScanReport>();
 
-/**
- * Builds the Design DNA prompt fragment for ONE session at a time (per-turn).
- * api.prompt.fragment expects { id, build }: build() runs on every turn and
- * returns string[] lines (single string lines break the fragment contract).
- */
+
 function dnaFragmentLines(api: Record<string, any>) {
   return (ctx: { workspacePath?: string; sessionId?: string }): string[] => {
     const dnaId = api.store.get('activeDna');
@@ -77,7 +62,6 @@ export async function activate(ctx: any) {
   const api = ctx.api;
   const on = ctx.on;
 
-  // ── 1. Slop gate ─────────────────────────────────────────────
   on('tool.call', async ($: any, event: any, next: (e: any) => any) => {
     const tool = event?.tool ?? '';
     if (!WRITE_TOOLS.has(tool)) return next(event);
@@ -107,7 +91,6 @@ export async function activate(ctx: any) {
           deny: `Mococraft slop gate (strict): ${critical} critical tell(s) in the write. ${notes.slice(0, 6).join(' | ')} Fix the tells and retry — pick from the locked Design DNA, not the default attractor.`,
         };
       }
-      // Advisory: let the write through, attach notes via tool.result echo.
       (event as any).__mocoNotes = notes;
     }
     return next(event);
@@ -121,7 +104,6 @@ export async function activate(ctx: any) {
     return {};
   });
 
-  // ── 2. Prompt fragment (Design DNA lock) ─────────────────────
   api.prompt.fragment({
     id: 'design-dna',
     order: 40,
@@ -129,7 +111,6 @@ export async function activate(ctx: any) {
     build: dnaFragmentLines(api),
   });
 
-  // ── 3. Dynamic agent tools ───────────────────────────────────
   api.tool.register({
     name: 'mococraft_dna',
     description: 'List the Mococraft Design DNA library and lock one genre for this workspace (OKLCH palette, font pairing, macrostructures, hard bans).',
@@ -177,7 +158,6 @@ export async function activate(ctx: any) {
     },
   });
 
-  // ── 4. RPC for the sidebar panel ─────────────────────────────
   api.rpc.handle('state', () => ({
     activeDna: api.store.get('activeDna') ?? '',
     library: DNA_LIB,
@@ -199,17 +179,16 @@ export async function activate(ctx: any) {
     openView: 'addon:mococraft/panel',
   }));
 
-  // ── 5. Mod API (P3): Moco Canvas consumes the locked DNA + the slop scan ──
   api.api.expose('mococraft', {
-    /** Active DNA id ('' when none is locked). */
+    
     activeDna(): string {
       return String(api.store.get('activeDna') ?? '');
     },
-    /** Full DNA record (palette is CSS-var keyed: --moco-*, --moco-canvas…). */
+    
     dnaById(id: string) {
       return dnaById(id) ?? null;
     },
-    /** Slop scan over compiled code (same engine the write-tool gate uses). */
+    
     scanContent(path: string, content: string, sensitivity?: number) {
       return scanContent(path, content, sensitivity ?? 2);
     },

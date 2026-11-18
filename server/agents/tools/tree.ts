@@ -1,15 +1,4 @@
-/**
- * agent__tree_outline — the agent's window into the REALTIME PROJECT
- * STRUCTURE index (Fase B).
- *
- * Reads the SAME in-memory index the user's floating panel watches — never
- * the disk directly — so the agent and the user always see an identical,
- * up-to-date project structure at zero extra I/O cost. A workspace whose
- * index is not built yet triggers the single background walk on first call.
- *
- * agent__tree_refresh — force one rebuild walk (after mass generation, a git
- * checkout, or when the index looks stale). Returns the refreshed stats.
- */
+
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, num, truncateOutput } from './shared.js';
 import { getActiveWorkspace } from '../workspace.js';

@@ -1,26 +1,4 @@
-/**
- * ATTACHMENT DIRECTORY — uploaded files never vanish from context.
- *
- * Per-conversation layout (v2): every upload lives inside the CHAT'S OWN
- * session folder under the app's conversation store —
- *
- *   ~/.moriko/conversation/chat-001-YYYYMMDD/attachment/attachment-001.jpg
- *
- * The folder is allocated by `ensureChatDirFor` the moment the first upload
- * arrives (BEFORE the chat record exists), so a brand-new conversation can
- * accept files immediately and the record later flushes into the SAME folder.
- *
- * Because the store sits under the app's own data root (outside every
- * workspace), the harness tools may NOT resolve these paths like workspace
- * files. Reading them instead goes through a dedicated, always-allowed
- * attachment exemption (see `isAttachmentPath` in workspace.ts): the agent
- * references an upload by its absolute store path and reads it with zero
- * approval — attachments belong to the conversation, not to a workspace.
- *
- * Files are written once and deduplicated per conversation by content hash:
- * uploading the same image twice in one chat reuses the first copy. Nothing
- * here deletes on send; pruning follows the chat (the trash moves the folder).
- */
+
 
 import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
@@ -32,23 +10,22 @@ import { pipeline } from 'node:stream/promises';
 import { ensureChatDirFor } from './conversationStore.js';
 import type { ChatMessage } from './contracts.js';
 
-/** The chat folder's own attachment subdirectory name. */
+
 export const ATTACHMENT_DIR = 'attachment';
 
-/** Hard cap on a single attachment's bytes — matches the Composer's 10 MB. */
+
 const MAX_FILE_BYTES = 10_000_000;
 
 export interface StoredAttachment {
-  /** ABSOLUTE path inside the app store — stable, self-describing, and the
-   *  exact form the agent references the file by (reads need no approval). */
+  
   absolutePath: string;
-  /** The stable filename inside the chat's attachment directory. */
+  
   filename: string;
   size: number;
   mime: string;
 }
 
-/** Extracts the bytes from a data: URL (the only shape the client sends). */
+
 function decodeDataUrl(dataUrl: string): { buffer: Buffer; mime: string } {
   const comma = dataUrl.indexOf(',');
   if (comma < 0) throw new Error('Malformed data URL.');
@@ -62,29 +39,17 @@ function decodeDataUrl(dataUrl: string): { buffer: Buffer; mime: string } {
   };
 }
 
-/**
- * Stable filename: `attachment-NNN.ext` — the per-conversation UPLOAD
- * SEQUENCE number plus the original extension. The number is per chat (the
- * 1st upload in THIS conversation = 001, whatever other chats did), so the
- * model can read the upload order straight off the name. Same bytes
- * re-uploaded in the same chat REUSE the first file's number — one file
- * never occupies two rows in the directory.
- */
+
 function contentFilename(name: string, sequence: number): string {
   const ext = path.extname(name).toLowerCase() || '.bin';
   const seq = String(sequence).padStart(3, '0');
   return `attachment-${seq}${ext}`;
 }
 
-/** Filename shape this module writes: `attachment-NNN.ext`. */
+
 const STORED_NAME_RE = /^attachment-(\d{1,4})\.([\w.-]+)$/;
 
-/**
- * Per-conversation write state: the next upload number and a
- * hash→filename index, built once per process from the directory listing
- * (each stored file hashed once to rebuild dedup). The proxy is the only
- * writer of the chat's attachment dir, so an in-memory counter cannot race.
- */
+
 interface ChatSeq {
   next: number;
   byHash: Map<string, string>;
@@ -114,11 +79,7 @@ async function chatSeqFor(chatDir: string): Promise<ChatSeq> {
   return state;
 }
 
-/**
- * Human-readable upload metadata parsed back out of a stored path: the
- * per-conversation upload NUMBER. Legacy paths (workspace layout) come back
- * as nulls — callers fall back to the raw path.
- */
+
 export function describeAttachment(
   relativePath: string,
 ): { no: number | null; when: string | null } {
@@ -127,11 +88,7 @@ export function describeAttachment(
   return { no: Number(match[1]), when: null };
 }
 
-/**
- * Pulls attachment inputs off the wire messages — the fallback path for
- * one-shot callers (scripts) that POST /api/chat with data URLs but no
- * declared attachment list.
- */
+
 export function collectAttachmentInputs(messages: ChatMessage[]): Array<{
   name: string;
   mime: string;
@@ -160,16 +117,7 @@ export function collectAttachmentInputs(messages: ChatMessage[]): Array<{
   return inputs;
 }
 
-/**
- * Writes attachments to the chat's OWN folder inside the conversation store
- * (`conversation/chat-XXX/attachment/attachment-NNN.ext`) and returns the
- * ABSOLUTE store paths the model references. Non-fatal per file: one bad
- * entry does not lose the rest.
- *
- * Each input may carry its bytes EITHER as a decoded buffer (the upload route
- * sends raw bytes directly) or as a data: URL (the fallback path decodes wire
- * messages). Exactly one is required per entry.
- */
+
 export async function persistAttachments(
   sessionId: string,
   attachments: Array<{

@@ -1,16 +1,4 @@
-/**
- * IMAGE RUNTIME — the shared engine behind every image generation in Moriko.
- *
- * One module, two consumers:
- *  - the HTTP routes (POST /api/images/generations, GET /api/images/tasks/:id)
- *  - the agent tool `agent__image` (LLM-driven generation, PLAN-AGENT-DRIVEN-
- *    IMAGE-GENERATION.md)
- *
- * Everything that used to live inline in server/index.ts moved here so both
- * paths share ONE implementation: task bookkeeping (persist + restore across
- * restarts), the submit validation ladder, poll-with-local-save, the failure
- * journal, the Gallery collection, and the provider capability listing.
- */
+
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -36,7 +24,7 @@ import type { ProviderPublic } from '../contracts.js';
 
 const imageTasks = new Map<string, ImageTaskRecord>();
 
-/** A pending task older than this expires as FAILED instead of polling forever. */
+
 export const IMAGE_TASK_TTL_MS = 15 * 60 * 1000;
 
 function persistImageTasks(): void {
@@ -121,12 +109,7 @@ export function logImageTask(event: ImageTaskEvent): void {
 }
 
 
-/**
- * Resolves the image target for a request: credentials (server key first,
- * browser-supplied second) plus the adapter that speaks this provider's API.
- * Custom providers may pin an adapter via `imageAdapter`/`imageConfig`;
- * everything else is inferred from the base URL.
- */
+
 export async function resolveImageTarget(providerId: string, browserKey?: string) {
   const credentials = await resolveCredentials(providerStore, providerId, browserKey);
   let selection: ImageProviderSelection | undefined;
@@ -144,11 +127,7 @@ export async function resolveImageTarget(providerId: string, browserKey?: string
   return { credentials, adapter, providerId };
 }
 
-/**
- * Re-resolves the adapter for an in-flight task at poll time. Registry
- * adapters resolve from their id; factory-based adapters (declarative) are
- * rebuilt from the provider's stored `imageConfig` on demand.
- */
+
 async function resolveAdapterForTask(task: ImageTaskRecord) {
   const custom = task.providerId ? await providerStore.get(task.providerId) : undefined;
   const selection = custom
@@ -158,7 +137,7 @@ async function resolveAdapterForTask(task: ImageTaskRecord) {
 }
 
 
-/** Transport bound for reference images — shape/capacity are checked here. */
+
 const MAX_REFERENCE_IMAGES = 8;
 
 export interface ImageSubmitInput {
@@ -172,11 +151,7 @@ export interface ImageSubmitInput {
   images?: unknown;
 }
 
-/**
- * Submits a generation task and returns its id — the exact validation ladder
- * the HTTP route enforced, now shared with the agent tool. Throws HttpError
- * (400) for user errors and ImageAdapterError when the provider refuses.
- */
+
 export async function submitImageTask(input: ImageSubmitInput): Promise<{ taskId: string }> {
   const providerId = input.providerId?.trim();
   const model = input.model?.trim();
@@ -281,7 +256,7 @@ fs.mkdirSync(IMAGES_DIR, { recursive: true });
 
 export const LOCAL_IMAGE_PREFIX = '/api/images/local/';
 
-/** Extracts a safe filename from a local image URL, or null for foreign URLs. */
+
 export function localImageName(url: string): string | null {
   if (!url.startsWith(LOCAL_IMAGE_PREFIX)) return null;
   const name = path.basename(url.slice(LOCAL_IMAGE_PREFIX.length));
@@ -292,7 +267,7 @@ export function localImageExists(name: string): boolean {
   return fs.existsSync(path.join(IMAGES_DIR, name));
 }
 
-/** Reads a locally-saved generated image back as bytes (agent iteration path). */
+
 export function localImageByUrl(url: string): { buffer: Buffer; mime: string } | null {
   const name = localImageName(url);
   if (!name || !localImageExists(name)) return null;
@@ -313,7 +288,7 @@ interface ImageMeta {
   aspectRatio: string | null;
 }
 
-/** Reads the real pixel dimensions from a PNG/JPEG/WebP buffer. */
+
 function readImageSize(buffer: Buffer): { width: number; height: number } | null {
   if (buffer.length > 24 && buffer.readUInt32BE(0) === 0x89504e47) {
     return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
@@ -347,7 +322,7 @@ function readImageSize(buffer: Buffer): { width: number; height: number } | null
   return null;
 }
 
-/** Picks a file extension from raw image bytes (PNG/JPEG/WebP magic). */
+
 function sniffImageExt(buffer: Buffer): 'png' | 'jpg' | 'webp' {
   if (buffer.length > 8 && buffer.readUInt32BE(0) === 0x89504e47) return 'png';
   if (buffer.length > 3 && buffer[0] === 0xff && buffer[1] === 0xd8) return 'jpg';
@@ -361,12 +336,7 @@ function sniffImageExt(buffer: Buffer): 'png' | 'jpg' | 'webp' {
   return 'jpg';
 }
 
-/**
- * Persists one generated image — a provider CDN URL or inline base64 — into
- * IMAGES_DIR, so the client only ever sees same-origin local links. When the
- * creation context is known, a sidecar JSON ("<file>.json") keeps the prompt
- * that produced the image beside the file itself.
- */
+
 async function saveImageLocally(
   taskId: string,
   index: number,
@@ -425,11 +395,7 @@ export interface ImagePollOutcome {
   error?: string;
 }
 
-/**
- * Polls one task. Results are saved locally; the task is then forgotten.
- * Returns null when the task id is unknown (finished, expired, restarted).
- * Throws ImageAdapterError when the provider poll fails.
- */
+
 export async function pollImageTaskOnce(taskId: string): Promise<ImagePollOutcome | null> {
   const task = imageTasks.get(taskId);
   if (!task) {
@@ -502,11 +468,7 @@ export async function pollImageTaskOnce(taskId: string): Promise<ImagePollOutcom
   };
 }
 
-/**
- * Submit + poll to completion inside one call — the agent tool's loop. The
- * model receives the finished result in a single tool call instead of having
- * to re-invoke a poller. Bounded by IMAGE_TASK_TTL_MS; honors ctx.signal.
- */
+
 export async function runImageTask(
   input: ImageSubmitInput,
   opts: { signal?: AbortSignal; onProgress?: (message: string) => void; pollIntervalMs?: number } = {},
@@ -537,11 +499,7 @@ export async function runImageTask(
 }
 
 
-/**
- * The Gallery is a persisted, ordered list of image URLs — usually local ones
- * under `/api/images/local/...`, occasionally a provider CDN link. The client
- * owns the ordering and sends the whole collection on every change.
- */
+
 const GALLERY_FILE = galleryFile;
 
 export function readGallery(): string[] {
@@ -558,7 +516,7 @@ export function writeGallery(images: string[]): void {
   fs.writeFileSync(GALLERY_FILE, JSON.stringify(images, null, 2));
 }
 
-/** Appends agent-generated results and broadcasts the change to every client. */
+
 export function appendToGallery(urls: string[]): string[] {
   const current = readGallery();
   const next = [...current, ...urls.filter((url) => !current.includes(url))].slice(0, 500);
@@ -568,10 +526,7 @@ export function appendToGallery(urls: string[]): string[] {
 }
 
 
-/**
- * Adapter capabilities for one provider, or undefined when the provider has
- * no resolvable image adapter (chat-only providers stay without the field).
- */
+
 export function imageCapabilitiesOrNull(
   selection: ImageProviderSelection | undefined,
   baseUrl: string,
@@ -603,11 +558,7 @@ export interface ImageProviderEntry {
   }>;
 }
 
-/**
- * Every provider that can actually generate images right now: a resolvable
- * image adapter AND at least one classified image model. Shared by the
- * agent tool listing and the system-prompt injection gate.
- */
+
 export async function listImageCapableProviders(): Promise<ImageProviderEntry[]> {
   const entries: ImageProviderEntry[] = [];
 
@@ -672,11 +623,7 @@ export interface AgentImageTarget {
   maxReferences: number;
 }
 
-/**
- * The agent's default generator: the user's SAVED Image Studio choice when it
- * is still valid, else the first image-capable provider with a key and a
- * text-to-image model. Explicit args (providerId/model) always win.
- */
+
 export async function resolveAgentImageTarget(
   preferred?: { providerId?: string; model?: string },
 ): Promise<AgentImageTarget | null> {

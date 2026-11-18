@@ -1,12 +1,4 @@
-/**
- * BROWSER MIRROR of `server/modelCapability.ts` — the same 3-layer cascade, so
- * the UI can never claim something the server would not do.
- *
- * The two files must agree on the ORDER (user → provider → models.dev →
- * default) and on the no-Math.min rule for the context window. The client tree
- * cannot import the server tree, so the duplication is deliberate and
- * documented, exactly like `contracts.ts` ↔ `types.ts`.
- */
+
 
 import type {
   ModelCapabilityFlags,
@@ -26,7 +18,7 @@ export interface ResolvedModelCapability extends ModelCapabilityFlags {
   hint: ModelMeta | undefined;
 }
 
-/** Same documented defaults as the server — see UNKNOWN_MODEL_DEFAULTS there. */
+
 const UNKNOWN_MODEL_DEFAULTS: ModelCapabilityFlags = {
   imageIn: false,
   audioIn: false,
@@ -44,11 +36,7 @@ const SOURCE_RANK: Record<ModelCapabilitySource, number> = {
   default: 0,
 };
 
-/**
- * Resolves one model. Callers pass the model's Layer-1 row, Layer-2 row and
- * catalogue entry; `catalogLookup` is the store's `lookupModelMeta` bound to
- * the loaded snapshot when the caller has not resolved it yet.
- */
+
 export function resolveModelCapability(
   id: string,
   config?: ProviderModelConfig | null,
@@ -123,12 +111,7 @@ export function resolveModelCapability(
   };
 }
 
-/**
- * Resolves a model that is currently SELECTED in the composer, given the whole
- * provider list. This is the function the composer, the context chip and the
- * compaction math all call — so the number the user sees and the number the
- * runtime enforces come from one place.
- */
+
 export function resolveForProvider(
   providers: readonly { id: string; modelConfigs?: Record<string, ProviderModelConfig>; modelHints?: Record<string, ProviderModelHint> }[],
   providerId: string,
@@ -144,7 +127,7 @@ export function resolveForProvider(
   );
 }
 
-/** Human-friendly token size: 1_048_576 → "1M", 148_000 → "148K". */
+
 export function formatContextSize(tokens: number | null): string {
   if (tokens === null || !Number.isFinite(tokens) || tokens <= 0) return '—';
   if (tokens >= 1_000_000) {
@@ -158,12 +141,7 @@ export function formatContextSize(tokens: number | null): string {
   return String(tokens);
 }
 
-/**
- * Parses what the user typed into a context cell: `148K`, `512k`, `1M`, `2m`,
- * `1.5M`, `1048576`, `1,048,576`, `148.000` (id-ID). Returns null when the text
- * is not a token count, so the caller can keep the previous value instead of
- * writing garbage.
- */
+
 export function parseContextSize(raw: string): number | null {
   const text = raw.trim().toLowerCase().replace(/\s+/g, '');
   if (text === '') return null;
@@ -172,8 +150,6 @@ export function parseContextSize(raw: string): number | null {
   if (!match) return null;
 
   const [, digits, suffix] = match;
-  // A lone separator group is a decimal comma ("1,5m"); repeated separators are
-  // thousands grouping ("1,048,576"). Decide by whether a suffix follows.
   const normalized = suffix
     ? digits.replace(',', '.')
     : digits.replace(/[.,](?=[0-9]{3}(?:[.,]|$))/g, '').replace(',', '.');
@@ -188,7 +164,7 @@ export function parseContextSize(raw: string): number | null {
   return Math.min(100_000_000, tokens);
 }
 
-/** The exactly-one-truth badge label for a row's provenance. */
+
 export function sourceLabel(source: ModelCapabilitySource): string {
   switch (source) {
     case 'user': return 'Manual';
@@ -198,13 +174,7 @@ export function sourceLabel(source: ModelCapabilitySource): string {
   }
 }
 
-/**
- * A FRESH row for one model — what "reset to hint" produces, and what a newly
- * added model starts as.
- *
- * `pinned` is EMPTY on purpose: a pre-filled row is a suggestion the layers
- * below may still refine, not a user decision. Only an explicit edit pins.
- */
+
 export function buildModelConfig(
   id: string,
   hint: ProviderModelHint | null | undefined,

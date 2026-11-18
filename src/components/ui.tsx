@@ -8,7 +8,7 @@ import { RefreshCw } from './icons';
 import { useStore } from '../store/useStore';
 import { Popover } from './Popover';
 
-/** Utility for conditional class strings. Keeps JSX readable without a dep. */
+
 export function cx(...values: Array<string | false | null | undefined>): string {
   return values.filter(Boolean).join(' ');
 }
@@ -17,13 +17,7 @@ interface LazyViewBoundaryState {
   error: Error | null;
 }
 
-/**
- * Error boundary around LAZY views. Before this, a failed chunk fetch or a
- * render error in a lazy view rendered as SILENT BLANK (Suspense fallback
- * null swallows loading; a rejected import is an unhandled rejection with
- * `hmr.overlay: false`) — the user only saw an empty main card. Now a failed
- * view shows what went wrong plus a reload affordance.
- */
+
 export class LazyViewBoundary extends Component<{ label: string; children: ReactNode }, LazyViewBoundaryState> {
   state: LazyViewBoundaryState = { error: null };
 
@@ -52,7 +46,7 @@ export class LazyViewBoundary extends Component<{ label: string; children: React
   }
 }
 
-/** Visible pending state for lazy views — never a silent blank again. */
+
 export function LazyViewFallback({ label }: { label: string }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '64px 0', fontSize: 12.5, color: 'var(--faint)' }} role="status">
@@ -62,14 +56,7 @@ export function LazyViewFallback({ label }: { label: string }) {
   );
 }
 
-/**
- * SINGLE-SLOT right-dock switcher (replaces the segmented 4-tab switch): one
- * button showing the ACTIVE sidebar's name — it carries the panel-title role,
- * so panels no longer render a duplicate <h2> — and clicking it opens a menu
- * of every sidebar (Config / Tree / Addons / Diff). Portaled to <body>: the
- * panels are overflow-hidden, an in-place dropdown would be clipped.
- * Themed components only (no native menus, no title attributes).
- */
+
 type RightDockMode = 'config' | 'tree' | 'addons' | 'diff';
 
 export function RightDockSlot({
@@ -179,12 +166,7 @@ export function RightDockSlot({
   );
 }
 
-/**
- * Height-animated disclosure (grid-rows 0fr→1fr) — the shared easing used by
- * the activity pill, the thread panels and the sidebar groups. Content stays
- * mounted ~330ms after close so the collapse eases down instead of snapping
- * shut, then unmounts.
- */
+
 export function CollapseSection({
   open,
   className,
@@ -215,13 +197,7 @@ export function CollapseSection({
   );
 }
 
-/**
- * Segmented control (right-dock design): a row of radio buttons with a
- * sliding indicator pill that springs between options. Indicator geometry is
- * measured from the checked button (offsetLeft/offsetWidth) and re-measured
- * on value change + window resize; the first paint renders without the pill
- * so it never sits at 0,0 mid-flight.
- */
+
 export function Segmented({
   value,
   options,
@@ -235,7 +211,7 @@ export function Segmented({
   options: Array<{ value: string; label: string; tip?: string }>;
   onChange: (value: string) => void;
   ariaLabel: string;
-  /** Design's `.seg.sm` — 26px rows, 12px type. */
+  
   small?: boolean;
   className?: string;
   style?: React.CSSProperties;
@@ -297,12 +273,7 @@ export function Segmented({
   );
 }
 
-/**
- * The GENERIC close button for any right-dock panel. It binds itself to the
- * dock state (toggleSettings) instead of taking callbacks, so EVERY docked
- * panel — Configuration, Tree, and any panel added later — only has to render
- * <RightDockCloseButton /> in its header and the hide affordance is there.
- */
+
 export function RightDockCloseButton({ label = 'Close right sidebar' }: { label?: string }) {
   const toggleSettings = useStore((state) => state.toggleSettings);
   return (
@@ -320,13 +291,7 @@ export function RightDockCloseButton({ label = 'Close right sidebar' }: { label?
 
 
 
-/**
- * Themed hover tooltip. Replaces the native `title` attribute, whose OS
- * bubble renders as a plain white box that fights the Moriko surface.
- * PORTAL + FIXED positioning: the bubble mounts on document.body measured
- * from the trigger's viewport rect, so an ancestor with overflow-hidden
- * (docks, scroll panes, the composer) can never clip it.
- */
+
 export function Tip({
   label,
   children,
@@ -338,7 +303,7 @@ export function Tip({
   children: ReactNode;
   side?: 'top' | 'bottom';
   align?: 'start' | 'center' | 'end';
-  /** Extra classes for the wrapper (flex sizing in toolbars, width fills). */
+  
   className?: string;
 }) {
   const anchorRef = useRef<HTMLSpanElement>(null);
@@ -415,16 +380,13 @@ interface ModalProps {
   description?: string;
   children: ReactNode;
   footer?: ReactNode;
-  /** Extra width class for the panel (design: .mpanel / .mpanel.sm). */
+  
   size?: string;
-  /** Extra header controls rendered LEFT of the close ✕ (e.g. reload). */
+  
   headerExtra?: ReactNode;
 }
 
-/**
- * Accessible dialog: focus is moved in on open, Escape closes, and the page
- * behind is scroll-locked so the backdrop never scrolls out from under you.
- */
+
 export function Modal({
   open,
   onClose,
@@ -525,15 +487,12 @@ interface ToggleProps {
   checked: boolean;
   onChange: (next: boolean) => void;
   label: string;
-  /** Renders the label visually hidden; the control keeps its accessible name. */
+  
   hideLabel?: boolean;
   disabled?: boolean;
 }
 
-/**
- * Switch control. Built on a real checkbox so it is keyboard-operable and
- * announced correctly, with the visual layer drawn on top.
- */
+
 export function Toggle({ checked, onChange, label, hideLabel, disabled }: ToggleProps) {
   return (
     <label
@@ -566,9 +525,7 @@ export function Toggle({ checked, onChange, label, hideLabel, disabled }: Toggle
 
 
 
-/** Tone → color classes. EVERY card is OPAQUE: a solid surface background,
- *  a real border and a popover shadow — the old translucent pops (bg-warn/10,
- *  bg-danger/10) let the streaming thread bleed through the text. */
+
 const NOTICE_TONE: Record<MessageTone, { border: string; text: string; dot: string }> = {
   info: { border: 'var(--line)', text: 'rgb(var(--c-ink))', dot: 'rgb(var(--c-ink) / 0.4)' },
   success: { border: 'rgb(var(--c-ok) / 0.6)', text: 'rgb(var(--c-ink))', dot: 'rgb(var(--c-ok))' },
@@ -577,11 +534,7 @@ const NOTICE_TONE: Record<MessageTone, { border: string; text: string; dot: stri
   error: { border: 'rgb(var(--c-danger) / 0.7)', text: 'rgb(var(--c-danger))', dot: 'rgb(var(--c-danger))' },
 };
 
-/** One catalog-born notice card. The lifetime timer is per-card so a stacked
- *  queue behaves like the old single Toast; dismissal is manual and instant.
- *  WIDTH IS DYNAMIC: `w-fit` hugs the message length (a short "Model set to
- *  X." renders as a compact chip, never a stretched 380px bar) and grows only
- *  up to the cap, where long text wraps instead. */
+
 function NoticeCard({ entry, onDismiss }: { entry: NoticeEntryView; onDismiss: (key: string) => void }) {
   useEffect(() => {
     const timer = window.setTimeout(() => onDismiss(entry.key), entry.ttl);
@@ -639,11 +592,11 @@ export interface NoticeEntryView {
   detail?: string;
   tone: MessageTone;
   ttl: number;
-  /** When it fired — the notices popover's "Today · 14:30" stamp. */
+  
   createdAt: number;
 }
 
-/** Design notices row stamp: "Today · 14:30" or "6 Oct · 14:30". */
+
 function noticeStamp(at: number): string {
   const date = new Date(at);
   const now = new Date();
@@ -652,14 +605,7 @@ function noticeStamp(at: number): string {
   return `${date.toLocaleDateString([], { day: 'numeric', month: 'short' })} · ${hm}`;
 }
 
-/**
- * The Notice Center: transient cards + the design's Notices popover
- * (pop-notices). BOTH anchor on the bell (anchorRef from TopBar): the stack
- * hangs right under it and the popover opens bottom-end of it, so the position
- * can never drift from the trigger again. Popover content follows the design:
- * "Notices" header with a Clear action over a scrollable .nt list — colored
- * dot, bold message, "Today · 14:30" stamp.
- */
+
 export function NoticeCenter({
   entries,
   history,
@@ -672,13 +618,13 @@ export function NoticeCenter({
   entries: NoticeEntryView[];
   history: NoticeEntryView[];
   expanded: boolean;
-  /** The bell button — the transient stack and the popover anchor on it. */
+  
   anchorRef: RefObject<HTMLElement | null>;
   onToggleExpanded: () => void;
   onDismiss: (key: string) => void;
   onClearHistory: () => void;
 }) {
-  /** Transient cards hug the bell: right-aligned, directly beneath it. */
+  
   const [stackPos, setStackPos] = useState({ right: 12, top: 62 });
   useEffect(() => {
     const update = () => {

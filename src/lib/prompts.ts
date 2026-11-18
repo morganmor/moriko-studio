@@ -1,9 +1,4 @@
-/**
- * System instruction templates.
- *
- * These are starting points, not magic: each one states a role, the working
- * constraints, and the output contract the model should honour.
- */
+
 export interface PromptPreset {
   id: string;
   label: string;
@@ -69,5 +64,5 @@ If the data cannot answer the question, say what data would.`,
   },
 ];
 
-/** One-line hints shown under the system-instructions field. */
+
 export const DEFAULT_SYSTEM_INSTRUCTION = PROMPT_PRESETS[0].prompt;

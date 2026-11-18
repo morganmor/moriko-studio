@@ -1,35 +1,12 @@
-/**
- * CatEyeModeToggle — a “pixelated cat-eye” style Chat/Agent mode switcher from
- * agent_input_panel_cat_eye.html, adapted for the Moriko theme.
- *
- * Mechanism (exact replica of the example, implemented with React):
- *  - ONE small pixel-art SVG button. Eyes CLOSED (lines + whiskers) = CHAT only;
- *    Eyes OPEN (orange pupil + highlight) = AGENT active.
- *  - aria-pressed=true when agent is active (same as example); aria-label follows mode.
- *    No hover tooltip — the button label + status line already state the mode
- *    (tooltip cleanup 2026-10: a Tip here only restated the aria-label).
- *  - Blinks on click (scaleY .08 for ~230ms) before the mode changes — the eyelid
- *    closes first, then the mode changes (setMode is called after 110ms in the example).
- *  - Idle blink every 10s ONLY in agent mode (setInterval in the example).
- *  - Status bar above the panel: text is typed ONCE (45 ms/character), remains for 10s,
- *    then disappears with backspace (16 ms/character) and the line is removed from
- *    the layout — a token guard to prevent fast mode switching from causing conflicts.
- *    ‘AGENT MODE ACTIVE’ (accented) / ‘CHAT MODE ONLY’ (dimmed) + flashing block cursor.
- *
- * Theme: ALL pixel fills are token-driven via index.css (.cat-eye .ec/.eo/.ei/.ep/.eh):
- * closed lids = muted ink (readable on light & dark), open outline + iris follow the
- * accent swatch (data-accent → --al/--ad), pupil = shadow token (dark in every theme),
- * specular = paper — so the eye recolors with light/dark/mocha like the rest of the UI.
- */
+
 import { useEffect, useRef, useState } from 'react';
 import { cx } from './ui';
 import { useStore } from '../store/useStore';
 import { isMotionReduced } from '../lib/appearance';
 
-/** Satu rect pixel-art: [x, y, width, height]. Fill didefinisikan di index.css
- *  (.cat-eye .ec/.eo/.ei/.ep/.eh) — token tema, bukan literal warna. */
 
-/** Mata TERBUKA (Agent) — rect list VERBATIM dari SVG operator (#ff7a1a outline). */
+
+
 const OPEN_ORANGE: Array<[number, number, number, number]> = [
   [4, 0, 8, 1],
   [2, 1, 2, 1],
@@ -44,7 +21,7 @@ const OPEN_ORANGE: Array<[number, number, number, number]> = [
   [12, 6, 2, 1],
   [4, 7, 8, 1],
 ];
-/** Iris amber (#ffb347) — verbatim operator. */
+
 const OPEN_AMBER: Array<[number, number, number, number]> = [
   [9, 2, 1, 1],
   [5, 3, 2, 2],
@@ -52,11 +29,11 @@ const OPEN_AMBER: Array<[number, number, number, number]> = [
   [6, 5, 1, 1],
   [9, 5, 1, 1],
 ];
-/** Pupil gelap + highlight putih — verbatim operator. */
+
 const OPEN_PUPIL: Array<[number, number, number, number]> = [[7, 2, 2, 4]];
 const OPEN_HIGHLIGHT: Array<[number, number, number, number]> = [[6, 2, 1, 1]];
 
-/** Mata TERPEJAM (Chat) — rect list VERBATIM dari SVG operator (#cfc8c2). */
+
 const CLOSED_CLAY: Array<[number, number, number, number]> = [
   [0, 2, 1, 1],
   [15, 2, 1, 1],
@@ -65,7 +42,7 @@ const CLOSED_CLAY: Array<[number, number, number, number]> = [
   [3, 4, 10, 1],
 ];
 
-/** Render satu grup rect list; warna fill datang dari kelas CSS (token tema). */
+
 function PixelRects({ rects, className }: { rects: Array<[number, number, number, number]>; className: string }) {
   return (
     <>
@@ -76,7 +53,7 @@ function PixelRects({ rects, className }: { rects: Array<[number, number, number
   );
 }
 
-/** SVG mata kucing 16x8 — bentuk persis SVG operator; `agent` memilih bitmap. */
+
 function CatEyeSvg({ agent, blinking }: { agent: boolean; blinking: boolean }) {
   return (
     <svg
@@ -105,11 +82,7 @@ function CatEyeSvg({ agent, blinking }: { agent: boolean; blinking: boolean }) {
   );
 }
 
-/**
- * Flash status: ketik maju 45ms/char, tahan `holdMs`, lalu backspace 16ms/char
- * sampai kosong dan menyalakan `done` — caller melepas barisnya dari layout.
- * Teks lama ikut di-backspace dulu saat `text` berpindah (token guard).
- */
+
 export function useTypewriterStatus(text: string, holdMs = 0): { text: string; done: boolean } {
   const [display, setDisplay] = useState('');
   const [done, setDone] = useState(false);
@@ -171,22 +144,22 @@ export function useTypewriterStatus(text: string, holdMs = 0): { text: string; d
   return { text: display, done };
 }
 
-/** Tombol mata + status ketik. `agent` = mode agent aktif (mata terbuka). */
+
 export function CatEyeModeToggle({
   agent,
   onToggle,
 }: {
   agent: boolean;
-  /** Dipanggil setelah animasi blink selesai (110ms, seperti contoh). */
+  
   onToggle: () => void;
 }) {
   const [blinking, setBlinking] = useState(false);
   const rootRef = useRef<HTMLButtonElement>(null);
 
-  /** Canvas-chat design: the open pupils follow the cursor (--px/--py, rAF-throttled). */
+  
   useEffect(() => {
     if (!agent || isMotionReduced(useStore.getState().reduceMotion)) return;
-    /** The SVG is a fixed 32px wide over a 16-unit viewBox → 0.5 units per px. */
+    
     const UNITS_PER_PX = 16 / 32;
     let frame = 0;
     let last: PointerEvent | null = null;

@@ -5,7 +5,7 @@ import { isPhantomConversation, isSubSession, refreshConversationList, useStore 
 import { EmptyState, Modal } from './ui';
 import { exportAll, importBundle } from '../lib/exportImport';
 
-/** Satu entri trash dari GET /api/conversations/trash. */
+
 interface TrashEntry {
   id: string;
   folder: string;
@@ -15,7 +15,7 @@ interface TrashEntry {
   deletedAt: number;
 }
 
-/** Groups conversations by calendar day, newest first. */
+
 function groupByDay(conversations: ReturnType<typeof useStore.getState>['conversations']) {
   const groups = new Map<string, typeof conversations>();
   const sorted = [...conversations].sort((a, b) => b.updatedAt - a.updatedAt);
@@ -40,7 +40,7 @@ function groupByDay(conversations: ReturnType<typeof useStore.getState>['convers
   return groups;
 }
 
-/** History view: every saved thread, searchable, with bulk export. */
+
 export function HistoryView() {
   const allConversations = useStore((state) => state.conversations);
   const conversations = useMemo(
@@ -57,8 +57,7 @@ export function HistoryView() {
 
   const [query, setQuery] = useState('');
   const [confirmClear, setConfirmClear] = useState(false);
-  /** TRASH — picker restore: daftar percakapan terhapus (folder server
-   *  conversation/trash), user memilih mana yang dipulihkan. */
+  
   const [trashOpen, setTrashOpen] = useState(false);
   const [trash, setTrash] = useState<TrashEntry[]>([]);
   const [trashBusy, setTrashBusy] = useState(false);

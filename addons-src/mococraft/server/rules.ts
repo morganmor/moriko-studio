@@ -1,11 +1,4 @@
-/**
- * Mococraft rule engine — the deterministic "named tells" catalog.
- * Adapted from the Hallmark / design-polish anti-pattern lists and the
- * community catalog (avoid-ai-design, react-doctor's purple-gradient rules).
- *
- * Each rule: id, severity, label, why, fix, and a regex over file content.
- * Severity: critical = ships as slop; warn = suspicious.
- */
+
 
 export interface SlopRule {
   id: string;
@@ -75,7 +68,7 @@ const RULES: SlopRule[] = [
   },
 ];
 
-/** AI-corporate copy clichés (Antidote). Word-boundary, case-insensitive. */
+
 export const COPY_CLICHES: Array<{ phrase: string; re: RegExp }> = [
   { phrase: 'Supercharge', re: /\bsupercharge[sd]?\b/i },
   { phrase: 'Seamless(ly)', re: /\bseamless(ly)?\b/i },
@@ -89,7 +82,7 @@ export const COPY_CLICHES: Array<{ phrase: string; re: RegExp }> = [
   { phrase: 'Trusted by', re: /\btrusted by\b/i },
 ];
 
-/** Fake placeholder names (Antidote). */
+
 export const PLACEHOLDER_NAMES: Array<{ phrase: string; re: RegExp }> = [
   { phrase: 'Acme Corp', re: /\bAcme\s?(Corp|Inc|Co)\b/i },
   { phrase: 'Jane Doe / John Smith', re: /\b(?:Jane\s?Doe|John\s?Smith)\b/i },

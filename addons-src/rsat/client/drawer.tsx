@@ -1,10 +1,4 @@
-/**
- * RSA/T Drawer (achievement detail) — port dari design/split/rsat-panel-drawer.html
- * + integrasi rsat-panel-pixel.html: markup .scrim/.drawer (baris 439-440),
- * openDrawer/renderDrawer/focus+Escape (882-952), actionsFor (928-944).
- * Versi backend: SEMUA aksi → RPC server (aktor = user); guard test memakai
- * rules engine nyata via rpc guardTest — tanpa replika lokal.
- */
+
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { tr } from './shared.tsx';
 import { toast, useNow } from './toast.tsx';
@@ -54,12 +48,12 @@ function Medal({ a, e, sz }: { a: Ach; e: string; sz?: string }) {
   );
 }
 
-/** Wajah holder: logo agent custom bila ada (AgentFace), selain itu sprite. */
+
 function Face({ by, ag }: { by: string; ag?: string | null }) {
   return <AgentFace by={by} ag={ag} />;
 }
 
-/** 5 hati proporsional sisa heartbeat claim (jendela = claimTtlSec server). */
+
 function Hearts({ beat }: { beat: number }) {
   const now = useNow();
   const r = 1 - (now - beat) / ttlMs();
@@ -182,7 +176,7 @@ function ScopeHist({ a, lang, onApprove }: { a: Ach; lang: string; onApprove: (i
   );
 }
 
-/** Guard test — rules engine nyata via rpc guardTest (tanpa write). */
+
 function GuardTest({ a, lang, guard, gpath, setGpath, gres, onTest }: {
   a: Ach; lang: string; guard: string; gpath: string;
   setGpath: (v: string) => void; gres: { kind: string; actor: string; msg: string } | null; onTest: () => void;
@@ -346,7 +340,7 @@ function FilesTab({ a, lang, onSave }: { a: Ach; lang: string; onSave: (i: numbe
   );
 }
 
-/** Tombol aksi per state — board dijalankan sebagai USER (aktor RPC). */
+
 function actionButtons(
   a: Ach, e: string, mine: boolean, t: (k: string) => string,
   btn: (name: string, label: string, cls: string, ico: string, dis?: boolean) => ReactNode,
@@ -371,7 +365,7 @@ function actionButtons(
   return out;
 }
 
-/** Hint kontekstual di atas action bar. */
+
 function actionHint(a: Ach, e: string, mine: boolean, t: (k: string) => string, now: number): string {
   if (e === 'available') return 'Claim it to work on it — while you hold it the guard fences its scope.';
   if (!mine && a.claim && ['claimed', 'in_progress'].includes(a.state))
@@ -415,7 +409,7 @@ function ActionsRow({ a, list, lang, notice, onAct }: {
   );
 }
 
-/** Pilih agent dari roster → dispatchQuest → host membuat sesi chat baru. */
+
 function DispatchBlock({ a }: { a: Ach }) {
   const agents = useAgents();
   const [open, setOpen] = useState(false);
@@ -495,7 +489,7 @@ function DispatchBlock({ a }: { a: Ach }) {
 
 type Gres = { kind: string; actor: string; msg: string } | null;
 
-/** Efek fokus: capture opener saat buka, restore saat tutup, Escape menutup (pixel 883–891, 347). */
+
 function useDrawerFocus(
   sel: string | null,
   onClose: () => void,
@@ -525,7 +519,7 @@ function useDrawerFocus(
   }, [sel, onClose]);
 }
 
-/** Kepala drawer: medal lg + id/pill + judul + tombol close. */
+
 function DrawerHead({ a, e, t, onClose, closeRef }: {
   a: Ach; e: string; t: (k: string) => string;
   onClose: () => void; closeRef: { current: HTMLButtonElement | null };
@@ -548,7 +542,7 @@ function DrawerHead({ a, e, t, onClose, closeRef }: {
   );
 }
 
-/** Tab bar drawer (Detail/Scope/Comments/Files). */
+
 function DrawerTabs({ tabs, tab, setTab }: {
   tabs: Array<[string, string]>; tab: string; setTab: (v: string) => void;
 }) {
@@ -563,7 +557,7 @@ function DrawerTabs({ tabs, tab, setTab }: {
   );
 }
 
-/** Isi body per tab (Detail/Scope/Comments/Files). */
+
 function DrawerBody(props: {
   a: Ach; tab: string; ach: Ach[]; lang: string; guard: string;
   spath: string; setSpath: (v: string) => void; gpath: string; setGpath: (v: string) => void; gres: Gres;
@@ -590,7 +584,7 @@ function DrawerBody(props: {
   );
 }
 
-/** Label tab + hitungan comments/files (pixel renderDrawer baris 948). */
+
 const buildTabs = (a: Ach | null, t: (k: string) => string): Array<[string, string]> =>
   a
     ? [['detail', t('detail')], ['scope', t('scope')], ['comments', `${t('comments')} ${a.cm.length}`], ['files', `${t('filesT')} ${a.files.length}`]]
@@ -625,7 +619,7 @@ export default function Drawer({ sel, onClose, onOpen }: {
   };
   useDrawerFocus(sel, onClose, drawerRef, closeRef, openerRef, reset);
 
-  /** Semua aksi drawer → RPC server (aktor user); store me-refresh penuh. */
+  
   const run = (name: string, i?: number) => {
     if (!a) return;
     setNotice(null);

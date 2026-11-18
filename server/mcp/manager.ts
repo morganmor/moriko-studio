@@ -5,14 +5,7 @@ import { figmaAuthorizationHeader } from './figmaAuth.js';
 
 export { listServersMasked } from './config.js';
 
-/**
- * The MCP host: one client per ENABLED server, tool discovery aggregated
- * across servers, and namespaced wire names so two servers can both expose
- * `read_file` without colliding.
- *
- * Wire name format: `mcp__<serverName>__<toolName>` (server names are
- * sanitized to [a-zA-Z0-9_-]).
- */
+
 
 export type McpStatus = 'off' | 'connected' | 'error';
 
@@ -35,7 +28,6 @@ function createClient(config: McpServerConfig): McpClient {
   if (config.transport === 'http') {
     if (!config.url) throw new Error('Remote MCP server has no URL.');
     if (config.auth === 'figma') {
-      // OAuth headers re-resolve per request so refreshed tokens are picked up.
       return new McpHttpClient(config.url, figmaAuthorizationHeader, config.name);
     }
     return new McpHttpClient(config.url, config.headers ?? {}, config.name);
@@ -44,7 +36,7 @@ function createClient(config: McpServerConfig): McpClient {
   return new McpStdioClient(config.command, config.args ?? [], config.env, config.name);
 }
 
-/** Connects (or refreshes) one server; the Settings "Test" + tools route use it. */
+
 export async function ensureConnection(config: McpServerConfig): Promise<McpConnection> {
   const existing = connections.get(config.id);
   if (existing && existing.status === 'connected') return existing;
@@ -78,7 +70,7 @@ export async function ensureConnection(config: McpServerConfig): Promise<McpConn
   }
 }
 
-/** Connects (or refreshes) one server and reports its tools — Settings "Test". */
+
 export async function testServer(id: string): Promise<{ ok: boolean; toolCount: number; error?: string }> {
   const config = getServer(id);
   if (!config) return { ok: false, toolCount: 0, error: 'Unknown MCP server.' };
@@ -103,17 +95,12 @@ export interface McpWireTool {
   inputSchema?: Record<string, unknown>;
 }
 
-/** Tools the user switched OFF for a server are excluded from the catalogue. */
+
 function isToolDisabled(config: McpServerConfig, toolName: string): boolean {
   return Array.isArray(config.disabledTools) && config.disabledTools.includes(toolName);
 }
 
-/**
- * Aggregated tool catalogue across every enabled+connected server. Failures
- * of individual servers are reported in the status map, not thrown — one bad
- * server must not disable the rest. Per-server disabled tools are filtered
- * out here, so the model never even sees them.
- */
+
 export async function listWireTools(): Promise<{ tools: McpWireTool[]; statuses: Record<string, { status: McpStatus; error?: string; toolCount: number }> }> {
   const tools: McpWireTool[] = [];
   const statuses: Record<string, { status: McpStatus; error?: string; toolCount: number }> = {};
@@ -148,7 +135,7 @@ export async function listWireTools(): Promise<{ tools: McpWireTool[]; statuses:
   return { tools, statuses };
 }
 
-/** Executes one tool by its namespaced wire name. Never throws. */
+
 export async function callWireTool(wireName: string, args: Record<string, unknown>): Promise<McpToolResult & { serverName: string; toolName: string }> {
   const { tools } = await listWireTools();
   const tool = tools.find((entry) => entry.wireName === wireName);
@@ -180,7 +167,7 @@ export async function callWireTool(wireName: string, args: Record<string, unknow
   }
 }
 
-/** Closes a connection safely: failed/off connections hold a null client. */
+
 async function closeEntry(id: string): Promise<void> {
   const connection = connections.get(id);
   if (connection?.client) await connection.client.close().catch(() => undefined);
@@ -191,7 +178,7 @@ export async function dropConnection(id: string): Promise<void> {
   await closeEntry(id);
 }
 
-/** Server shutdown: kill every spawned stdio child. */
+
 export async function shutdownAll(): Promise<void> {
   for (const id of connections.keys()) {
     await closeEntry(id);

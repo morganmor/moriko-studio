@@ -1,8 +1,4 @@
-/**
- * F4.1/F4.2 — architecture analysis on top of the deps graph:
- * module-level aggregation (fan-in/out, instability), Tarjan SCC cycle
- * detection, and layer-rule checking against .moriko/architecture.json.
- */
+
 import path from 'node:path';
 import { readFileSync, existsSync } from 'node:fs';
 import { queryDeps, invalidateDepsGraph } from './deps.js';
@@ -24,12 +20,12 @@ export interface ModuleEdge {
 export interface ArchReport {
   modules: ModuleNode[];
   edges: ModuleEdge[];
-  /** Shortest cycle per SCC (file level). */
+  
   cycles: string[][];
   filesScanned: number;
 }
 
-/** Module id = the folder `depth` levels deep containing the file. */
+
 function moduleOf(relFile: string, depth: number, focus?: string): string {
   const parts = relFile.split('/');
   if (focus) {
@@ -42,7 +38,7 @@ function moduleOf(relFile: string, depth: number, focus?: string): string {
   return parts.slice(0, depth).join('/');
 }
 
-/** Build the module-level graph from the file-level deps graph. */
+
 export function buildArchMap(root: string, subpath: string, depth: number, focus?: string): ArchReport {
   invalidateDepsGraph(root);
   const files = walkFiles(subpath).files.filter((f) => /\.(ts|tsx|js|jsx)$/.test(f)).slice(0, 2000);
@@ -88,7 +84,7 @@ export function buildArchMap(root: string, subpath: string, depth: number, focus
   return { modules, edges, cycles, filesScanned: files.length };
 }
 
-/** Tarjan SCC; returns the shortest cycle found per SCC with >1 node. */
+
 function tarjanCycles(files: string[], imports: Map<string, Set<string>>): string[][] {
   const index = new Map<string, number>();
   const low = new Map<string, number>();
@@ -214,7 +210,7 @@ export interface RuleViolation {
   detail: string;
 }
 
-/** Check the file-level deps graph against the layer rules. */
+
 export function checkRules(root: string, rules: ArchitectureRules): RuleViolation[] {
   const violations: RuleViolation[] = [];
   const layerOf = (rel: string): string | null => {

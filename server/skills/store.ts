@@ -1,24 +1,4 @@
-/**
- * SKILLS STORE — discovery + on-demand loading of agent skills.
- *
- * A skill is a folder with a SKILL.md (open Agent Skills spec). Discovery is
- * DUAL-SCOPE, mirroring the AGENTS.md loader's global→workspace merge:
- *
- *   global   : ~/.moriko-studio/skills/<name>/SKILL.md
- *   workspace: <workspace>/.moriko/skills/<name>/SKILL.md
- *
- * COMPAT roots (read-only support for skills installed by the ecosystem
- * tooling the user already runs — `npx skills add`, impeccable, hallmark):
- *   <workspace>/.agents/skills/, <workspace>/.claude/skills/
- *   ~/.agents/skills/, ~/.claude/skills/
- *
- * PROGRESSIVE DISCLOSURE: the system prompt injection lists ONLY name +
- * description per skill (cheap); the full body loads on demand via the
- * agent__skills tool or a `/skill-name` user command — never up front.
- *
- * Name collisions resolve workspace-first (most specific wins). Stat-based
- * caches keep every call cheap; a changed SKILL.md mtime re-reads.
- */
+
 import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from 'node:fs';
 import path from 'node:path';
 
@@ -29,25 +9,25 @@ import { parseSkillMd } from './parse.js';
 export type SkillScope = 'global' | 'workspace' | 'compat';
 
 export interface SkillEntry {
-  /** Spec name (from frontmatter, = folder name when valid). */
+  
   name: string;
-  /** What the skill does + when to use it (the injection line). */
+  
   description: string;
-  /** Absolute folder containing SKILL.md. */
+  
   dir: string;
   scope: SkillScope;
   license?: string;
   compatibility?: string;
-  /** Total instruction body size in chars (budget visibility). */
+  
   bodyChars: number;
 }
 
 export interface LoadedSkill extends SkillEntry {
-  /** Full markdown body of SKILL.md. */
+  
   body: string;
 }
 
-const MAX_BODY = 64 * 1024; // safety cap per skill body
+const MAX_BODY = 64 * 1024;
 
 interface CacheEntry {
   mtimeMs: number;
@@ -89,7 +69,7 @@ function readSkillFile(file: string, scope: SkillScope): { entry: SkillEntry | n
   }
 }
 
-/** Skill dirs to scan, most specific first (workspace beats global beats compat). */
+
 export function skillRoots(workspaceRoot?: string): Array<{ root: string; scope: SkillScope }> {
   const roots: Array<{ root: string; scope: SkillScope }> = [];
   if (workspaceRoot) {
@@ -103,11 +83,7 @@ export function skillRoots(workspaceRoot?: string): Array<{ root: string; scope:
   return roots;
 }
 
-/**
- * All discoverable skills, deduped by name (first scope wins = most specific).
- * Invalid skill folders are skipped silently (they may be any random folder
- * with a SKILL.md that is not actually a skill).
- */
+
 export function listSkills(workspaceRoot?: string): SkillEntry[] {
   const byName = new Map<string, SkillEntry>();
   for (const { root, scope } of skillRoots(workspaceRoot)) {
@@ -128,7 +104,7 @@ export function listSkills(workspaceRoot?: string): SkillEntry[] {
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** Loads one skill by name (case-insensitive): metadata + full body. */
+
 export function loadSkill(name: string, workspaceRoot?: string): LoadedSkill | null {
   const wanted = name.trim().toLowerCase();
   if (!wanted) return null;
@@ -140,13 +116,9 @@ export function loadSkill(name: string, workspaceRoot?: string): LoadedSkill | n
   return null;
 }
 
-/**
- * Recursively walks a skill folder (ALL depths — references/, scripts/, any
- * nesting). Skips dotfolders + node_modules; capped so a huge folder can
- * never flood the context.
- */
+
 export interface SkillTreeNode {
-  /** Path relative to the walk root, forward slashes. */
+  
   rel: string;
   type: 'dir' | 'file';
   size?: number;
@@ -155,7 +127,7 @@ export interface SkillTreeNode {
 const TREE_SKIP = new Set(['node_modules', '.git']);
 const MAX_TREE_DEPTH = 6;
 const MAX_TREE_ENTRIES = 400;
-const MAX_FILE = 64 * 1024; // safety cap per companion/storage file read
+const MAX_FILE = 64 * 1024;
 
 export function walkSkillTree(dir: string, maxDepth = MAX_TREE_DEPTH, maxEntries = MAX_TREE_ENTRIES): SkillTreeNode[] {
   const out: SkillTreeNode[] = [];
@@ -190,14 +162,14 @@ export function walkSkillTree(dir: string, maxDepth = MAX_TREE_DEPTH, maxEntries
   return out;
 }
 
-/** All files of a skill folder, recursively, as skill-relative paths. */
+
 export function listSkillFiles(dir: string): string[] {
   return walkSkillTree(dir)
     .filter((node) => node.type === 'file')
     .map((node) => node.rel);
 }
 
-/** Reads a companion file INSIDE the skill dir; path-jailed, 64 KB cap. */
+
 export function readSkillCompanion(dir: string, relative: string): string | null {
   const resolved = path.resolve(dir, relative.replace(/\\/g, '/'));
   if (resolved !== dir && !resolved.startsWith(dir + path.sep)) return null;
@@ -209,16 +181,7 @@ export type StorageRead =
   | { ok: true; text: string; abs: string }
   | { ok: false; error: string };
 
-/**
- * Reads ANY file inside the SKILLS STORAGE (every skill root: workspace
- * .moriko/.agents/.claude skills + harness-home skills dirs). This is the
- * sanctioned way for the agent to read skill files OUTSIDE the active
- * workspace — the path is jailed to the union of the skill roots, so the
- * normal file-tool workspace blocking does not apply while nothing outside
- * those roots is reachable. Relative paths resolve against each root in
- * priority order; an absolute path is accepted only when it already sits
- * inside a root.
- */
+
 export function readSkillsStorageFile(relative: string, workspaceRoot?: string): StorageRead {
   const normalized = relative.replace(/\\/g, '/').trim();
   if (!normalized) return { ok: false, error: 'Empty path.' };
@@ -242,7 +205,7 @@ export function readSkillsStorageFile(relative: string, workspaceRoot?: string):
   };
 }
 
-/** Resolves the active workspace root for skill scoping (session-aware). */
+
 export function activeWorkspaceRoot(sessionId?: string): string | undefined {
   try {
     return getActiveWorkspace(sessionId)?.path;

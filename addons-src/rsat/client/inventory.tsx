@@ -1,10 +1,4 @@
-/**
- * RSA/T Inventory — port 1:1 dari design/split/rsat-panel-inventory.html.
- * Header .toolbar (h2 ledger + chip filter op ber-hitung) + tabel .pn.tblw
- * (kolom ikon op, File/from, Summary/awaiting, Quest, By, Time).
- * Kini ledger dari store bersama (useRsat) — setiap file quest tampil di sini
- * lengkap dengan summary agent (RSAT.txt butir 6.5).
- */
+
 import { useState } from 'react';
 import { tr } from './shared.tsx';
 import { Ic } from './icon.tsx';

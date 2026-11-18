@@ -1,36 +1,4 @@
-/**
- * P2 EXTERNALIZATION — the byte store behind conversation records.
- *
- * Problem: the 1.6 MB conversation record carried its weight INLINE —
- * attachment images as base64 data URLs, agent__render_visual payloads as
- * full HTML documents, read_file inline images as base64. Every layer paid:
- * the GET body (LCP gate), JSON.parse on boot, the sync debounce upload, and
- * the turn-patch writes.
- *
- * This module owns `~/.moriko/attachments/` — one content-addressed directory
- * (`<sha1 hex>` filenames, deduplicated across every conversation). Records
- * never store large payloads again; they store a REFERENCE object instead:
- *
- *   attachment:  { dataRef: { hash, mime, byteSize } }   — dataUrl dropped
- *   visual:      { htmlRef: { hash, byteSize } }         — html dropped
- *   toolImages:  { mime, dataRef: { hash, ... } }        — dataUrl dropped
- *
- * `dataRef.hash` is the sha1 of the DECODED BYTES (not of the base64 text, so
- * re-encoding differences cannot duplicate files). Resolution goes the other
- * way at the boundaries that need bytes:
- *
- *   - GET /api/attachments/ref/:hash  → the bytes (browser-cacheable; the
- *     thread's <img> and VisualCard fetch-on-mount read through here);
- *   - GET /api/conversations/:id      → `resolveRecordRefs` re-inlines refs as
- *     data URLs for the client's render+send path; the strip runs again
- *     server-side before anything persists, so the record stays lean;
- *   - POST /api/chat                  → `resolveWireRefs` swaps
- *     `moriko-ref://<mime>/<hash>` URLs for data URLs at the provider
- *     boundary — the adapters never learn refs exist.
- *
- * Everything here is synchronous and best-effort per payload: one unreadable
- * entry never loses the rest of the record.
- */
+
 
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -39,37 +7,21 @@ import path from 'node:path';
 import { atomicWriteJson } from './atomicWrite.js';
 import { attachmentsStoreDir, conversationDir, conversationManifestFile } from './paths.js';
 
-/** Payloads whose data-URL text is under this ride inline (record JSON keeps them). */
+
 export const INLINE_DATA_URL_LIMIT = 50_000;
 
-/** The pseudo-protocol wire URLs use: `moriko-ref://<mime>/<hash>`. */
+
 export const REF_PROTOCOL = 'moriko-ref://';
 
-/**
- * HARD CAP ON IMAGE PARTS PER REQUEST.
- *
- * Gateways enforce it literally ("At most 8 image(s) may be provided in one
- * prompt. Set '--limit-mm-per-prompt' to increase this limit.") and reject the
- * WHOLE request when a long thread replays every screenshot it ever carried.
- * The window is SLIDING and NEWEST-WINS: only the last N images stay real
- * payloads; older ones degrade to a short text note so the model still knows a
- * picture existed there. The user's own thread keeps every image — this runs on
- * the wire copy only.
- */
+
 export const MAX_WIRE_IMAGES = 8;
 
-/** The note an aged-out image becomes. `turn` is a human-facing ordinal. */
+
 export function agedImageNote(turn: number): string {
   return `[Gambar terdahulu turn ${turn} tersimpan]`;
 }
 
-/**
- * Enforces {@link MAX_WIRE_IMAGES} on an outgoing message list.
- *
- * Walks BACKWARD so the newest media wins; every image part beyond the budget
- * is replaced in place by {@link agedImageNote}. Returns how many aged out.
- * Video parts are counted separately by the gateway, so they are untouched.
- */
+
 export function capWireImages(messages: unknown, limit = MAX_WIRE_IMAGES): number {
   if (!Array.isArray(messages)) return 0;
   let seen = 0;
@@ -97,7 +49,7 @@ function hashBytes(bytes: Buffer): string {
   return createHash('sha1').update(bytes).digest('hex');
 }
 
-/** Writes bytes under their content hash (+ a mime sidecar) — idempotent. */
+
 export function putBytes(bytes: Buffer, mime?: string): string {
   const hash = hashBytes(bytes);
   try {
@@ -113,7 +65,7 @@ export function putBytes(bytes: Buffer, mime?: string): string {
   return hash;
 }
 
-/** Reads one stored payload back; null when the hash has no file on disk. */
+
 export function getBytes(hash: string): Buffer | null {
   if (!/^[0-9a-f]{8,64}$/.test(hash)) return null;
   try {
@@ -123,7 +75,7 @@ export function getBytes(hash: string): Buffer | null {
   }
 }
 
-/** Bytes + best-known mime for the GET route (sidecar, else octet-stream). */
+
 export function readStoredWithMime(hash: string): { bytes: Buffer; mime: string } | null {
   const bytes = getBytes(hash);
   if (!bytes) return null;
@@ -180,7 +132,7 @@ function stripVisualHtml(html: unknown): { ref: { hash: string; byteSize: number
   };
 }
 
-/** Strips ONE turn in place; returns the wire bytes the record shed. */
+
 function stripTurn(turn: Record<string, unknown>): number {
   let shed = 0;
 
@@ -238,12 +190,7 @@ function stripTurn(turn: Record<string, unknown>): number {
   return shed;
 }
 
-/**
- * Strips a FULL record in place (sync upserts + turn patches): walks every
- * turn and externalizes oversized payloads. Returns bytes shed (0 = clean).
- * The caller persists the record AFTER this runs, so the on-disk chat-data
- * stays the stripped shape from then on.
- */
+
 export function stripAttachmentDataUrls(record: Record<string, unknown>): number {
   if (!Array.isArray(record.turns)) return 0;
   let shed = 0;
@@ -253,17 +200,12 @@ export function stripAttachmentDataUrls(record: Record<string, unknown>): number
   return shed;
 }
 
-/** Strips ONE turn (turn-patch path: the patch body is stripped pre-store). */
+
 export function stripTurnPayloads(turn: unknown): void {
   if (turn && typeof turn === 'object') stripTurn(turn as Record<string, unknown>);
 }
 
-/**
- * One-shot BOOT migration for a record just read from disk: strips payloads
- * and, when anything moved, REWRITES the chat file immediately — a legacy
- * multi-megabyte record must not survive one more boot. Best-effort: a disk
- * failure leaves the in-memory record stripped (the next flush persists it).
- */
+
 export function migrateAttachmentDataUrls(id: string, record: unknown): void {
   try {
     if (!record || typeof record !== 'object') return;
@@ -282,7 +224,7 @@ export function migrateAttachmentDataUrls(id: string, record: unknown): void {
   }
 }
 
-/** Manifest folder lookup: id → chat folder under conversationDir/. */
+
 function manifestFolderFor(id: string): string | null {
   try {
     if (!existsSync(conversationManifestFile)) return null;
@@ -302,13 +244,7 @@ function dataUrlFor(hash: string, mime: string): string | null {
   return `data:${mime};base64,${bytes.toString('base64')}`;
 }
 
-/**
- * Resolves `moriko-ref://` URLs IN PLACE on a raw parts array — the steer
- * path. Steered parts bypass /api/chat's resolveWireRefs (they sit in the
- * steer buffer, drained by the adapter straight into the convo), so this
- * runs at the drain seam instead: without it the provider would receive a
- * dead pseudo-protocol URL.
- */
+
 export function resolveSteerPartRefs(
   parts: Array<{ type: string; image_url?: { url?: string }; video_url?: { url?: string }; file?: { file_data?: string } }>,
   ): void {
@@ -345,11 +281,7 @@ export function resolveSteerPartRefs(
   }
 }
 
-/**
- * Swaps `moriko-ref://<mime>/<hash>` URLs on OUTGOING wire messages for data
- * URLs resolved from the byte store. A hash that cannot resolve is DROPPED
- * (the provider must never see a dead URL); the surrounding text part stays.
- */
+
 export function resolveWireRefs(messages: unknown): void {
   if (!Array.isArray(messages)) return;
   for (const message of messages) {

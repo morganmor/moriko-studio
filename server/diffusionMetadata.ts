@@ -1,18 +1,4 @@
-/**
- * Diffusion-model metadata from the Hugging Face Hub API, synced at build
- * time by `scripts/sync-diffusion-metadata.mjs` into
- * `diffusionMetadata.snapshot.json`.
- *
- * CAPABILITY ONLY. The HF `pipeline_tag` is the primary capability signal:
- * text-to-image (t2i), image-to-image (edit), inpainting. The raw `tags`
- * array carries capability keywords the pipeline tag cannot express
- * ("image-editing", "rgba", "controlnet", …), and `library` distinguishes a
- * diffusers checkpoint from a GGUF/ONNX quant of the same model. Popularity
- * fields (downloads, likes) are excluded on purpose. Mirrors modelMetadata.ts:
- * regenerated via `pnpm sync:diffusion` (also auto-triggered by `pnpm dev`
- * when the snapshot is stale); a missing file degrades silently to the
- * pattern classifier.
- */
+
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -44,12 +30,7 @@ function load(): DiffusionMap {
 
 const memo = new Map<string, DiffusionMeta | undefined>();
 
-/**
- * Resolves HF catalog data for a model id. Matching is namespace-tolerant:
- * exact lowercased id first, then the bare model part (a ModelScope /
- * Bitdeer model id like "Tongyi-MAI/Z-Image-Turbo" matches the HF record
- * "tongyi-mai/z-image-turbo" or a same-named model under another org).
- */
+
 export function lookupDiffusionMeta(modelId: string): DiffusionMeta | undefined {
   const wanted = modelId.trim().toLowerCase();
   if (!wanted) return undefined;

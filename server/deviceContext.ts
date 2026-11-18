@@ -2,16 +2,7 @@ import os from 'node:os';
 
 import type { ChatMessage } from './contracts.js';
 
-/**
- * DEVICE CONTEXT — tells the model the local date, time, timezone and
- * platform of the machine the user is actually running on (the local proxy
- * IS that machine).
- *
- * The block rides on the NEWEST USER MESSAGE instead of the system prompt:
- * the system prompt must stay byte-identical across turns so the provider's
- * prompt cache (harness blocks are tens of KB) stays valid, while the newest
- * user message is new bytes anyway.
- */
+
 export function deviceContextBlock(): string {
   const now = new Date();
   const offsetMin = -now.getTimezoneOffset();
@@ -28,7 +19,7 @@ export function deviceContextBlock(): string {
   ].join('\n');
 }
 
-/** Appends the device-context block to the newest user message. */
+
 export function appendDeviceContext(messages: ChatMessage[]): ChatMessage[] {
   let index = -1;
   for (let i = messages.length - 1; i >= 0; i -= 1) {

@@ -1,17 +1,4 @@
-/**
- * Addon loader — scans `~/.moriko-studio/addons/`, parses manifests,
- * dynamically imports the entry, and watches for hot-reload WITHOUT restart.
- *
- * ADDON v2 (A1):
- *  - Per-addon reload: the watcher maps the changed file to ONE addon id and
- *    reloads only that addon — other addons' tools/hooks/stores are untouched
- *    (closes A-06). `loadAllAddons` remains for boot / explicit "Reload all".
- *  - ESM cache-bust: entry imports carry `?v=<mtimeMs>` so edits actually run
- *    (spike A0-1: same-URL imports stay cached forever; closes A-07 for the
- *    entry file — relative imports inside the entry keep their old cache, a
- *    known limitation documented in the plan).
- *  - createAddonApi binds the addon's OWN dir ($ fs jail) and identity (A-03).
- */
+
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, watch } from 'node:fs';
 import path from 'node:path';
@@ -45,7 +32,7 @@ const ADDONS_DIR = () => path.join(morikoHome, 'addons');
 
 let watcher: ReturnType<typeof watch> | null = null;
 let reloadDebounce: ReturnType<typeof setTimeout> | null = null;
-/** Pending addon ids from the watcher debounce window. */
+
 const pendingReload = new Set<string>();
 
 function parseManifest(dir: string): AddonManifest | null {
@@ -61,7 +48,7 @@ function parseManifest(dir: string): AddonManifest | null {
   }
 }
 
-/** Build the `on` registrar bound to one addon id. */
+
 function createEventRegistrar(addonId: string) {
   return (
     event: AddonEvent,
@@ -75,7 +62,7 @@ function createEventRegistrar(addonId: string) {
   };
 }
 
-/** Map a changed file path back to its addon id (top-level folder name). */
+
 function addonIdForPath(changed: string): string | null {
   const root = ADDONS_DIR();
   const abs = path.resolve(root, changed);
@@ -85,7 +72,7 @@ function addonIdForPath(changed: string): string | null {
   return id;
 }
 
-/** v2 activation context — the successor of register(on, $). */
+
 export interface AddonModuleV2 {
   activate(ctx: import('./types.js').AddonToolCtx & { api: import('./api.js').AddonApiOptions & Record<string, unknown> }): void | Promise<void>;
   deactivate?(): void | Promise<void>;
@@ -96,11 +83,10 @@ interface ActiveModule {
   module: Partial<AddonModuleV2>;
 }
 
-/** Loaded v2 activate()/deactivate() handles, keyed by addon id. */
+
 const activeModules = new Map<string, ActiveModule>();
 
-/** v2: call the module's deactivate() (best-effort, 3s budget is enforced by
- *  the caller) and forget it. */
+
 export async function deactivateAddonModule(id: string): Promise<void> {
   const entry = activeModules.get(id);
   activeModules.delete(id);
@@ -249,7 +235,7 @@ export async function loadAllAddons(): Promise<void> {
   }
 }
 
-/** The addons directory on disk — shared with the addon_manage agent tool. */
+
 export const ADDONS_ROOT = ADDONS_DIR;
 
 export async function reloadAddon(id: string, enabledOverride?: boolean): Promise<boolean> {

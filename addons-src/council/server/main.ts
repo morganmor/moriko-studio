@@ -1,11 +1,4 @@
-/**
- * Council Agent — server main (v2 activate).
- *
- * Wires: agent tools (council_status / council_broadcast / council_brief),
- * the per-session prompt fragment (council identity + members + shared brief),
- * RPC for the panel UI, the /council command, the council.changed bus topic,
- * and the mod-to-mod surface exposed to RSA/T (roster request + dispatch hop).
- */
+
 import { toolDefs } from './tools.js';
 import { createPromptFragment, broadcast } from './sync.js';
 import { rpcHandlers } from './rpc.js';

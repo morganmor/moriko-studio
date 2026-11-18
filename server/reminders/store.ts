@@ -4,18 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { atomicWriteJson } from '../atomicWrite.js';
 import { remindersFile } from '../paths.js';
 
-/**
- * SCHEDULED REMINDERS for agent conversations.
- *
- * The agent (or user) can schedule a labeled reminder for a conversation.
- * There is deliberately NO server timer: a reminder becomes DUE lazily —
- * the next time the conversation builds harness context (any user message)
- * due reminders are listed in a "Context injection · Reminders" block and
- * marked delivered. The Goals panel also lists them for the user.
- *
- * Persisted in `~/.moriko/reminders.json` (tmp+rename), so reminders survive
- * restarts; a reminder that became due while offline is still due.
- */
+
 
 const STORE_PATH = remindersFile;
 const MAX_LABEL = 300;
@@ -26,7 +15,7 @@ export interface Reminder {
   id: string;
   session: string;
   label: string;
-  /** Epoch ms when the reminder becomes due. */
+  
   fireAt: number;
   createdAt: number;
   deliveredAt: number | null;
@@ -49,7 +38,7 @@ function save(store: Store): void {
 
 export interface ReminderInput {
   label: string;
-  /** Epoch ms or an ISO/parseable date string. */
+  
   fireAt?: number | string;
   inMinutes?: number;
 }
@@ -102,7 +91,7 @@ export function listReminders(sessionId: string, includeDelivered = true): Remin
   return filtered.sort((a, b) => a.fireAt - b.fireAt);
 }
 
-/** Reminders that are due right now — marks them delivered on read. */
+
 export function takeDueReminders(sessionId: string): Reminder[] {
   const session = sessionId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) || 'default';
   const store = load();

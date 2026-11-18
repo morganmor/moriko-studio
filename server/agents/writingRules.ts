@@ -1,13 +1,4 @@
-/**
- * WRITING-RULES REMINDER — manual only.
- *
- * The user sends this reminder themselves (Composer "Send Reminder" button →
- * steer endpoint with `preset: "writingRules"`). There is no automatic
- * classifier: the harness never injects a Writing Rules reminder on its own.
- *
- * This file stays the single source of truth for the preset text so the
- * client never duplicates the copy.
- */
+
 
 export const SYSTEM_RULES_PRESETS: Record<string, string> = {
   writingRules: `SYSTEM REMINDER — Writing Rules (sent by the user).

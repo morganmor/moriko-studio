@@ -1,21 +1,4 @@
-/**
- * SPATIAL MOCKUP (F6) — design target tier: mockup image → Layout IR.
- *
- * The third rung of the translation ladder (docs/plans/PLAN-SPATIAL-HARNESS.md):
- * a DESIGN IMAGE (Figma export, screenshot, hand sketch) is segmented by the
- * configured vision model into the SAME Layout IR the static and runtime
- * tiers produce. The result is a design TARGET:
- *
- *   mockup IR (target) ──implement──► code ──runtime capture──► compare
- *
- * so "does the build match the design?" becomes a region-level diff instead
- * of a feeling. Honesty rules: the segmentation is APPROXIMATE (±5-10% box
- * estimates), always labelled tier 'mockup', never merged into static/runtime
- * verdicts, and only as good as the configured vision model.
- *
- * This module is pure: it parses the model's ANSWER into a map. The tool
- * layer owns the network call (agent__vision machinery).
- */
+
 import {
   detectCollisions,
   type SpatialMap,
@@ -24,14 +7,10 @@ import {
   type SpatialRect,
 } from './spatial.js';
 
-/** Region cap — a design target is a handful of layout blocks, not a DOM dump. */
+
 const MAX_MOCKUP_REGIONS = 80;
 
-/**
- * The segmentation instruction sent to the vision model. Strict JSON out;
- * layout blocks only; the ids become the vocabulary for later
- * implement→verify loops, so they must be semantic and stable.
- */
+
 export const MOCKUP_PROMPT = [
   'You are a UI-layout segmenter. Analyze this design mockup and return ONLY a JSON object — no prose, no markdown fences — shaped exactly like:',
   '{"canvas":{"w":<image width in px>,"h":<image height in px>},"regions":[{"id":"<semantic-lowercase-id>","role":"<optional aria-ish role>","rect":{"x":<int>,"y":<int>,"w":<int>,"h":<int>}}]}',
@@ -43,7 +22,7 @@ export const MOCKUP_PROMPT = [
 ].join('\n');
 
 
-/** Parse intrinsic image size from PNG IHDR / JPEG SOF / GIF headers (no deps). */
+
 export function parseImageDimensions(buffer: Buffer, mime: string): { w: number; h: number } | null {
   try {
     if (mime === 'image/png' && buffer.length > 24 && buffer.toString('ascii', 1, 4) === 'PNG') {
@@ -96,11 +75,7 @@ export interface MockupAnswer {
   regions: MockupRegion[];
 }
 
-/**
- * Extract the JSON segmentation from the model's answer. Tolerates markdown
- * fences and surrounding prose; refuses anything that is not a parseable
- * object with a regions array (the caller reports the error verbatim).
- */
+
 export function parseMockupAnswer(text: string): MockupAnswer | string {
   const unfenced = text.replace(/```[a-z]*\n?/gi, '').trim();
   const start = unfenced.indexOf('{');

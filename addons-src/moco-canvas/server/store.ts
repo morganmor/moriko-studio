@@ -1,14 +1,4 @@
-/**
- * Moco Canvas — document store (P1).
- *
- *   .moriko/moco-canvas/<doc>.scene.json   the scene (single source of truth)
- *   .moriko/moco-canvas/<doc>.ops.jsonl    append-only op log (undo/redo)
- *
- * Writes go through the harness workspace handle, so vault snapshots and the
- * read-policy ledger ride along (plan §19.4 point 3). One write QUEUE per
- * document serialises concurrent writers — the log is single-writer by design
- * (plan §19.3 point 5).
- */
+
 
 import path from 'node:path';
 
@@ -33,9 +23,9 @@ export interface LogEntry {
   at: string;
   actor: 'agent' | 'user';
   kind: LogKind;
-  /** mutation batch (kind: 'ops') */
+  
   ops?: CanvasOp[];
-  /** document seed (kind: 'new') */
+  
   template?: string;
   dna?: string;
   note?: string;
@@ -57,7 +47,7 @@ export class DocError extends Error {
   }
 }
 
-/** Queue tail per `<root>/<doc>`. */
+
 const queues = new Map<string, Promise<unknown>>();
 
 function enqueue<T>(key: string, job: () => Promise<T>): Promise<T> {
@@ -142,14 +132,12 @@ export function readLog(ws: WorkspaceHandle, doc: string): LogEntry[] {
     try {
       out.push(JSON.parse(trimmed) as LogEntry);
     } catch {
-      // A torn line (crash mid-write) is skipped, not fatal: the scene file
-      // remains the authority for the current revision.
     }
   }
   return out;
 }
 
-/** Serialise the log; the caller owns truncation semantics. */
+
 function writeLog(ws: WorkspaceHandle, doc: string, entries: LogEntry[]): Promise<void> {
   const body = entries.map((e) => JSON.stringify(e)).join('\n');
   return ws.write(logPath(doc), body ? `${body}\n` : '');
@@ -157,16 +145,13 @@ function writeLog(ws: WorkspaceHandle, doc: string, entries: LogEntry[]): Promis
 
 export interface ReplayResult {
   scene: Scene;
-  /** scenes popped by undo — redo can push them back */
+  
   redo: Scene[];
-  /** entries that failed to apply (kept for honesty, not silently dropped) */
+  
   skipped: string[];
 }
 
-/**
- * Rebuild a document from its log. Deterministic: ops are pure, so the same
- * log always yields the same scene — that is what makes undo/redo file-backed.
- */
+
 export function replay(entries: LogEntry[], fallbackDoc: string): ReplayResult {
   let scene: Scene | null = null;
   const undoStack: Scene[] = [];
@@ -182,8 +167,6 @@ export function replay(entries: LogEntry[], fallbackDoc: string): ReplayResult {
     }
     if (!scene) continue;
     if (entry.kind === 'ops') {
-      // Replay honours the original actor: user batches bypassed the lock
-      // guard when committed, so they must bypass it here too (P3 co-edit).
       const outcome = applyBatch(scene, entry.ops ?? [], entry.actor === 'user');
       if (outcome.ok) {
         undoStack.push(scene);
@@ -221,7 +204,7 @@ export interface CommitResult {
   entry: LogEntry;
 }
 
-/** Apply a mutation batch and persist scene + log atomically (per document). */
+
 export async function commitBatch(
   ws: WorkspaceHandle,
   doc: string,
@@ -232,7 +215,6 @@ export async function commitBatch(
   return enqueue(key, async () => {
     const entries = readLog(ws, doc);
     const current = readScene(ws, doc) ?? replay(entries, doc).scene;
-    // P3 co-edit: only user-driven batches bypass the lock guard.
     const outcome = applyBatch(current, ops, actor === 'user');
     if (!outcome.ok) {
       return {
@@ -255,7 +237,7 @@ export async function commitBatch(
   });
 }
 
-/** Undo/redo are log entries too, so they survive a restart. */
+
 export async function commitHistory(
   ws: WorkspaceHandle,
   doc: string,
@@ -278,7 +260,7 @@ export async function commitHistory(
   });
 }
 
-/** Create (or reset) a document from a template. */
+
 export async function commitNew(
   ws: WorkspaceHandle,
   doc: string,

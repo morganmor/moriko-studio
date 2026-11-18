@@ -1,8 +1,4 @@
-/**
- * F3.7 — agent__dead_code: exported symbols with no importer in the deps
- * graph AND no LSP references outside their own file. Entry points excluded.
- * Never auto-deletes.
- */
+
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AgentToolContext, HarnessToolResult } from './shared.js';
@@ -13,7 +9,7 @@ import { queryDeps } from '../deps.js';
 import { walkFiles } from './list.js';
 import { defineTool } from './registry.js';
 
-/** Files that are legitimate entry points — their exports are "used". */
+
 const ENTRY_RE = /(main|index|vite\.config|vitest\.config|rollup\.config|esbuild\.config|webpack\.config|register)\.(ts|tsx|js|mjs|cjs)$|[\\/]routes\.ts$/;
 
 async function deadCodeTool(args: Record<string, unknown>, ctx: AgentToolContext): Promise<HarnessToolResult> {

@@ -1,20 +1,8 @@
-/**
- * Council agent tools — what an agent inside a council can call.
- *
- * The server cannot see the host's conversation list, so membership is read
- * from the projection the panel syncs through `syncSessions`. When the
- * projection is cold (panel never opened), the tools degrade gracefully:
- * council_status reports "membership unknown", and council_broadcast targets
- * only the calling session's own council (resolved from the projection).
- */
+
 import { clearDirective, getBrief, getOrchestrator } from './store.js';
 import { membershipOf, broadcastToCouncil, wakeSessions, isSessionActive } from './sync.js';
 
-/**
- * ORCHESTRATOR GATE — dispatch/stop are main-session-only powers. The caller
- * must be the council's Main Session AND be bound to the agent the user
- * designated as orchestrator (panel → moriko:set-orchestrator → council doc).
- */
+
 function orchestratorGate(api, sessionId) {
   const mem = membershipOf(api, sessionId);
   if (!mem) return { error: 'You are not currently part of a council (or the panel has not been opened to sync membership).' };
@@ -32,7 +20,7 @@ function orchestratorGate(api, sessionId) {
   return { mem, main };
 }
 
-/** RSAT roster via mod-to-mod API (empty when RSAT is absent). */
+
 function rsatRoster(api, sessionId) {
   try {
     const rsat = api.api?.use?.('rsat');

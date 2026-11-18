@@ -20,7 +20,7 @@ import {
 
 import { cx } from './ui';
 
-/** Creation metadata saved beside downloaded images by the proxy. */
+
 interface CreationMeta {
   prompt: string;
   model?: string;
@@ -31,16 +31,14 @@ interface CreationMeta {
   aspectRatio?: string | null;
 }
 
-/** Design zoom range: 100%–600%. */
+
 const MIN_SCALE = 1;
 const MAX_SCALE = 6;
 const DBL_CLICK_SCALE = 2.5;
 const ZOOM_STEP = 1.3;
 const fmtDate = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
-/**
- * Image viewer — a React port of design/image-viewer.html (.vr dialog).
- */
+
 export function ImageLightbox({
   url,
   onClose,

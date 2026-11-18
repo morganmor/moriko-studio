@@ -1,9 +1,4 @@
-/**
- * Moco Canvas — intent geometry (P1). No browser: rects come from grid
- * addresses and stack order, so every number here is derivable from the scene
- * itself. Pixel figures are ESTIMATES from a documented row unit and are always
- * labelled `intent` (the measured tier arrives in P2).
- */
+
 
 import {
   COLS,
@@ -21,13 +16,12 @@ import {
   type SceneNode,
 } from './scene.ts';
 
-/** Estimated row band height for intent-only pixel figures (compiled rows use
- *  `minmax(44px,auto)`; 44px is that floor, not a measurement). */
+
 export const ROW_UNIT = 44;
 
 export interface Placement {
   node: SceneNode;
-  /** nearest grid frame that positions this node by address */
+  
   frame: SceneNode;
   rect: Rect;
 }
@@ -43,7 +37,7 @@ export interface FrameLattice {
   cols: number;
   rows: number;
   placements: Placement[];
-  /** cells claimed by more than one node */
+  
   contested: Rect[];
   free: number;
   total: number;
@@ -62,7 +56,7 @@ export function frameRows(frame: SceneNode): number {
   return Math.max(1, Math.min(ROWS, Math.max(explicit ?? 1, maxChildRow)));
 }
 
-/** The nearest ancestor (or self) placed directly inside a grid frame. */
+
 export function gridTarget(root: SceneNode, id: string): { node: SceneNode; frame: SceneNode } | null {
   const chain = pathTo(root, id);
   for (let i = chain.length - 1; i > 0; i--) {
@@ -114,7 +108,7 @@ export function latticeOf(frame: SceneNode): FrameLattice {
   return { frame, cols, rows, placements, contested, free, total };
 }
 
-/** Grid frames reachable from the scene root (page children + nested frames). */
+
 export function gridFrames(root: SceneNode): SceneNode[] {
   const out: SceneNode[] = [];
   const visit = (node: SceneNode) => {
@@ -127,7 +121,7 @@ export function gridFrames(root: SceneNode): SceneNode[] {
   return out;
 }
 
-/** Every node the canvas can address, with its parent. */
+
 export function nodeIndex(root: SceneNode): Array<{ node: SceneNode; parent: SceneNode | null }> {
   const out: Array<{ node: SceneNode; parent: SceneNode | null }> = [];
   const visit = (node: SceneNode, parent: SceneNode | null) => {
@@ -148,13 +142,13 @@ export function stackSlot(root: SceneNode, id: string): StackSlot | null {
   return index < 0 ? null : { node, parent, index };
 }
 
-/** True when every cell of `rect` is unclaimed inside `frame`. */
+
 export function cellsFree(frame: SceneNode, rect: Rect, ignoreId?: string): boolean {
   const lattice = latticeOf(frame);
   return lattice.placements.every((p) => p.node.id === ignoreId || !intersectCells(p.rect, rect));
 }
 
-/** Free addresses nearest to `rect` (for "did you mean" errors, plan §7.4). */
+
 export function nearestFree(frame: SceneNode, rect: Rect, ignoreId?: string): string[] {
   const cols = frameCols(frame);
   const rows = frameRows(frame);
@@ -176,7 +170,7 @@ export function nearestFree(frame: SceneNode, rect: Rect, ignoreId?: string): st
   return [...new Set(out.map((o) => o.at))].slice(0, 4);
 }
 
-/** First free address of the same span, scanning top-left → bottom-right. */
+
 export function firstFree(frame: SceneNode, width: number, height: number, ignoreId?: string): string | null {
   const cols = frameCols(frame);
   const rows = frameRows(frame);
@@ -189,7 +183,7 @@ export function firstFree(frame: SceneNode, width: number, height: number, ignor
   return null;
 }
 
-/** Horizontal weight split of a grid frame (composition fact, plan §6). */
+
 export function weightSplit(frame: SceneNode): { left: number; right: number } | null {
   const lattice = latticeOf(frame);
   if (lattice.placements.length < 2) return null;

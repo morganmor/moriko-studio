@@ -1,11 +1,4 @@
-/**
- * page-report.ts — the TEXT-FIRST page observation script shared by
- * browser_snapshot and the standalone screenshot tool. Runs IN the page
- * (untyped string script — Node's lib has no DOM), returns plain data.
- *
- * Interactive map: role, text, selector hint, bounding box, n — the agent can
- * say "click #7" via browser_click { x: box[0]+box[2]/2, y: box[1]+box[3]/2 }.
- */
+
 
 export interface CaptureElement {
   n: number;

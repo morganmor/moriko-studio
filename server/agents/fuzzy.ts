@@ -1,14 +1,4 @@
-/**
- * FUZZY PATH SUGGESTIONS — "did you mean?" for failed file paths.
- *
- * A typo'd path used to return a bare "No such file" and the
- * model retried blind (or hallucinated a listing). A bounded workspace walk +
- * Levenshtein distance on the basename turns the dead end into a one-step fix:
- * `No such file: src/tool.ts — did you mean "server/agents/tools.ts"? (d=1)`.
- *
- * Bounded like every other walker (SKIP_DIRS, depth, file caps, no file
- * reads — statSync only), so a failed read never pays more than a few ms.
- */
+
 
 import { readdirSync } from 'node:fs';
 import path from 'node:path';
@@ -23,7 +13,7 @@ const SKIP_DIRS = new Set([
 
 const MAX_WALK_DEPTH = 12;
 
-/** Standard two-row Levenshtein DP — basenames only, so inputs are short. */
+
 function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
   if (a.length === 0) return b.length;
@@ -44,16 +34,12 @@ function levenshtein(a: string, b: string): number {
   return prev[b.length];
 }
 
-/** Distance budget that scales with name length but stays strict. */
+
 function distanceBudget(name: string): number {
   return Math.max(2, Math.floor(name.length / 5));
 }
 
-/**
- * Builds a " — did you mean …?" suffix for a failed path, or '' when nothing
- * close exists. Same-directory candidates win; otherwise the whole workspace
- * is scanned by basename (bounded). Never throws.
- */
+
 export function fuzzyHint(absolutePath: string): string {
   try {
     const ws =

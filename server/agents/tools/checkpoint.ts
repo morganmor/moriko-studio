@@ -1,10 +1,4 @@
-/**
- * agent__checkpoint / agent__undo / agent__checkpoint_list — named rollback
- * points for multi-step refactors, now with UI-STATE (F6): every checkpoint
- * freezes the layout IR alongside the file snapshots, and undo reports the
- * spatial drift the rollback reintroduces — the model sees WHERE the layout
- * moved, not just which files changed.
- */
+
 import path from 'node:path';
 import { readFileSync, statSync } from 'node:fs';
 import type { AgentToolContext } from './shared.js';
@@ -21,15 +15,15 @@ import {
   type SpatialMap,
 } from '../spatial.js';
 
-/** Per-session store: label → checkpoint (files + the layout IR at that moment). */
+
 const checkpoints = new Map<string, Map<string, Checkpoint>>();
 
 interface Checkpoint {
   label: string;
   timestamp: number;
-  /** Map of relative-path -> snapshotId in the vault. */
+  
   files: Map<string, string>;
-  /** F6: the static spatial map at checkpoint time (UI-state half of the rollback). */
+  
   spatial: SpatialMap | null;
 }
 
@@ -44,11 +38,11 @@ function checkpointsForSession(sessionId: string | undefined): Map<string, Check
 }
 
 export interface CheckpointToolDeps {
-  /** Vault operations — injectable so tests can run without the real store. */
+  
   snapshot: typeof snapshotFile;
   find: typeof findSnapshot;
   restore: typeof restoreSnapshot;
-  /** Session ledger ops — same injectability. */
+  
   ledger: typeof recordAfterWrite;
   sessionEntries: typeof listSessionEntries;
   workspace: typeof getActiveWorkspace;
@@ -69,10 +63,7 @@ export interface CheckpointReport {
   text: string;
 }
 
-/**
- * agent__checkpoint — snapshot all edited files this session under a label,
- * PLUS the layout IR at that moment (the UI-state half of the rollback point).
- */
+
 export async function checkpointTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
@@ -128,11 +119,7 @@ export async function checkpointTool(
   };
 }
 
-/**
- * agent__undo — restore a named checkpoint (or latest), then report the
- * SPATIAL DRIFT the rollback introduces: the model sees not only which files
- * changed but WHERE the layout moved, before it reports anything done.
- */
+
 export async function undoTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
@@ -158,7 +145,7 @@ export async function undoTool(
 
   let restored = 0;
   const diffs: string[] = [];
-  /** F6: relPath → content BEFORE the restore — from the vault pre-restore snapshots. */
+  
   const preRestore = new Map<string, string>();
   for (const [relPath, snapshotId] of checkpoint.files) {
     const absolute = path.join(ws.path, relPath);
@@ -234,7 +221,7 @@ export async function undoTool(
   };
 }
 
-/** agent__checkpoint_list — list all checkpoints for this session. */
+
 export async function checkpointListTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,

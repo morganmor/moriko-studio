@@ -1,16 +1,4 @@
-/**
- * DiffRestoreModal — per-file restore-point picker backed by the FILE VAULT.
- *
- * Every agent edit/delete snapshotted the file first, so the snapshots ARE
- * the per-turn states. Each snapshot is labelled by the turn whose edit it
- * protected against ("before edit in Turn N" — i.e. the file as it stood at
- * the end of the previous turn). Restoring one file NEVER rolls back the
- * conversation or other files.
- *
- * The preview is a dry-run (read-only); the apply takes a pre-restore
- * snapshot first, so even THIS restore is undoable — and it lands in the
- * thread as a 'restore' marker turn carrying the resulting diff.
- */
+
 import { useEffect, useMemo, useState } from 'react';
 
 import { Loader2, RotateCcw, Trash2 } from './icons';
@@ -27,7 +15,7 @@ import { useStore } from '../store/useStore';
 import { uid } from '../lib/storage';
 import type { Turn } from '../types';
 
-/** Snapshot timestamps map to turns; legacy snapshots lack turnId. */
+
 function labelFor(entry: VaultSnapshotMeta, turns: Turn[]): { label: string; turnNumber: number | null } {
   let counter = 0;
   let matched: number | null = null;

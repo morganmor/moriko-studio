@@ -1,41 +1,17 @@
-/**
- * MESSAGE CATALOG — the single source of truth for every harness/user-facing
- * message the app can emit (Fase A #4.2).
- *
- * THE RULE: a feature that wants to show a message MUST register it here
- * first. This is enforced mechanically, not by convention:
- *   - `showNotice(id, ...)` in the store only accepts `MessageId` — a raw
- *     string literal is a TYPE ERROR (see useStore.ts).
- *   - The Notice Center (TopBar) renders only catalog entries: tone, ttl and
- *     dedupe behavior come from the spec, never from the call site.
- *
- * Surfaces:
- *   - 'notice'      → the Notice Center stack under the session title
- *                     (opaque card, auto-expire, dedupe, history trail).
- *   - 'thread-card' → a persistent card inside the thread (finish notes);
- *                     the TEXT lives here so the catalog stays complete,
- *                     rendering stays in Thread.tsx.
- *
- * Interpolation: `{param}` placeholders in `text` are filled by the call site
- * via `params` (see formatMessage). Unknown placeholders render verbatim, so a
- * missing param is visible rather than silently blank.
- */
+
 
 export type MessageTone = 'info' | 'success' | 'error' | 'warn' | 'danger';
 
 export type MessageSurface = 'notice' | 'thread-card';
 
 export interface MessageSpec {
-  /** Message template with optional {param} placeholders. */
+  
   text: string;
   tone: MessageTone;
   surface: MessageSurface;
-  /** ms before the notice auto-dismisses. Default: 7000 for error/danger,
-   *  4200 for everything else (the old Toast/HarnessPop lifetimes). */
+  
   ttl?: number;
-  /** Collapsing behavior while the notice is on screen. Default true —
-   *  a second emission of the same id does not stack. Set false when the
-   *  params differ per emission and each must be seen (retry ladder). */
+  
   dedupe?: boolean;
 }
 
@@ -319,7 +295,7 @@ export const MESSAGE_CATALOG = {
     surface: 'notice',
   },
 
-  /** Addon v2 (A5) — addon UI surfaces (NotificationHost mirror + Hub). */
+  
   'addon.notify': { text: '{detail}', tone: 'info', surface: 'notice' },
   'addon.notifyError': { text: '{detail}', tone: 'error', surface: 'notice' },
   'addon.reloaded': { text: 'Addon reloaded — changes are live.', tone: 'success', surface: 'notice' },
@@ -372,6 +348,8 @@ export const MESSAGE_CATALOG = {
 
   'permission.decideFailed': { text: 'Could not deliver the decision.', tone: 'error', surface: 'notice' },
   'ask.deliverFailed': { text: 'Could not deliver the answers.', tone: 'error', surface: 'notice' },
+  'gate.decideFailed': { text: 'Could not deliver the verdict.', tone: 'error', surface: 'notice' },
+  'tasks.stopFailed': { text: 'Could not stop the process.', tone: 'error', surface: 'notice' },
 
 
   'compact.alreadyCompacted': {
@@ -493,18 +471,12 @@ export const MESSAGE_CATALOG = {
   },
   'probation.apologized': { text: 'The model apologized — the freeze is lifted.', tone: 'info', surface: 'notice' },
   'probation.continueBurning': {
-    text: 'The model chose to continue — output stays suppressed and the tokens burn ({count}).',
+    text: 'The model chose to continue ({count}) — output stays blocked; the harness re-runs it until its apology is accepted.',
     tone: 'warn',
     surface: 'notice',
-  },
-  'probation.evadeStopped': {
-    text: 'The model evaded its choice five times — the harness stops re-asking. The freeze stands until you lower Probation.',
-    tone: 'warn',
-    surface: 'notice',
-    ttl: 6000,
   },
   'probation.evadeReminder': {
-    text: 'The model ignored its choice ({count}/5) — re-running with a reminder.',
+    text: 'The model ignored its choice ({count}) — re-running until its apology is accepted.',
     tone: 'warn',
     surface: 'notice',
   },
@@ -578,15 +550,13 @@ export const MESSAGE_CATALOG = {
 
 export type MessageId = keyof typeof MESSAGE_CATALOG;
 
-/** Default lifetime per tone — matches the old Toast (error 7s) and
- *  HarnessPop (4.2s) behavior so the migration changes nothing users felt. */
+
 export function messageTtl(spec: MessageSpec): number {
   if (spec.ttl !== undefined) return spec.ttl;
   return spec.tone === 'error' || spec.tone === 'danger' ? 7000 : 4200;
 }
 
-/** Fill `{param}` placeholders. Unknown placeholders render verbatim — a
- *  missing param is VISIBLE (debuggable), never a silent blank. */
+
 export function formatMessage(text: string, params?: Record<string, string | number>): string {
   if (!params) return text;
   return text.replace(/\{(\w+)\}/g, (match, key: string) =>
@@ -595,26 +565,25 @@ export function formatMessage(text: string, params?: Record<string, string | num
 }
 
 export interface NoticeEntry {
-  /** Rendering key — unique per emission (React list key + dismiss target). */
+  
   key: string;
-  /** The catalog id this notice was born from. */
+  
   id: MessageId;
-  /** Fully formatted message text. */
+  
   text: string;
-  /** Optional secondary line (usually the underlying error message). */
+  
   detail?: string;
   tone: MessageTone;
-  /** ms the card holds before auto-dismiss. */
+  
   ttl: number;
-  /** Active-queue dedupe key (`id` unless the spec opted out). */
+  
   dedupeKey: string;
   createdAt: number;
 }
 
 let noticeSeq = 0;
 
-/** Build a render-ready notice from a catalog id. Returns undefined when the
- *  id is unknown — callers treat that as a programming error (console, no UI). */
+
 export function makeNotice(
   id: MessageId,
   params?: Record<string, string | number>,
@@ -640,8 +609,7 @@ export function makeNotice(
   };
 }
 
-/** Compute the active queue + history trail from raw emissions and the
- *  previous state — the store calls this on every showNotice. */
+
 export function reduceNotices(
   prev: { notices: NoticeEntry[]; history: NoticeEntry[] },
   entry: NoticeEntry,

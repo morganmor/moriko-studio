@@ -1,9 +1,4 @@
-/**
- * Moco Canvas — the `moco_canvas` agent tool (P1).
- *
- * One tool, many ops (plan §7.1): the catalogue stays lean, and every call
- * returns a DELTA readout plus the lint that changed — never the whole scene.
- */
+
 
 import { OP_NAMES, type CanvasOp } from '../client/ops.ts';
 import { buildDelta, buildReadout, inspectNode, outline } from '../client/readout.ts';
@@ -66,7 +61,6 @@ const SCHEMA = {
       type: 'boolean',
       description: 'P2: measure the compiled scene in the headless browser (3 viewports) and return the MEASURED lint (tier:runtime). Default true when a browser is available; degrades to tier:intent honestly.',
     },
-    // convenience fields for a single op (mirrors the op shapes)
     id: { type: 'string' },
     ids: { type: 'array', items: { type: 'string' } },
     in: { type: 'string' },
@@ -84,7 +78,6 @@ const SCHEMA = {
     w: { type: 'number' },
     h: { type: 'number' },
     force: { type: 'boolean' },
-    // P4 responsive op convenience fields
     bp: { type: 'string', enum: ['sm', 'md', 'lg'], description: 'responsive: target breakpoint (lg clears the md key — lg IS the base).' },
     hide: { type: 'boolean', description: 'responsive: drop the node at bp.' },
     clear: { type: 'boolean', description: 'responsive/constrain: remove ALL node overrides / drop the constraint.' },
@@ -144,11 +137,8 @@ export async function runMocoCanvas(args: Record<string, unknown>, ctx: ToolCont
     const actor = 'agent' as const;
     const viewport = (typeof args.viewport === 'string' ? args.viewport : 'lg') as Viewport;
     const dryRun = args.dryRun === true;
-    // measure defaults ON — P2 goal is measured facts by default, with an
-    // honest tier:intent fallback when no headless browser is available.
     const wantMeasure = args.measure !== false;
 
-    // ── new ────────────────────────────────────────────────────────────
     if (args.op === 'new') {
       const template = typeof args.template === 'string' ? args.template : 'split-diptych';
       if (!templateById(template)) {
@@ -156,7 +146,6 @@ export async function runMocoCanvas(args: Record<string, unknown>, ctx: ToolCont
       }
       const dna = typeof args.dna === 'string'
         ? args.dna
-        // P3 (plan §11): no explicit dna → follow the Mococraft lock when set.
         : (await import('./craft.ts')).craftDna(api)?.id ?? 'editorial';
       const existing = loadDoc(ws, docId);
       if (existing && args.reset !== true) {
@@ -183,12 +172,10 @@ export async function runMocoCanvas(args: Record<string, unknown>, ctx: ToolCont
       };
     }
 
-    // ── docs ───────────────────────────────────────────────────────────
     if (args.op === 'docs') {
       return { ok: true, isError: false, text: `DOCUMENTS\n${describeDocs(ws)}` };
     }
 
-    // ── inspect / outline ──────────────────────────────────────────────
     if (args.op === 'inspect' || args.op === 'outline') {
       const { scene } = requireDoc(ws, docId);
       if (args.op === 'outline' || typeof args.focus !== 'string') {
@@ -201,14 +188,12 @@ export async function runMocoCanvas(args: Record<string, unknown>, ctx: ToolCont
       return { ok: true, isError: false, text: `${detail}\n\n${clip(readout.text, 1200)}` };
     }
 
-    // ── export ─────────────────────────────────────────────────────────
     if (args.op === 'export') {
       const { scene } = requireDoc(ws, docId);
       const { compileScene } = await import('../client/compile.ts');
       const compiled = compileScene(scene);
       const target = args.target === 'css' ? 'css' : args.target === 'react' ? 'react' : args.target === 'tailwind' ? 'tailwind' : 'html';
 
-      // P4: tailwind target → utility-class JSX per frame (plan §8.2).
       if (target === 'tailwind') {
         const { compileTailwind } = await import('./exporter.ts');
         const out = compileTailwind(scene);
@@ -222,7 +207,6 @@ export async function runMocoCanvas(args: Record<string, unknown>, ctx: ToolCont
         };
       }
 
-      // P3: react target → per-frame region code (plan §8.2).
       if (target === 'react') {
         const { compileReact } = await import('./exporter.ts');
         const out = compileReact(scene, compiled.css);
@@ -238,10 +222,6 @@ export async function runMocoCanvas(args: Record<string, unknown>, ctx: ToolCont
 
       const body = target === 'css' ? compiled.css : compiled.html;
 
-      // P3 (plan §19.4-3, ADOPTED DECISION): export only GENERATES code — the
-      // agent writes it itself via agent__write, so the vault, diagnostics,
-      // and the slop gate all stay in force. No addon-side file writes.
-      // The slop scan still runs (advisory) on the generated output.
       const { scanForExport } = await import('./craft.ts');
       const scan = scanForExport(api, `${docId}.${target === 'css' ? 'css' : 'tsx'}`, body);
       const scanLines = scan.ran
@@ -260,7 +240,6 @@ export async function runMocoCanvas(args: Record<string, unknown>, ctx: ToolCont
       };
     }
 
-    // ── import (P4 perceive, plan §8.4) ───────────────────────────────
     if (args.op === 'import') {
       const html = typeof args.html === 'string' ? args.html : '';
       if (!html.trim()) throw new DocError('import requires "html" — the standalone HTML to perceive (read-only; use measure/runtime tools to edit foreign code).');
@@ -269,7 +248,6 @@ export async function runMocoCanvas(args: Record<string, unknown>, ctx: ToolCont
       return { ok: true, isError: false, text: perception };
     }
 
-    // ── undo / redo ────────────────────────────────────────────────────
     if (args.op === 'undo' || args.op === 'redo') {
       const before = requireDoc(ws, docId);
       if (dryRun) {
@@ -285,7 +263,6 @@ export async function runMocoCanvas(args: Record<string, unknown>, ctx: ToolCont
       };
     }
 
-    // ── mutation batch ─────────────────────────────────────────────────
     const ops: CanvasOp[] = Array.isArray(args.ops)
       ? (args.ops as CanvasOp[])
       : args.op
@@ -316,7 +293,6 @@ export async function runMocoCanvas(args: Record<string, unknown>, ctx: ToolCont
     const footer = critical.length
       ? `\n\n⛔ ${critical.length} lint critical: ${critical.slice(0, 3).map((l) => `${l.rule} (${l.node ?? '—'})`).join(', ')}`
       : '\n\n✓ 0 lint critical';
-    // P2: measured tier appended when the agent asked for measurement.
     const measured = wantMeasure ? await measureScene(committed.scene, api, { viewport, sessionId: ctx.sessionId }) : null;
     const measuredText = measured ? `\n\nMEASURED\n${measuredLintBlock(measured)}` : '';
     return { ok: true, isError: false, text: `${delta}${footer}${measuredText}` };

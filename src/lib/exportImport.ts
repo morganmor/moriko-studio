@@ -1,10 +1,4 @@
-/**
- * Export / import of the whole workspace as a JSON bundle.
- *
- * Lives in its OWN module (not ProvidersDialog) on purpose: three views use
- * these helpers, and if they stayed in a 49 KB dialog module, importing them
- * eagerly would defeat the dialog's lazy-loading entirely.
- */
+
 
 import { useStore } from '../store/useStore';
 

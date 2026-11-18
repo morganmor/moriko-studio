@@ -1,12 +1,4 @@
-/**
- * Shared internals for the split edit-tool family. Every edit tool
- * (edit_file / multi_edit / edit_lines / edit_between / insert_at_line) loads
- * its target through `loadEditable` and lands its result through `finishEdit`
- * (or `replaceLineRange` for line-range surgery), so the safety posture stays
- * IDENTICAL across all five: read-before-edit, optimistic concurrency
- * (expectedReadHash), read-range enforcement, EOL preservation, vault
- * snapshot, and a syntax guard that rolls back broken writes.
- */
+
 import { readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import * as ts from 'typescript';
@@ -29,8 +21,7 @@ export interface EditTarget {
   exists: boolean;
 }
 
-/** Resolve the `path` argument against the workspace root (write intent) and
- *  stat whether a regular file already sits there. */
+
 export async function resolveWriteTarget(
   toolName: string,
   rawPath: string,
@@ -55,11 +46,7 @@ export interface LoadedFile {
   readEntry: ReturnType<typeof getReadEntry>;
 }
 
-/**
- * THE READ-BEFORE-EDIT GATE. Applies to every edit tool: size cap, a current
- * read in this session (mtime + hash + gRev), and the optimistic-concurrency
- * hash guard. Returns the loaded content on success or the refusal text.
- */
+
 export function loadEditable(
   target: EditTarget,
   ctx: AgentToolContext,
@@ -94,18 +81,12 @@ export function loadEditable(
   return { ok: true, data: { content, currentMtime, readEntry } };
 }
 
-/**
- * Normalizes a hash the model supplied: strips the optional `sha256:`
- * prefix (the read_file footer prints `sha256:<hex>`, and models copy
- * that string verbatim into expectedReadHash/lastHash) and lowercases.
- */
+
 export function normalizeHashInput(raw: string): string {
   return raw.trim().replace(/^sha256:/i, '').toLowerCase();
 }
 
-/**
- * Shared optimistic-concurrency check; returns the refusal text or null.
- */
+
 export function hashGuardError(content: string, expectedReadHash: string, relative: string): string | null {
   const cleaned = normalizeHashInput(expectedReadHash);
   if (!cleaned) return null;
@@ -120,7 +101,7 @@ export function hashGuardError(content: string, expectedReadHash: string, relati
 
 export interface EditBounds {
   changed: boolean;
-  /** 1-based first line of the changed span. */
+  
   startLine: number;
   oldSpanLines: number;
   newSpanLines: number;
@@ -129,12 +110,7 @@ export interface EditBounds {
   afterTotalLines: number;
 }
 
-/**
- * Pemindaian O(N) dua arah (prefix & suffix) untuk menemukan batas baris
- * perubahan secara eksak: baris identik dari ATAS dan dari BAWAH dilompati,
- * sisa di tengah = span lama → span baru. Menggantikan peta geser satu
- * arah (first-divergence + total delta) yang kabur untuk edit di tengah/akhir file.
- */
+
 export function computeEditBounds(before: string, after: string): EditBounds {
   const trimPhantom = (raw: string[]) =>
     raw.length > 1 && raw[raw.length - 1] === '' ? raw.slice(0, -1) : raw;
@@ -179,17 +155,10 @@ export function computeEditBounds(before: string, after: string): EditBounds {
   };
 }
 
-/**
- * Membangun ringkasan pergeseran baris + Context Echo: map geser baris
- * (≥ first-changed line moved by ±delta) plus ±4 baris konteks di sekitar
- * area yang baru diedit dengan nomor baris BARU — model tak perlu read_file
- * ulang hanya untuk men-anchor edit lanjutan.
- */
+
 function buildPostEditSummary(afterContent: string, bounds: EditBounds, newHash: string): string {
   if (!bounds.changed) return '';
   const sign = bounds.deltaLines > 0 ? '+' : '';
-  // Explicit line stats ride the summary in BOTH branches, so a detector block
-  // above them can never be the only thing the reader sees.
   const lineStat = `(+${bounds.newSpanLines} -${bounds.oldSpanLines} lines)`;
   const shiftHeader =
     bounds.deltaLines === 0
@@ -216,11 +185,7 @@ function buildPostEditSummary(afterContent: string, bounds: EditBounds, newHash:
   return `${shiftHeader}\n── post-edit context (lines ${echoFrom}–${echoTo}) ──\n${rows.join('\n')}`;
 }
 
-/**
- * Shared write-or-preview tail: snapshots, writes (unless dryRun), records the
- * new read state, and returns the diff. `toolName` names the tool in the
- * dryRun / success messages.
- */
+
 export async function finishEdit(
   ctx: AgentToolContext,
   absolute: string,
@@ -234,9 +199,6 @@ export async function finishEdit(
   toolName: string,
   note = '',
 ): Promise<HarnessToolResult> {
-  // POST-EDIT HEAL — duplicate/seam removal, delimiter balance, syntax +
-  // redeclaration detection. Runs BEFORE the syntax guard so a self-repaired
-  // edit is what gets verified and written.
   const heal = healEditedContent(originalRaw, nextEffective, absolute);
   const healNote = formatHealNotes(heal);
   const nextContent = normalized
@@ -349,12 +311,7 @@ export async function finishEdit(
   };
 }
 
-/**
- * LINE-RANGE EDIT with read-receipt enforcement: replaces lines from..to
- * with newString. The range MUST lie inside the window the model actually
- * read on the current revision — no blind line surgery. Shared by edit_lines
- * (direct) and edit_between (which resolves its anchors to a range first).
- */
+
 export async function replaceLineRange(
   target: EditTarget,
   ctx: AgentToolContext,
@@ -366,7 +323,7 @@ export async function replaceLineRange(
     verifySyntax: boolean;
     newString: string;
     toolName: string;
-    /** Result an anchor tool already loaded — avoids a double disk read. */
+    
     preloaded?: LoadedFile;
     note?: string;
   },
@@ -425,14 +382,7 @@ export async function replaceLineRange(
   );
 }
 
-/**
- * SYNTAX GUARD probe for freshly written files. JSON parses in-process;
- * the full TS/JS family (.ts/.tsx/.mts/.cts/.jsx/.js/.mjs/.cjs) is validated
- * in-process with the TypeScript Compiler API (F1.6 — no spawn) and reports
- * the offending line + code snippet; .css gets a light brace/comment balance
- * heuristic. Anything unverifiable (other extensions) is SKIPPED — the guard
- * never false-fails an edit.
- */
+
 export async function verifyWrittenSyntax(
   absolute: string,
   nextContent: string,

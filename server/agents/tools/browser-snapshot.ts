@@ -1,20 +1,6 @@
-/**
- * agent__browser_snapshot — ONE-call page observer for Moriko's built-in
- * browser. Replaces the chromedev-MCP screenshot role with a TEXT-FIRST,
- * image-second design: the result ALWAYS carries page context any model can
- * act on (URL/title/viewport/timing, console errors + warnings, failed
- * 4xx/5xx requests, a numbered interactive-element map), while the JPEG
- * capture rides along inline for vision-capable models.
- *
- *   url?      — navigate first (same assertUrl gate + load waits as browser_open)
- *   selector? — photograph ONE element (the interactive map still covers the page)
- *   fullPage? — capture beyond the viewport (default false)
- *   full?     — widen the text map (40 vs 20 interactive elements)
- *
- * Click targeting: "#n → browser_click { x: box[0]+box[2]/2, y: box[1]+box[3]/2 }".
- */
+
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
-import { bool, requireWorkspace, str } from './shared.js';
+import { bool, checkWebAccessUrl, str } from './shared.js';
 import { browserManager } from '../browser/manager.js';
 import { lookupModelMetadata } from '../../modelMetadata.js';
 import { CAPTURE_SCRIPT, type CaptureReport } from './page-report.js';
@@ -28,18 +14,25 @@ export async function browserSnapshotTool(
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
   const meta = ctx.modelId ? lookupModelMetadata(ctx.modelId) : undefined;
-  const canSee = meta ? meta.imageIn : true; // unknown model → attach anyway
+  const canSee = meta ? meta.imageIn : true;
+  const sid = ctx.sessionId;
 
   const navigate = str(args, 'url').trim();
   if (navigate) {
-    requireWorkspace(ctx);
+    if (browserManager.isTakeover(sid)) {
+      return { ok: false, isError: true, errorCode: 'browser_takeover', text: browserManager.takeoverNotice(sid) };
+    }
     try {
-      const target = browserManager.assertUrl(navigate, true);
-      const page = await browserManager.getActivePage();
+      const target = browserManager.assertUrl(navigate, true, sid);
+      const blocked = checkWebAccessUrl(target.toString(), ctx, 'agent__browser_snapshot');
+      if (blocked) {
+        return { ok: false, isError: true, errorCode: 'web_access_off', text: blocked };
+      }
+      const page = await browserManager.getActivePage(sid);
       await page.goto(target.toString(), { waitUntil: 'commit', timeout: 30_000 });
       await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => undefined);
-      await page.waitForLoadState('networkidle', { timeout: 4_000 }).catch(() => undefined);
-      browserManager.logAction('open', `snapshot-navigate → ${page.url()}`);
+      await page.waitForTimeout(150);
+      browserManager.logAction('open', `snapshot-navigate → ${page.url()}`, sid);
     } catch (error) {
       return {
         ok: false,
@@ -51,7 +44,7 @@ export async function browserSnapshotTool(
   }
 
   try {
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const fullPage = bool(args, 'fullPage');
     const selector = str(args, 'selector');
     const wantElements = bool(args, 'full') ? MAX_ELEMENTS_FULL : MAX_ELEMENTS;
@@ -61,7 +54,7 @@ export async function browserSnapshotTool(
       ? await page.locator(selector).screenshot({ type: 'jpeg', quality: JPEG_QUALITY, timeout: 10_000 })
       : await page.screenshot({ fullPage, type: 'jpeg', quality: JPEG_QUALITY });
 
-    const diag = browserManager.getDiagnostics();
+    const diag = browserManager.getDiagnostics(undefined, sid);
     const fmt = (list: Array<{ text: string }>) => list.slice(-8).map((e) => `    ${e.text.slice(0, 160)}`);
     const failed = diag.http.filter((h) => /\b[45]\d\d\b/.test(h.text));
     const elements = capture.interactive.slice(0, wantElements);

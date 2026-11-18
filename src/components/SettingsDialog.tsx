@@ -18,7 +18,7 @@ import { isPhantomConversation, useStore } from '../store/useStore';
 import type { Accent, Density, FontFamily, ThemeMode } from '../types';
 import { Tip, Modal, Toggle } from './ui';
 
-/** Theme cards (design panel-settings): live previews scoping each scheme. */
+
 const THEME_OPTIONS: Array<{ value: ThemeMode; label: string; preview: ReactNode }> = [
   {
     value: 'light',
@@ -71,8 +71,7 @@ const THEME_OPTIONS: Array<{ value: ThemeMode; label: string; preview: ReactNode
   },
 ];
 
-/** Accent swatches — each button carries its own data-accent so the circle
- *  paints with THAT swatch's colour instead of the active one. */
+
 const ACCENT_OPTIONS: Array<{ value: Accent; label: string }> = [
   { value: 'ember', label: 'Ember' },
   { value: 'sakura', label: 'Sakura' },
@@ -92,7 +91,7 @@ const DENSITY_SEG: Array<{ value: Density; label: string }> = [
   { value: 'compact', label: 'Compact' },
 ];
 
-/** Labeled range slider, styled like the Configuration panel's sliders. */
+
 function SliderRow({
   label,
   value,
@@ -135,11 +134,7 @@ function SliderRow({
   );
 }
 
-/**
- * Segmented control with the design's sliding indicator (initSeg mechanism):
- * .ind tracks the checked button's offsetLeft/width, and a ResizeObserver
- * re-lays it out whenever the control changes size.
- */
+
 function SegControl<T extends string>({
   value,
   options,
@@ -192,12 +187,7 @@ function SegControl<T extends string>({
   );
 }
 
-/**
- * Data-location card: shows where Moriko keeps everything and lets the user
- * paste another folder path. MORIKO_HOME is read once at boot, so saving only
- * persists the choice in .env (+ copies data over); the Reload harness button
- * at the end of THIS card applies it.
- */
+
 function StorageLocationSection() {
   const showNotice = useStore((state) => state.showNotice);
   const [view, setView] = useState<StorageLocationView | null>(null);
@@ -321,7 +311,7 @@ function StorageLocationSection() {
 
 type SettingsTab = 'appearance' | 'mcp' | 'storage' | 'conversations' | 'shortcuts';
 
-/** One sidebar entry. */
+
 const NAV_GROUPS: Array<{ label: string; items: Array<{ id: SettingsTab; label: string; icon: ReactNode }> }> = [
   {
     label: 'General',
@@ -348,14 +338,7 @@ interface SettingsDialogProps {
   onClose: () => void;
 }
 
-/**
- * Workspace preferences dialog, opened from the sidebar's Manage section.
- *
- * Appears over whatever view the user is on and closes via ✕, Escape, or a
- * backdrop click. Everything here is app-wide: theme, font size, font style,
- * and the data tools (export / import / clear conversations). Model and
- * per-conversation run settings live in the right-hand Configuration panel.
- */
+
 export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   const [tab, setTab] = useState<SettingsTab>('appearance');
   const theme = useStore((state) => state.theme);

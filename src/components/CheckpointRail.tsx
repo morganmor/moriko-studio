@@ -1,26 +1,7 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { cx } from './ui';
 
-/**
- * FISH-EYE CHECKPOINT RAIL — scale-invariant by construction.
- *
- * The thread container sits under CSS `zoom` (.ctx-zoom = ctx-scale/app-zoom)
- * plus #root's `transform: scale(app-zoom)`. getBoundingClientRect() and
- * clientY return SCREEN px, while CSS `top: Npx` is LOCAL px multiplied by
- * the net zoom (ctx-scale) at render. Mixing the two produced a linear,
- * accumulating error: dot 1 accurate, dot 40 far off, dots ending short of
- * the scrollbar.
- *
- * Fix: no pixels anywhere in the math.
- *  - hoverNorm = (clientY - rect.top) / rect.height  → ratio, zoom cancels.
- *  - dot position = cumulative weight fraction        → dimensionless.
- *  - rendered via `top: frac%`                        → resolves in local px,
- *    then zooms with the container exactly like the cursor does.
- * Alignment holds for ANY zoom factor / transform / DPR.
- *
- * Weight: 1 + (M-1) * exp(-((i+0.5 - focus) / sigma)²); focus in index space
- * = hoverNorm * N. Dot size: clamp(MIN, gap_px * 0.55, MAX) — no solid bar.
- */
+
 
 interface CheckpointRailProps {
   turnNumbers: number[];
@@ -40,9 +21,9 @@ const HOVER_H = 10;
 
 interface DotLayout {
   turn: number;
-  /** Position as a fraction [0,1] of the rail height — zoom-invariant. */
+  
   frac: number;
-  /** Dot size in px (visual only; ~10% off under zoom is invisible at 2–7px). */
+  
   sz: number;
   isActive: boolean;
 }
@@ -54,9 +35,9 @@ export function CheckpointRail({
   rightOffset,
 }: CheckpointRailProps) {
   const railRef = useRef<HTMLElement>(null);
-  /** Cursor position as a RATIO [0,1] of rail height (null = not hovering). */
+  
   const [hoverNorm, setHoverNorm] = useState<number | null>(null);
-  /** Screen px — only used for dot SIZES and magnification strength. */
+  
   const [railH, setRailH] = useState(0);
 
   useLayoutEffect(() => {

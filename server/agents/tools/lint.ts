@@ -1,8 +1,4 @@
-/**
- * F3.3 — agent__lint: runs the PROJECT's own linter when configured
- * (biome / eslint / oxlint / ruff). Never installs anything; clear message
- * when no linter exists. fix:true is a MUTATION (vault snapshot per file).
- */
+
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AgentToolContext, HarnessToolResult } from './shared.js';
@@ -11,6 +7,7 @@ import { runProcess } from '../exec.js';
 import { auditToolCall } from '../audit.js';
 import { snapshotFile } from '../vault.js';
 import { defineTool } from './registry.js';
+import { approveCommand } from './terminal.js';
 
 type LinterKind = 'biome' | 'eslint' | 'oxlint' | 'ruff' | 'none';
 
@@ -39,7 +36,7 @@ interface LintIssue {
   message: string;
 }
 
-/** Biome/eslint JSON reporter → normalized issues. */
+
 function parseJsonIssues(text: string, root: string): LintIssue[] {
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
@@ -82,7 +79,7 @@ function parseJsonIssues(text: string, root: string): LintIssue[] {
   return [];
 }
 
-/** Ruff JSON lines. */
+
 function parseRuffIssues(text: string): LintIssue[] {
   const out: LintIssue[] = [];
   for (const line of text.split('\n')) {
@@ -124,6 +121,17 @@ async function lintTool(args: Record<string, unknown>, ctx: AgentToolContext): P
 
   const rawPaths = Array.isArray(args.paths) ? (args.paths as unknown[]).filter((p): p is string => typeof p === 'string') : [];
   const targets = rawPaths.length > 0 ? rawPaths : ['.'];
+
+  const approved = await approveCommand(
+    'lint',
+    `${kind} ${targets.join(' ')}${fix ? ' --fix' : ''}`,
+    resolved.absolute,
+    false,
+    ctx,
+  );
+  if (!approved) {
+    return { ok: false, isError: true, text: `The user did not approve linting (${kind} ${targets.join(' ')}).` };
+  }
 
   let program: string;
   let programArgs: string[];

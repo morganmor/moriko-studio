@@ -1,10 +1,4 @@
-/**
- * F3.5 — agent__refactor: compiler-driven refactors applied ATOMICALLY.
- *  - rename: findRenameLocations → collect edits → apply all-or-nothing.
- *  - move_file: getEditsForFileRename + move, preserving server .js style.
- *  - organize_imports: LS organizeImports on one file.
- * dryRun (default true) shows a unified diff instead of writing.
- */
+
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { AgentToolContext, HarnessToolResult } from './shared.js';
@@ -127,7 +121,7 @@ async function refactorTool(args: Record<string, unknown>, ctx: AgentToolContext
   return { ok: false, isError: true, text: 'Unknown mode. Available: rename, move_file, organize_imports.' };
 }
 
-/** Apply edits atomically (all-or-nothing): vault each file, then write. */
+
 async function applyEdits(
   edits: PlannedEdit[],
   root: string,

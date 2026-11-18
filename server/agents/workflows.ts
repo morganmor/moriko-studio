@@ -1,33 +1,16 @@
-/**
- * AGENT WORKFLOWS — user-selectable working doctrines for Agent mode.
- *
- * A workflow is a harness-injected working contract: how the agent must
- * sequence its work, what it is forbidden to do, and what counts as done.
- * Unlike the surface System Prompt (which shapes the persona), a workflow
- * is ENFORCED doctrine — the harness injects it every turn with imperative
- * language and the user's choice persists per conversation.
- *
- * If the user has not picked one, the harness injects the DEFAULT workflow
- * (frontend-first) so an agent run is never without a working doctrine.
- */
+
 
 export interface AgentWorkflow {
   id: string;
-  /** Selector label. */
+  
   label: string;
-  /** One-line hint under the label in the selector. */
+  
   hint: string;
-  /** The injected doctrine text. */
+  
   content: string;
 }
 
-/**
- * FRONTEND-FIRST WORKFLOW (default) — the Outside-In doctrine, derived from
- * the "Moriko Harness Engineering Governance / Mandatory Frontend-First
- * (Outside-In) Workflow" document. Phased stage-gating: UI first, contract
- * second, backend third, integration fourth — backend write access stays
- * locked until the UI is visually proven.
- */
+
 const FRONTEND_FIRST = [
   'WORKFLOW: FRONTEND-FIRST (OUTSIDE-IN) — the governing working doctrine for this session. It is BINDING: every UI-related task you execute must follow this sequence, and skipping a phase is a protocol violation even when the task looks simple.',
   '',
@@ -55,13 +38,10 @@ const FRONTEND_FIRST = [
   '4. Definition of done: the UI renders correctly in the real browser AND (when backend exists) the integration preserves the Phase I visuals exactly.',
 ].join('\n');
 
-/** Workflow selected when the user has not chosen one. */
+
 export const DEFAULT_WORKFLOW_ID = 'frontend-first';
 
-/**
- * The catalog. Shown in the settings selector; the server injects the chosen
- * content each agent turn.
- */
+
 export const AGENT_WORKFLOWS: AgentWorkflow[] = [
   {
     id: 'frontend-first',
@@ -71,7 +51,7 @@ export const AGENT_WORKFLOWS: AgentWorkflow[] = [
   },
 ];
 
-/** Resolve a settings value to a workflow; unknown/empty → default. */
+
 export function resolveWorkflow(id: string | undefined | null): AgentWorkflow {
   return AGENT_WORKFLOWS.find((workflow) => workflow.id === id) ?? AGENT_WORKFLOWS[0];
 }

@@ -20,19 +20,18 @@ import { gateToolImages, imageCapableFor, separateImageParts, IMAGE_OMITTED_NOTE
 import { ToolBuildTracker } from './toolCallProgress.js';
 import {
   createLoopGuard,
-  estimateTokensFromChars,
   executeCalls,
   prepareTools,
   toolCallSignature,
   wrapUpInstruction,
   type LoopStopReason,
 } from '../mcp/loop.js';
-import { createContextMeter, type ContextMeter } from '../mcp/contextMeter.js';
+import { createContextMeter, createTurnUsageAccumulator, type ContextMeter, type RoundUsageInput } from '../mcp/contextMeter.js';
 
-/** Marks the END of a reusable prefix (Anthropic prompt caching). */
+
 type CacheControl = { type: 'ephemeral' };
 
-/** Anthropic content blocks this adapter can produce from generic parts. */
+
 type AnthropicBlock =
   | { type: 'text'; text: string; cache_control?: CacheControl }
   | { type: 'image'; source: { type: 'base64'; media_type: string; data: string }; cache_control?: CacheControl }
@@ -41,17 +40,13 @@ type AnthropicBlock =
   | {
       type: 'tool_result';
       tool_use_id: string;
-      /** String, or blocks when the result carries inline images (native vision). */
+      
       content: string | Array<AnthropicBlock>;
       is_error?: boolean;
       cache_control?: CacheControl;
     };
 
-/**
- * Tool-result content blocks: the text is authoritative; image parts from a
- * rebuilt tool message (read_file native vision) ride as base64 image blocks.
- * Unparseable data URLs are skipped — the text still lands.
- */
+
 function toolResultBlocks(parts: Exclude<ChatMessage['content'], string | null>): AnthropicBlock[] {
   const blocks: AnthropicBlock[] = [];
   for (const part of parts) {
@@ -67,11 +62,7 @@ function toolResultBlocks(parts: Exclude<ChatMessage['content'], string | null>)
   return blocks;
 }
 
-/**
- * Maps a generic message content into Anthropic blocks: images and PDFs have
- * native blocks; audio/video have none, so they degrade to a text note (the
- * model is told the file existed but cannot read it).
- */
+
 function toAnthropicContent(content: ChatMessage['content']): string | AnthropicBlock[] {
   if (content === null) return '';
   if (typeof content === 'string') return content;
@@ -82,7 +73,6 @@ function toAnthropicContent(content: ChatMessage['content']): string | Anthropic
       continue;
     }
     if (part.type === 'video_url') {
-      // Anthropic has no video block — say so instead of sending nothing.
       blocks.push({ type: 'text', text: '[Attachment not readable by this provider: video]' });
       continue;
     }
@@ -101,27 +91,10 @@ function toAnthropicContent(content: ChatMessage['content']): string | Anthropic
   return blocks.length > 0 ? blocks : '';
 }
 
-/**
- * PROMPT CACHING (5A).
- *
- * Anthropic re-bills the instruction prefix on every request unless a
- * breakpoint marks where the reusable region ends. Three are placed (the API
- * allows four):
- *   1. end of the STABLE system prompt — caches the tool schemas + base rules,
- *   2. end of the previous message,
- *   3. end of the last message.
- *
- * 2 and 3 are what make a tool loop cheap: every round re-sends the whole
- * conversation, and each round reads the prefix the previous one wrote.
- *
- * A gateway that does not implement `cache_control` answers 400. That is
- * detected once, the latch flips, and the request is retried WITHOUT
- * breakpoints — an incompatible endpoint costs one rejected call, not a chat.
- * Set MORIKO_DISABLE_PROMPT_CACHE=1 to skip breakpoints entirely.
- */
+
 let cacheControlSupported = process.env.MORIKO_DISABLE_PROMPT_CACHE !== '1';
 
-/** The API caps breakpoints at 4; one is spent on the system block. */
+
 const MESSAGE_CACHE_BREAKPOINTS = 2;
 
 function systemBlocks(
@@ -130,7 +103,6 @@ function systemBlocks(
 ): string | AnthropicBlock[] | undefined {
   const { stable, volatile } = buildSystemSegments(params);
   if (!stable && !volatile) return undefined;
-  // No stable prefix → nothing worth a breakpoint; keep the plain string form.
   if (!cache || !stable) return [stable, volatile].filter(Boolean).join('\n\n');
   const blocks: AnthropicBlock[] = [
     { type: 'text', text: stable, cache_control: { type: 'ephemeral' } },
@@ -139,7 +111,7 @@ function systemBlocks(
   return blocks;
 }
 
-/** Strips breakpoints from a previous round so they never accumulate past 4. */
+
 function clearMessageCache(
   convo: Array<{ role: 'user' | 'assistant'; content: string | AnthropicBlock[] }>,
 ): void {
@@ -151,7 +123,7 @@ function clearMessageCache(
   }
 }
 
-/** Marks the conversation tail: the previous message and the last one. */
+
 function markMessageCache(
   convo: Array<{ role: 'user' | 'assistant'; content: string | AnthropicBlock[] }>,
 ): void {
@@ -167,14 +139,13 @@ function markMessageCache(
       continue;
     }
     const last = message.content[message.content.length - 1];
-    // tool_use blocks cannot carry cache_control; fall back to the message before.
     if (!last || last.type === 'tool_use') continue;
     last.cache_control = { type: 'ephemeral' };
     marked += 1;
   }
 }
 
-/** Maps the UI thinking level onto Anthropic's `thinking.budget_tokens`. */
+
 function thinkingConfig(
   level: StreamParams['settings']['thinkingLevel'],
   model: string,
@@ -184,23 +155,11 @@ function thinkingConfig(
   return budget === undefined ? undefined : { type: 'enabled', budget_tokens: budget };
 }
 
-/**
- * Anthropic Messages adapter.
- *
- * Note on temperature: extended thinking requires `temperature` to stay at its
- * default, so the value is omitted whenever thinking is enabled rather than
- * sending something the API will reject.
- *
- * Use MCP: `tools` carry the aggregated MCP defs; `tool_use` blocks trigger
- * execution and a `tool_result` user message continues the loop.
- */
+
 export async function streamAnthropic(params: StreamParams, onEvent: StreamHandler): Promise<void> {
   const { baseUrl, apiKey, model, messages, settings, signal } = params;
   const thinking = thinkingConfig(settings.thinkingLevel, model, baseUrl);
-  /**
-   * THE PER-SECOND METER: prices the exact request with the SHARED estimator,
-   * then grows the buckets from every streamed delta.
-   */
+  
   const meter: ContextMeter = createContextMeter({
     systemInstruction: '',
     systemSegments: [],
@@ -211,7 +170,6 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
     const { stable, volatile } = buildSystemSegments(params);
     meter.addSystemSegments([stable, volatile].filter(Boolean).join('\n\n'));
   }
-  // Anthropic's tool messages are user-role frames: re-price them into `tools`.
   meter.repriceToolMessages(messages.filter((message) => message.role === 'tool').length);
 
   const prepared = await prepareTools(settings, (tools) =>
@@ -291,9 +249,9 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
 
   const guard = createLoopGuard(params.contextLimit, params.compactGuard);
   let forcedStop: LoopStopReason | null = null;
-  /** In-run compaction handoff: the run resumes after the client compacts. */
+  
   let compactRequested = false;
-  /** One lifecycle for the whole run: block ids stay stable across rounds. */
+  
   const reasoningBlocks = createReasoningBlockEmitter(onEvent);
 
   if (prepared.count > 0 && prepared.defs) {
@@ -302,29 +260,22 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
     meter.addToolChars(defsChars);
   }
 
-  /** Summed across tool rounds — MUST share the cadence of sumCacheReadTokens. */
-  let sumPromptTokens = 0;
-  let sumCompletionTokens = 0;
-  let sumBilledTokens = 0;
-  let sumCacheReadTokens = 0;
-  let sawAnyUsage = false;
+  
+  const usageAcc = createTurnUsageAccumulator();
   const flushUsage = (): void => {
-    if (!sawAnyUsage) return;
-    onEvent({
-      type: 'usage',
-      promptTokens: sumPromptTokens > 0 ? sumPromptTokens : undefined,
-      completionTokens: sumCompletionTokens,
-      totalTokens: sumBilledTokens,
-      cacheReadTokens: sumCacheReadTokens > 0 ? sumCacheReadTokens : undefined,
-    });
+    usageAcc.flush(onEvent, meter);
   };
 
   const frozen = params.settings.trust?.outputFrozen === true;
   let choiceMade = false;
+  
+  const freeze = {
+    continueCount: params.settings.trust?.continueCount ?? 0,
+    continueSeized: params.settings.trust?.continueSeized === true,
+    lastReasoning: '',
+  };
 
-  /** One POST to the Messages endpoint — the body differs only by caching.
-   *  Accepts the streaming-phase signal (idle-bound) so silence aborts the
-   *  connection, not just a user Stop. */
+  
   const post = (payload: Record<string, unknown>, fetchSignal: AbortSignal): Promise<Response> =>
     fetch(`${baseUrl.replace(/\/+$/, '')}/messages`, {
       method: 'POST',
@@ -338,12 +289,17 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
     });
 
   for (;;) {
+    if (signal?.aborted) {
+      if (meter.hasUsage()) meter.flush(onEvent);
+      flushUsage();
+      onEvent({ type: 'done', finishReason: 'aborted' });
+      return;
+    }
     const streamIdle = idle(signal, STREAM_IDLE_MS, 'STREAM_IDLE');
     try {
     const useTools = prepared.count > 0 && !forcedStop;
 
     const buildBody = (cache: boolean): Record<string, unknown> => {
-      // Breakpoints are re-placed every round; never let them accumulate.
       clearMessageCache(convo);
       if (cache) markMessageCache(convo);
       const system = systemBlocks(params, cache);
@@ -379,11 +335,9 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
     if (!response.ok && cache) {
       const detail = await response.text().catch(() => '');
       if (/cache_control/i.test(detail)) {
-        // Endpoint does not implement breakpoints: latch off, retry clean.
         cacheControlSupported = false;
         response = await post(buildBody(false), streamIdle.signal);
       } else {
-        // Any other failure: hand assertOk the exact body it would have read.
         await assertOk(new Response(detail, { status: response.status }), 'Anthropic');
       }
     }
@@ -412,7 +366,7 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
       number,
       { id: string; name: string; arguments: string; opened: boolean }
     >();
-    /** LIVE ASSEMBLY — same contract as the OpenAI adapter (Chuze port). */
+    
     const buildTracker = new ToolBuildTracker();
 
     for await (const payload of iterateSse(response.body, () => streamIdle.reset())) {
@@ -445,8 +399,6 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
           if (delta?.type === 'thinking_delta') {
             const thinking = coerceText(delta.thinking);
             if (thinking) {
-              // The native thinking channel: verbatim, never split by a tag the
-              // model happens to write inside its own thought.
               meter.addReasoningChars(thinking.length);
               meter.maybeEmit(onEvent);
               const routed = scrubThinkingFragment(thinking, nativeScrub);
@@ -458,7 +410,6 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
             if (block) {
               const partial = coerceText(delta.partial_json);
               if (partial) block.arguments += partial;
-              // Publish the growing payload: first fragment forces the frame.
               const isFirst = !buildTracker.sawAnyFragment;
               buildTracker.ingest(event.index, isFirst ? block.name : '', partial ?? '');
               buildTracker.maybeEmit(onEvent, isFirst);
@@ -468,7 +419,11 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
             if (textDelta) {
               reasoningBlocks.end();
               const scrubbed = scrubThinkingFragment(textDelta, contentScrub);
-              if (scrubbed.reasoning) reasoningBlocks.push(scrubbed.reasoning);
+              if (scrubbed.reasoning) {
+                meter.addReasoningChars(scrubbed.reasoning.length);
+                meter.maybeEmit(onEvent);
+                reasoningBlocks.push(scrubbed.reasoning);
+              }
               if (scrubbed.text) {
                 text += scrubbed.text;
                 meter.addOutputChars(scrubbed.text.length);
@@ -497,29 +452,45 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
     }
 
     const nativeTail = flushNativeReasoning(nativeScrub);
-    if (nativeTail) reasoningBlocks.push(nativeTail);
+    if (nativeTail) {
+      meter.addReasoningChars(nativeTail.length);
+      reasoningBlocks.push(nativeTail);
+    }
     reasoningBlocks.end();
     const contentTail = flushThinkingScrub(contentScrub);
     if (contentTail) {
       text += contentTail;
+      meter.addOutputChars(contentTail.length);
       onEvent({ type: 'text', delta: contentTail });
     }
 
-    if (usage) {
-      sawAnyUsage = true;
-      const cacheRead = usage.cache_read_input_tokens ?? 0;
-      const cacheWrite = usage.cache_creation_input_tokens ?? 0;
-      // ratio computed against it exceed 100% (the "281% cache" bug).
-      if (usage.input_tokens !== undefined) {
-        sumPromptTokens += usage.input_tokens + cacheRead + cacheWrite;
-      }
-      sumCompletionTokens += usage.output_tokens ?? 0;
-      sumBilledTokens += (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
-      sumCacheReadTokens += cacheRead;
-    }
+    const roundUsage: RoundUsageInput | undefined = usage
+      ? {
+          promptTokens:
+            (usage.input_tokens ?? 0) +
+            (usage.cache_read_input_tokens ?? 0) +
+            (usage.cache_creation_input_tokens ?? 0),
+          completionTokens: usage.output_tokens ?? 0,
+          totalTokens:
+            (usage.input_tokens ?? 0) +
+            (usage.cache_read_input_tokens ?? 0) +
+            (usage.cache_creation_input_tokens ?? 0) +
+            (usage.output_tokens ?? 0),
+          cacheReadTokens: usage.cache_read_input_tokens ?? 0,
+        }
+      : undefined;
+
+    const anthropicBilled = usage ? (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0) : undefined;
 
     const pendingCalls = [...toolBlocks.values()].filter((block) => block.opened && block.name);
     if (stopReason !== 'tool_use' || pendingCalls.length === 0) {
+      if (roundUsage) {
+        guard.record([], roundUsage, 0);
+        meter.recordUsage(roundUsage);
+        usageAcc.record(roundUsage, anthropicBilled);
+        onEvent({ type: 'context_telemetry', ...guard.telemetry() });
+        meter.flush(onEvent);
+      }
       flushUsage();
       onEvent({ type: 'done', finishReason: forcedStop ?? (stopReason ?? 'end_turn') });
       return;
@@ -536,18 +507,24 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
       }
       assistantBlocks.push({ type: 'tool_use', id: block.id, name: block.name, input });
     }
-    // The tool CALLS the model just made ride the wire in `tools` too.
-    meter.addToolChars(
+    meter.addCompletionToolChars(
       assistantBlocks.reduce((sum, block) => (block.type === 'tool_use' ? sum + block.name.length + JSON.stringify(block.input).length : sum), 0),
     );
+    if (roundUsage) {
+      meter.recordUsage(roundUsage);
+      usageAcc.record(roundUsage, anthropicBilled);
+    }
+    meter.advanceRound({ keepReasoning: false });
     convo.push({ role: 'assistant', content: assistantBlocks });
 
     if (signal?.aborted) {
+      if (meter.hasUsage()) meter.flush(onEvent);
       flushUsage();
       onEvent({ type: 'done', finishReason: 'aborted' });
       return;
     }
 
+    freeze.lastReasoning = reasoningBlocks.lastBlockText;
     const executed = await executeCalls(
       pendingCalls.map((block) => ({ id: block.id, wireName: block.name, rawArgs: block.arguments })),
       prepared.byName,
@@ -555,7 +532,7 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
       onEvent,
       params.sessionId,
       params.settings.terminalMode ?? 'auto',
-      params.settings.confirmDeletes === true,
+      params.settings.confirmDeletes !== false,
       params.model,
       params.settings.enforcement?.level && params.settings.enforcement.level >= 3
         ? (params.settings.enforcement.level as 3 | 4 | 5)
@@ -564,6 +541,7 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
       params.settings.webAccess,
       params.capability,
       params.settings.trust?.level,
+      freeze,
     );
     for (const event of executed.events) {
       if (event.__streamed) continue;
@@ -573,14 +551,22 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
     if (frozen) {
       for (const event of executed.events) {
         if (event.type === 'tool_call' && event.toolName === 'harness_choice') {
-          choiceMade = true;
           try {
             const parsed = JSON.parse(event.args || '{}') as { choice?: string };
             if (parsed.choice === 'apologize') {
-              flushUsage();
-              onEvent({ type: 'done', finishReason: 'harness_stopped' });
-              return;
+              const result = executed.events.find(
+                (entry) => entry.type === 'tool_result' && entry.toolCallId === event.toolCallId,
+              );
+              if (result && result.type === 'tool_result' && result.ok) {
+                choiceMade = true;
+                if (meter.hasUsage()) meter.flush(onEvent);
+                flushUsage();
+                onEvent({ type: 'done', finishReason: 'harness_stopped' });
+                return;
+              }
+              continue;
             }
+            choiceMade = true;
           } catch {
           }
         }
@@ -613,33 +599,27 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
 
     guard.record(
       pendingCalls.map((block) => toolCallSignature(block.name, block.arguments)),
-      usage ? { promptTokens: usage.input_tokens, completionTokens: usage.output_tokens } : undefined,
-      estimateTokensFromChars(
-        executed.followUp.reduce((sum, output) => sum + String(output.text ?? '').length, 0),
-      ),
+      roundUsage,
+      0,
       executed.followUp.map((output) => ({
         wireName: output.wireName as string,
         errorCode: output.errorCode as string | undefined,
       })),
     );
-    // The round's tool outputs now ride the wire: price them into `tools`.
     meter.addToolChars(
       executed.followUp.reduce((sum, output) => sum + String(output.text ?? '').length, 0),
     );
-    meter.recordUsage(usage ? { promptTokens: usage.input_tokens, completionTokens: usage.output_tokens } : undefined);
     forcedStop = guard.stopReason();
 
-    // TELEMETRY: the guard's own arithmetic, so the chip cannot disagree.
     {
       const telemetry = guard.telemetry();
       onEvent({ type: 'context_telemetry', ...telemetry });
       meter.flush(onEvent);
       if (forcedStop === 'compact') {
-        const snap = meter.snapshot();
         onEvent({
           type: 'context_compaction_request',
-          liveContextTokens: snap.liveContextTokens,
-          contextLimit: null,
+          liveContextTokens: telemetry.liveContextTokens,
+          contextLimit: telemetry.contextLimit,
           trigger: 'context-limit',
         });
         forcedStop = null;
@@ -677,13 +657,16 @@ export async function streamAnthropic(params: StreamParams, onEvent: StreamHandl
     }
 
     convo.push({ role: 'user', content: resultBlocks });
-    // IN-RUN COMPACTION HANDOFF: end the stream, not the task.
     if (compactRequested) {
       flushUsage();
       meter.flush(onEvent);
       onEvent({ type: 'done', finishReason: 'context_compaction' });
       return;
     }
+    } catch (error) {
+      if (meter.hasUsage()) meter.flush(onEvent);
+      flushUsage();
+      throw error;
     } finally {
       streamIdle.clear();
     }

@@ -1,9 +1,4 @@
-/**
- * callAgentTool() — routes one `agent__*` wire call to its handler; never throws.
- *
- * The tool implementations live in the sibling modules; this file is the
- * single dispatch point the loop (mcp/loop.ts) and routes.ts call into.
- */
+
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { runPipeline, type PipelineCall } from '../pipeline.js';
 import { getAddonToolHandler } from '../../addons/registry.js';
@@ -17,6 +12,7 @@ import { editLinesTool } from './edit-lines.js';
 import { editBetweenTool } from './edit-between.js';
 import { insertAtLineTool } from './insertAtLine.js';
 import { writeTool } from './write.js';
+import { overwriteTool } from './overwrite.js';
 import { renameTool, moveTool, copyTool, deleteTool } from './transfer.js';
 import { goalCreateTool, goalUpdateTool, goalListTool } from './goals.js';
 import { todoCreateTool, todoUpdateTool, todoListTool, todoDeleteTool } from './todos.js';
@@ -54,9 +50,7 @@ import { toolByName } from './registry.js';
 import './registered.js';
 import { harnessReloadNow } from '../reload.js';
 
-/** Routes one `agent__*` wire call to its handler; never throws.
- *  The call goes through the tool pipeline (schema validation, audit) first —
- *  see pipeline.ts — so the switch below only sees well-formed calls. */
+
 export async function callAgentTool(
   wireName: string,
   args: Record<string, unknown>,
@@ -111,6 +105,8 @@ export async function callAgentTool(
         return await editDefaultTool(callArgs, callCtx);
       case 'write':
         return await writeTool(callArgs, callCtx);
+      case 'overwrite':
+        return await overwriteTool(callArgs, callCtx);
       case 'multi_edit':
         return await multiEditTool(callArgs, callCtx);
       case 'edit_lines':
@@ -346,7 +342,7 @@ export async function callAgentTool(
       case 'harness_choice':
         return await harnessChoiceTool(callArgs, callCtx);
       case 'addon_manage':
-        return await addonManageTool(callArgs as unknown as import('./addonManage.js').AddonManageArgs);
+        return await addonManageTool(callArgs as unknown as import('./addonManage.js').AddonManageArgs, callCtx);
       default: {
         const addonHandler = getAddonToolHandler(call.wireName);
         if (addonHandler) {

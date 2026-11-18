@@ -26,13 +26,13 @@ import { ImageLightbox } from './ImageLightbox';
 import { PillSelect } from './PillSelect';
 import { Tip, cx } from './ui';
 
-/** Matches the poll cadence in the store, for the status line only. */
+
 const IMAGE_GEN_POLL_S = 4;
 
-/** Reference slots offered while the model is NOT edit-capable (local tray). */
+
 const DEFAULT_TRAY_CAP = 4;
 
-/** Retention choices for temporary images, in days (0 = never auto-delete). */
+
 const RETENTION_OPTIONS = [
   { value: '0', label: 'Never' },
   { value: '1', label: '1 day' },
@@ -42,20 +42,20 @@ const RETENTION_OPTIONS = [
   { value: '30', label: '30 days' },
 ];
 
-/** Starter prompts from the design's empty state (.samples chips). */
+
 const SAMPLE_PROMPTS = [
   'pixel cat on a neon rooftop',
   'dreamy pastel clouds',
   'sunset dunes, minimal',
 ];
 
-/** Design tile aspect (--ar) from a "W:H" preset; anything else is square. */
+
 const ratioValue = (ratio: string): number => {
   const [w, h] = ratio.split(':').map(Number);
   return w > 0 && h > 0 ? w / h : 1;
 };
 
-/** Design's download filename: moriko-<prompt-slug>.jpg */
+
 const downloadImage = (url: string, prompt: string) => {
   const slug =
     prompt
@@ -69,17 +69,7 @@ const downloadImage = (url: string, prompt: string) => {
   anchor.click();
 };
 
-/**
- * Image Studio — a text-to-image playground for async generation APIs
- * (ModelScope's submit → poll → download pattern).
- *
- * Layout mirrors the chat workspace: results (or the hero empty state) scroll
- * above, the prompt sits in a docked composer at the bottom. Upload / edit
- * tools are ALWAYS available: files come in via picker, paste or drag & drop,
- * the client-side editor (crop / rotate / flip / resize) works for every
- * model, and whether references reach the provider is decided by the model's
- * capabilities (with a one-click switch to an edit model).
- */
+
 export function ImageStudio() {
   const showNotice = useStore((state) => state.showNotice);
   const providers = useStore((state) => state.providers);
@@ -110,7 +100,7 @@ export function ImageStudio() {
   const cancelImageGeneration = useStore((state) => state.cancelImageGeneration);
   const clearImageGenError = useStore((state) => state.clearImageGenError);
 
-  /** /image [prompt] pre-fill — the slash command set this before switching views. */
+  
   useEffect(() => {
     const wanted = useStore.getState().imageStudioPromptWanted;
     if (wanted !== null) {
@@ -118,24 +108,23 @@ export function ImageStudio() {
       useStore.getState().consumeImageStudioPromptRequest();
     }
   }, []);
-  /** Shared reference tray — lives in the store so the editor modal and the
-      results grid can feed it without prop drilling. */
+  
   const referenceImages = useStore((state) => state.imageReferences);
   const addImageReferences = useStore((state) => state.addImageReferences);
   const removeImageReference = useStore((state) => state.removeImageReference);
   const replaceImageReference = useStore((state) => state.replaceImageReference);
-  /** Bulk-cleanup mode: cards become toggles instead of lightbox openers. */
+  
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [lightbox, setLightbox] = useState<string | null>(null);
-  /** Client-side editor: which image (tray slot or generated result). */
+  
   const [editor, setEditor] = useState<{ src: string; index: number | null } | null>(null);
-  /** Drag & drop of image files anywhere over the studio. */
+  
   const [dragActive, setDragActive] = useState(false);
   const referenceInputRef = useRef<HTMLInputElement>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  /** Design .sform: shake target when Generate fires with an empty prompt. */
+  
   const sformRef = useRef<HTMLDivElement>(null);
 
   const provider = providers.find((entry) => entry.id === providerId);
@@ -145,19 +134,10 @@ export function ImageStudio() {
   const caps = provider?.imageCapabilities;
   const modelCaps = model ? caps?.models?.[model] : undefined;
   const isEditModel = modelCaps?.modes.includes('edit') ?? false;
-  /**
-   * ENDPOINT authority — what this provider's adapter can actually carry
-   * upstream (adapter.capabilities.maxReferences). This, not the HF tag,
-   * decides both the tray cap and whether references leave the client.
-   */
+  
   const endpointRefs = caps?.maxReferences ?? DEFAULT_TRAY_CAP;
   const canSendRefs = endpointRefs > 0;
-  /**
-   * Tray = what you may ATTACH. When the endpoint can't carry references the
-   * tray stays open (editing works for every model); when it can, the endpoint
-   * capacity is the ceiling — the server refuses over-cap requests loudly, so
-   * matching it here avoids a guaranteed 400.
-   */
+  
   const trayCap = canSendRefs ? Math.max(endpointRefs, 1) : DEFAULT_TRAY_CAP;
   const allowedModes = useMemo<ImageSizeMode[]>(() => allowedSizeModes(caps), [caps]);
   const effectiveMode: ImageSizeMode = allowedModes.includes(sizeMode) ? sizeMode : allowedModes[0];
@@ -176,8 +156,7 @@ export function ImageStudio() {
   const notSaved = sessionItems
     .map((item) => item.url)
     .filter((url) => !inGallery.has(url));
-  /** Hero while idle & empty; while generating, the Results grid takes over
-      so the pulsing skeleton + elapsed timer are visible (first image too). */
+  
   const showHero = sessionItems.length === 0 && !busy;
 
   useEffect(() => {
@@ -239,7 +218,7 @@ export function ImageStudio() {
     });
   };
 
-  /** Reads picked/pasted/dropped images into the tray, enforcing the cap. */
+  
   const addReferences = async (files: File[] | FileList | null): Promise<void> => {
     if (!files || files.length === 0) return;
     const loaded: string[] = [];
@@ -270,7 +249,7 @@ export function ImageStudio() {
     addImageReferences(loaded.slice(0, room));
   };
 
-  /** Generated result → reference tray (fetch → data URL, cap applies). */
+  
   const useAsReference = async (url: string): Promise<void> => {
     const room = trayCap - referenceImages.length;
     if (room <= 0) {
@@ -285,7 +264,7 @@ export function ImageStudio() {
     }
   };
 
-  /** Editor output: replaces the edited tray slot, or joins the tray. */
+  
   const applyEdit = (dataUrl: string): void => {
     if (editor && editor.index !== null) {
       replaceImageReference(editor.index, dataUrl);
@@ -300,8 +279,7 @@ export function ImageStudio() {
     showNotice('image.editApplied');
   };
 
-  /** Deletes temporary images (selected or all); the Gallery copy is protected
-   * server-side, so a "cleanup all" can never destroy permanent images. */
+  
   const runCleanup = async (options: { all?: boolean; urls?: string[] }) => {
     try {
       const result = await cleanupImages(options);
@@ -317,21 +295,19 @@ export function ImageStudio() {
     }
   };
 
-  /** Edit-only models need a reference; dual-mode ones (FLUX.2 klein/dev)
-      also generate from plain text, so an empty reference is fine. This is a
-      catalog HINT — it never blocks transmission, the endpoint does. */
+  
   const requiresReference = isEditModel && !modelCaps?.modes.includes('text-to-image');
   // NOTE: a catalog hint never BLOCKS Generate — blocking is the classifier
   const canGenerate = ready && !busy && !sizeInvalid;
 
-  /** Design .page-head subtitle: session stats, or the first-run hint. */
+  
   const studioSub = activeSession
     ? `${activeSession.items.length} image${activeSession.items.length === 1 ? '' : 's'} · ${new Date(activeSession.updatedAt).toLocaleDateString()}`
     : ready
       ? 'Describe an image, choose a size, then press Generate.'
       : 'Pick a provider and model in Configuration to start.';
 
-  /** Design topbar action: fresh prompt + no session (generation creates one). */
+  
   const newSession = () => {
     selectImageSession(null);
     setPrompt('');

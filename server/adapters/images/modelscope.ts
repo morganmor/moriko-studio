@@ -1,11 +1,4 @@
-/**
- * ModelScope async-task adapter — the reference implementation.
- *
- * Behavior moved verbatim from the former hardcoded routes in
- * `server/index.ts` (submit: `X-ModelScope-Async-Mode: true`, poll:
- * `X-ModelScope-Task-Type: image_generation`), so existing providers keep
- * working bit-for-bit.
- */
+
 
 import {
   ensureV1,

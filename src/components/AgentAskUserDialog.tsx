@@ -6,16 +6,7 @@ import { useStore } from '../store/useStore';
 import { fetchPendingAskUser, extendAgentQuestion } from '../lib/api';
 import { Modal } from './ui';
 
-/**
- * ASK-USER card — the agent paused to ask the user 1..N questions
- * (agent__ask_user). Each question renders as text input or clickable choice
- * options; unanswered rows can be skipped explicitly. The answers resume the
- * paused tool call on the server.
- *
- * Mirrors AgentPermissionDialog: not dismissible via Escape/backdrop (the
- * agent is blocked waiting), and an unanswered batch auto-skips after the
- * wait window.
- */
+
 export function AgentAskUserDialog() {
   const requests = useStore((state) => state.pendingAskUser);
   const submitAnswers = useStore((state) => state.submitAskUserAnswers);
@@ -23,16 +14,7 @@ export function AgentAskUserDialog() {
   const [selected, setSelected] = useState<Record<string, number>>({});
   const [submitting, setSubmitting] = useState(false);
 
-  /**
-   * C3 PERSISTENCE — the queue is SERVER-truth. The panel used to vanish on
-   * a tab switch: the SSE frames that carry ask_user_request/result were
-   * missed or replayed while hidden, and fetchPendingAskUser existed but was
-   * never wired. Now: on mount AND whenever the tab becomes visible again,
-   * reconcile against the server's pending list — a batch the server still
-   * waits on is restored, a settled one is dropped honestly. Requests that
-   * arrived DURING the fetch (newer than its start) are kept on top of the
-   * fetched list so the race can never eat a fresh ask.
-   */
+  
   useEffect(() => {
     let cancelled = false;
     const sync = async () => {
@@ -61,13 +43,7 @@ export function AgentAskUserDialog() {
     };
   }, []);
 
-  /**
-   * AUTO-SKIP PAUSE (C3) — the server's 10-min auto-skip cannot see browser
-   * visibility: a tab switch used to let the batch time out unseen and the
-   * panel vanished on return. While hidden, heartbeat each pending batch's
-   * deadline forward (5-min interval < 10-min window, so it never lapses).
-   * Visible tab: no heartbeat — ordinary behaviour, the clock runs normally.
-   */
+  
   useEffect(() => {
     if (requests.length === 0) return;
     let heartbeat: number | null = null;
@@ -122,14 +98,7 @@ export function AgentAskUserDialog() {
     }
   };
 
-  /**
-   * Closing the card (X / Escape / backdrop / Skip) is an explicit SKIP-ALL:
-   * the agent is paused waiting on this exact batch, so "just dismiss" must
-   * still unblock it — the tool call resumes with every question marked
-   * skipped and the model proceeds on stated assumptions. A bare
-   * `onClose={() => undefined}` here made the X button dead: the card could
-   * not be closed at all while the agent hung.
-   */
+  
   const skipAll = async () => {
     if (submitting) return;
     setSubmitting(true);

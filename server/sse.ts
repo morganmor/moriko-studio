@@ -10,52 +10,30 @@ export interface StreamParams {
   settings: ChatSettingsDTO;
   providerId: string;
   signal: AbortSignal;
-  /**
-   * Harness-injected system prompt blocks (agent tools, MCP tools, …). The
-   * route builds them once, streams each to the UI, and adapters append
-   * their content to the system message. Empty for plain chat.
-   */
+  
   harnessInjections: HarnessInjection[];
-  /** Conversation id — keys session-scoped harness state (goals). */
+  
   sessionId?: string;
-  /**
-   * The model's context window (tokens) — drives the tool loop's
-   * context-budget stop. Null/absent = unknown, budget stop off.
-   */
+  
   contextLimit?: number | null;
-  /**
-   * THE USER'S COMPACTION SETTINGS, handed to the loop guard.
-   *
-   * The guard must fire at the number the Configuration panel says, not at a
-   * hardcoded constant: a 0.85 server threshold against a 0.95 client dropdown
-   * made the server ask for compaction that the client's own `compactCandidate`
-   * still considered premature.
-   */
+  
   compactGuard?: {
     autoCompact: boolean;
     compactThresholdTokens: number | null;
     compactThresholdRatio: number;
-    /** Conversation id — keys the LIVE config registry (mid-run changes). */
+    maxContextTokens?: number | null;
+    
     conversationId?: string;
   };
-  /**
-   * THE RESOLVED 3-LAYER CAPABILITY of the running model (server/modelCapability).
-   * Adapters gate image parts on `capability.imageIn`; the tool loop reads the
-   * same object. Resolved ONCE per run by the route so every consumer inside
-   * this request agrees — no adapter re-derives it from a different source.
-   */
+  
   capability?: ResolvedModelCapability;
-  /**
-   * Attachment paths persisted THIS request (see server/attachments.ts),
-   * relative to the active workspace root. The agent-harness injection turns
-   * them into instructions the model can act on immediately.
-   */
+  
   attachmentPaths?: string[];
 }
 
 export type StreamHandler = (event: StreamEvent) => void;
 
-/** Raised for expected upstream failures so the route can emit a clean error event. */
+
 export class UpstreamError extends Error {
   readonly status: number;
   readonly detail?: string;
@@ -68,14 +46,7 @@ export class UpstreamError extends Error {
   }
 }
 
-/**
- * Reads a `text/event-stream` response and yields each `data:` payload.
- * Handles CRLF, multi-line data fields, and chunk boundaries that split an event.
- *
- * `onActivity` (when provided) is called on every `reader.read()` that returns
- * data — a sign-of-life that lets the caller's `idle()` silence-budget reset,
- * so a long-but-healthy stream is never killed while a stalled one is.
- */
+
 export async function* iterateSse(
   body: ReadableStream<Uint8Array>,
   onActivity?: () => void,
@@ -114,7 +85,7 @@ export async function* iterateSse(
   }
 }
 
-/** Turns a non-2xx upstream response into an UpstreamError with a readable detail. */
+
 export async function assertOk(response: Response, providerLabel: string): Promise<void> {
   if (response.ok) return;
 

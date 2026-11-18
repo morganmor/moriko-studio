@@ -1,7 +1,4 @@
-/**
- * Mod-to-mod API (Addon v2, A4) — `$.api.expose(name, impl)` / `$.api.use(id)`.
- * Minimal name-scoped registry; disposal is automatic with the addon scope.
- */
+
 
 const exposed = new Map<string, { addonId: string; name: string; impl: object }>();
 

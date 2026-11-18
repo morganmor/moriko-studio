@@ -9,7 +9,7 @@ import { platform } from 'node:os';
 const root = resolve(import.meta.dirname, '..');
 const destDir = join(root, '.esbuild');
 
-/** esbuild JS version + package dir as seen FROM one host (tsx / vite). */
+
 function hostEsbuild(host) {
   const rootRequire = createRequire(join(root, 'package.json'));
   const hostPkg = rootRequire.resolve(`${host}/package.json`);
@@ -20,7 +20,7 @@ function hostEsbuild(host) {
   };
 }
 
-/** The platform binary for ONE exact esbuild version (never another's). */
+
 function binaryForVersion(esbuildPkg, version) {
   try {
     const exe = createRequire(esbuildPkg).resolve('@esbuild/win32-x64/esbuild.exe');
@@ -33,7 +33,7 @@ function binaryForVersion(esbuildPkg, version) {
   return existsSync(storeExe) ? storeExe : null;
 }
 
-/** Stages one binary per side; exe is null when native resolution is fine. */
+
 export function ensureEsbuildCopies() {
   const out = { server: null, web: null };
   if (platform() !== 'win32') {

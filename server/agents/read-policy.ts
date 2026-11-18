@@ -5,61 +5,25 @@ import path from 'node:path';
 import { atomicWriteJson } from '../atomicWrite.js';
 import { readStateDir } from '../paths.js';
 
-/**
- * READ-BEFORE-EDIT POLICY — MULTI-SESSION ENFORCEMENT.
- *
- * The harness refuses a WRITE (edit_file / apply_patch / vault_restore) to a
- * file the model has not READ in its CURRENT context. Editing blind is the
- * number-one cause of botched anchors and clobbered content; the refusal
- * message points back to agent__read_file.
- *
- * Three stores, one invariant — "the model's view is the file's truth":
- *
- *  1. Per-session receipts (`<session>.json`): what the model actually read,
- *     with the line window it saw (union, monotonic) and the read revision
- *     quoted in read_file footers.
- *  2. The GLOBAL fs-ledger (`fs-ledger.json`): every write from ANY session
- *     advances the file's revision (gRev). A receipt whose gRev lags the
- *     ledger is VOID — a write in another session (or another branch of this
- *     one) always forces a re-read, even when bytes+mtime round-trip back.
- *  3. Context identity (`<session>.ctx.json`): the client sends a context id
- *     that changes whenever the model's context is rebuilt (regenerate, new
- *     chat, model switch, post-compaction). A changed id clears ALL receipts
- *     of the session — ghost receipts from an earlier sitting never edit.
- *
- * FAIL CLOSED when there is no session key: untracked callers cannot edit.
- * Sessions that never read anything cost nothing: every store is lazy.
- */
+
 
 const STORE_DIR = readStateDir;
 
 export interface ReadEntry {
-  /** Content hash at read time — detects external modification. */
+  
   hash: string;
-  /** mtime at read time (ms). A changed mtime invalidates the read. */
+  
   mtime: number;
-  /**
-   * Global write-revision of the file AT RECORD TIME (fs-ledger). Any write —
-   * by ANY session — advances the ledger; a stale gRev voids this receipt
-   * even when the bytes + mtime round-trip back. Multi-session enforcement.
-   */
+  
   gRev: number;
-  /** Line range the model actually saw (for a sharper refusal message). */
+  
   fromLine: number;
   toLine: number;
-  /**
-   * PRECISE multi-interval read receipt: the exact line spans the model
-   * actually saw in this session, merged (mergeLineIntervals) across reads.
-   * Empty/absent = legacy single-window entry; fromLine..toLine is the base.
-   */
+  
   intervals?: LineInterval[];
-  /**
-   * Per-file revision for this session — bumped on every successful write.
-   * Surfaced in read_file's footer (`read#N`) so the model can tell when the
-   * file it holds is stale relative to its own last edit.
-   */
+  
   rev: number;
-  /** Which operation last touched this entry — drives list "touched" statuses. */
+  
   lastOp: 'read' | 'write';
 }
 
@@ -68,7 +32,7 @@ export interface LineInterval {
   to: number;
 }
 
-/** Merges overlapping/adjacent line intervals into a sorted, disjoint set. */
+
 export function mergeLineIntervals(intervals: LineInterval[]): LineInterval[] {
   const valid = intervals.filter((iv) => Number.isFinite(iv.from) && Number.isFinite(iv.to) && iv.to >= iv.from);
   if (valid.length <= 1) return valid.map((i) => ({ ...i }));
@@ -86,11 +50,7 @@ export function mergeLineIntervals(intervals: LineInterval[]): LineInterval[] {
   return merged;
 }
 
-/**
- * True when [targetFrom, targetTo] lies FULLY inside the read receipt.
- * Multi-interval entries are checked per interval; legacy entries fall back
- * to the single fromLine..toLine window.
- */
+
 export function isRangeCoveredByReadEntry(
   entry: { fromLine: number; toLine: number; intervals?: LineInterval[] } | undefined,
   targetFrom: number,
@@ -104,11 +64,7 @@ export function isRangeCoveredByReadEntry(
   return targetFrom >= entry.fromLine && targetTo <= entry.toLine;
 }
 
-/**
- * True when an insertion point (insert_at_line) touches at least one read
- * interval (or sits right at its open lower edge = same gap the model has
- * seen). Insert-only enforcement is softer than edit enforcement on purpose.
- */
+
 export function isInsertionPointCovered(
   entry: { fromLine: number; toLine: number; intervals?: LineInterval[] } | undefined,
   insertAt: number,
@@ -121,11 +77,7 @@ export function isInsertionPointCovered(
   return insertAt >= entry.fromLine && insertAt <= entry.toLine + 1;
 }
 
-/**
- * Shifts existing read intervals after an edit at `editStartLine` that
- * replaced `oldSpanLines` lines with `newSpanLines` lines, marks the edited
- * span as read (the model wrote it), and merges the result.
- */
+
 export function shiftIntervalsForEdit(
   existing: LineInterval[] | undefined,
   fallbackFrom: number,
@@ -163,7 +115,7 @@ export function shiftIntervalsForEdit(
   return mergeLineIntervals(shifted);
 }
 
-/** Formats a receipt's covered lines for the out-of-range refusal message. */
+
 export function formatReadIntervals(
   entry: { fromLine: number; toLine: number; intervals?: LineInterval[] },
 ): string {
@@ -174,7 +126,7 @@ export function formatReadIntervals(
   return `${entry.fromLine}–${entry.toLine}`;
 }
 
-/** Parses persisted intervals defensively; falls back to the legacy window. */
+
 function parseIntervals(
   raw: unknown,
   fallbackFrom: number,
@@ -193,7 +145,7 @@ function parseIntervals(
   return [{ from: fallbackFrom, to: fallbackTo }];
 }
 
-/** session -> path -> entry. Loaded lazily, written through on change. */
+
 const sessions = new Map<string, Map<string, ReadEntry>>();
 const loaded = new Set<string>();
 
@@ -201,7 +153,7 @@ interface LedgerEntry {
   gRev: number;
   hash: string;
   mtime: number;
-  /** Which session performed the write ('' for sessionless callers). */
+  
   session: string;
   at: number;
 }
@@ -244,7 +196,7 @@ function persistLedger(): void {
   }
 }
 
-/** Current global write-revision of a file (0 = never written by this harness). */
+
 export function ledgerRevOf(absolute: string): number {
   return loadLedger().get(absolute)?.gRev ?? 0;
 }
@@ -255,12 +207,7 @@ function contextFile(session: string): string {
   return path.join(STORE_DIR, `${session}.ctx.json`);
 }
 
-/**
- * Adopts the client's context id for this session. When the id DIFFERS from
- * the previous one, all receipts of the session are cleared (they belong to
- * a context the model no longer sits in). Idempotent within one sitting.
- * Returns true when receipts were cleared.
- */
+
 export function syncSessionContext(session: string | undefined, contextId: string | undefined): boolean {
   if (!session || !contextId) return false;
   let current = contextIds.get(session);
@@ -339,16 +286,7 @@ function persist(session: string): void {
   }
 }
 
-/**
- * Records that the model read `absolute` (content + range). Called by
- * readFileTool on every successful read.
- *
- * UNION READ WINDOW: successive reads MERGE their line ranges instead of
- * overwriting them. Reading lines 1–400 then 401–800 leaves the window as
- * 1–800, so an edit anchored at line 150 (already seen) is NOT refused.
- * The only writer of a full-file window is recordAfterWrite (it sets
- * 1..MAX_SAFE_INTEGER, which union preserves trivially).
- */
+
 export function recordRead(
   session: string | undefined,
   absolute: string,
@@ -407,11 +345,7 @@ export function recordRead(
   return entry;
 }
 
-/**
- * True when the model has a CURRENT read of `absolute` in this session:
- * recorded, and the file has not changed on disk since (mtime + hash).
- * Callers pass the current content so the hash check is exact.
- */
+
 export function hasCurrentRead(
   session: string | undefined,
   absolute: string,
@@ -427,13 +361,7 @@ export function hasCurrentRead(
   return entry.hash === createHash('sha256').update(currentContent).digest('hex');
 }
 
-/**
- * Refreshes the read state after a successful write: the model knows exactly
- * what it just wrote, so the new content counts as "read". This keeps a
- * follow-up edit (or a vault_restore to the same path) frictionless — the
- * entry is UPDATED, not deleted, so the chain read → edit → restore never
- * trips the policy.
- */
+
 export function recordAfterWrite(
   session: string | undefined,
   absolute: string,
@@ -490,7 +418,7 @@ export function recordAfterWrite(
   void invalidateDepsGraphInline(absolute);
 }
 
-/** Fire-and-forget invalidation — avoids circular import at module scope. */
+
 function invalidateSearchIndexInline(absolute: string): void {
   try {
     const ws = owningWorkspaceInline(absolute);
@@ -503,12 +431,7 @@ function invalidateSearchIndexInline(absolute: string): void {
   }
 }
 
-/**
- * The workspace that OWNS the touched file — resolved from the file's own
- * path, not from the "active" selection. With per-session workspaces several
- * roots may be live at once, and the invalidation must hit the index of the
- * root the write actually landed in.
- */
+
 function owningWorkspaceInline(absolute: string): string | null {
   try {
     const { listWorkspaces, isInsideRoot, addonsSrcRoot } = require('./workspace.js') as typeof import('./workspace.js');
@@ -523,7 +446,7 @@ function owningWorkspaceInline(absolute: string): string | null {
   }
 }
 
-/** Same fire-and-forget pattern for the import graph (5 s TTL cache). */
+
 function invalidateDepsGraphInline(_absolute: string): void {
   try {
     const ws = owningWorkspaceInline(_absolute);
@@ -546,7 +469,7 @@ export interface FsChangeEvent {
   hashAfter?: string;
 }
 
-/** Public fs.change entry for delete/rename/copy sites (path = ABSOLUTE). */
+
 export function recordFsChange(event: FsChangeEvent): void {
   queueFsChange(event);
 }
@@ -574,10 +497,7 @@ function queueFsChange(event: FsChangeEvent): void {
   fsChangeTimer.unref?.();
 }
 
-/**
- * All read entries of a session (copies), keyed by absolute path — the data
- * source for `agent__list mode: "touched"` (session footprint).
- */
+
 export function listSessionEntries(
   session: string | undefined,
 ): Array<{ absolute: string; entry: ReadEntry }> {
@@ -588,11 +508,7 @@ export function listSessionEntries(
   }));
 }
 
-/**
- * The active read entry for a path, if any. Callers (edit_file) use it to
- * enforce the line-range the model actually saw and to quote the read
- * revision in refusal messages.
- */
+
 export function getReadEntry(
   session: string | undefined,
   absolute: string,
@@ -601,26 +517,15 @@ export function getReadEntry(
   return load(session).get(absolute);
 }
 
-/**
- * RENDERED-SCOPE MEMORY — the automatic "unchanged" short-circuit.
- *
- * A read_file call is often repeated with the SAME arguments: the model forgot
- * it already looked, or it is being careful. Re-rendering that window buys
- * nothing and costs context, so read_file answers with a stub instead — the
- * model no longer has to remember to send lastHash.
- *
- * Deliberately in-memory and deliberately NOT a receipt: after a restart the
- * map is empty and the next read simply renders (correct, just less cheap).
- * The read-before-edit gate above stays the only authority for editing.
- */
+
 export interface RenderedScope {
-  /** Deterministic signature of the request (mode + window + options). */
+  
   key: string;
-  /** Full sha256 of the content at render time. */
+  
   hash: string;
-  /** Session read revision quoted in the footer at render time. */
+  
   rev: number;
-  /** ms epoch of the render. */
+  
   at: number;
 }
 
@@ -649,17 +554,7 @@ export function getRenderedScope(
   return renderedScopes.get(scopeSlot(session, absolute));
 }
 
-/**
- * STRUCTURAL-READ MEMORY (fold-first enforcement, soft).
- *
- * A fold/outline/read_all call MAps a file structurally (signature tree or
- * symbol map). readFileTool window mode consults this: a partial, top-anchored
- * window read of a file that was never mapped this session gets a one-line
- * fold-first hint. Once mapped, the hint stops. Deliberately in-memory (a
- * cross-restart lapse only re-shows a harmless hint) and deliberately NOT
- * stored as a ReadEntry — fold is not a read receipt and must never satisfy
- * the read-before-edit gate.
- */
+
 const structural = new Map<string, Set<string>>();
 
 export function markStructuralRead(session: string | undefined, absolute: string): void {
@@ -677,9 +572,7 @@ export function hasStructuralRead(session: string | undefined, absolute: string)
   return structural.get(session)?.has(absolute) ?? false;
 }
 
-/**
- * The refusal the model sees when it tries to edit blind.
- */
+
 export function readRequiredMessage(relative: string): string {
   return (
     `Read-before-edit policy: "${relative}" has not been read in this conversation. ` +
@@ -688,11 +581,7 @@ export function readRequiredMessage(relative: string): string {
   );
 }
 
-/**
- * The refusal when the file changed on disk after the model's read
- * (external modification). Quotes the read revision so the model can
- * compare against its own last-known state.
- */
+
 export function staleReadMessage(relative: string, readRev: number): string {
   return (
     `Stale read: "${relative}" was modified after your read #${readRev} — ` +
@@ -703,11 +592,7 @@ export function staleReadMessage(relative: string, readRev: number): string {
   );
 }
 
-/**
- * The refusal when the edit's anchor lies outside the line range the model
- * actually read. `entry` (optional) enables the precise multi-interval label
- * — without it the legacy single-window label is shown.
- */
+
 export function outOfRangeMessage(
   relative: string,
   fromLine: number,
@@ -724,11 +609,7 @@ export function outOfRangeMessage(
   );
 }
 
-/**
- * The refusal when a line-RANGE edit (editLines) targets lines outside the
- * window the model actually read. `entry` (optional) switches to the precise
- * multi-interval label.
- */
+
 export function outOfRangeLinesMessage(
   relative: string,
   from: number,

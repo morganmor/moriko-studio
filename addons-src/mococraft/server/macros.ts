@@ -1,7 +1,4 @@
-/**
- * Mococraft asymmetry library (Layout Mutator).
- * Non-template macrostructures to replace the 3-column / bento default.
- */
+
 
 export const MACROSTRUCTURES: Array<{ id: string; name: string; sketch: string; css: string }> = [
   {

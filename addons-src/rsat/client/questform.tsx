@@ -1,7 +1,4 @@
-/**
- * RSA/T quest form — create quest dari Quest board (RSAT.txt butir 1).
- * Form inline pixel-style; ID/no ditetapkan server (rpc createAchievement).
- */
+
 import { useState } from 'react';
 import { tr } from './shared.tsx';
 import { Ic } from './icon.tsx';

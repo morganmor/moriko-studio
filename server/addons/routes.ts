@@ -1,4 +1,4 @@
-/** Addon HTTP routes — list, toggle, reload, commands, widgets. */
+
 
 import { Router } from 'express';
 import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
@@ -64,8 +64,7 @@ export const addonRouter = () => {
     res.json({ addons: entries });
   });
 
-  /** v2 (A2): consent decisions — grant all pending permissions or revoke one.
-   *  Granting re-attempts activation via reload. */
+  
   router.post('/:id/permissions', async (req, res) => {
     const id = req.params.id;
     const addon = getAddon(id);
@@ -97,8 +96,7 @@ export const addonRouter = () => {
     res.json({ commands: cmds });
   });
 
-  /** Run a registered slash command: emits "command.run" through the addon
-   *  hook chain — a handler that answers with { text } short-circuits it. */
+  
   router.post('/commands/run', async (req, res) => {
     const name = typeof req.body?.name === 'string' ? req.body.name : '';
     const args = typeof req.body?.args === 'string' ? req.body.args : '';
@@ -124,8 +122,7 @@ export const addonRouter = () => {
     res.json({ widgets: ws.map((w) => ({ addonId: w.addonId, site: w.site, component: w.component, label: w.label })) });
   });
 
-  /** v2 (A4): views + statusItems (sidebar/Hub read these once at boot, then
-   *  follow SSE addon.status / addon.registry frames). */
+  
   router.get('/views', (_req, res) => {
     res.json({ views: listViews().map((v) => ({ ...v })) });
   });
@@ -134,8 +131,7 @@ export const addonRouter = () => {
     res.json({ status: listStatusItems() });
   });
 
-  /** Which addons get a TopBar launch button — a user/agent-editable
-   *  whitelist persisted in ~/.moriko-studio/topbar-addons.json. */
+  
   router.get('/topbar-buttons', (_req, res) => {
     res.json({ addons: listTopbarAddons() });
   });
@@ -144,7 +140,7 @@ export const addonRouter = () => {
     res.json({ addons: setTopbarAddons((req.body as { addons?: unknown } | undefined)?.addons) });
   });
 
-  /** v2 (A4): settings — read all (defaults filled) or set one. */
+  
   router.get('/:id/settings', (req, res) => {
     const addon = getAddon(req.params.id);
     if (!addon) return res.status(404).json({ error: 'Addon not found' });
@@ -170,7 +166,7 @@ export const addonRouter = () => {
     }
   });
 
-  /** v2 (A4): addon UI RPC — actor is always the user. */
+  
   router.post('/:id/rpc/:name', async (req, res) => {
     const handler = getRpcHandler(req.params.id, req.params.name);
     if (!handler) return res.status(404).json({ error: `Unknown RPC "${req.params.name}"` });
@@ -186,7 +182,7 @@ export const addonRouter = () => {
     }
   });
 
-  /** v2 (A4): per-addon log tail for the Hub's Logs tab. */
+  
   router.get('/:id/logs', (req, res) => {
     const addon = getAddon(req.params.id);
     if (!addon) return res.status(404).json({ error: 'Addon not found' });
@@ -194,10 +190,7 @@ export const addonRouter = () => {
     res.json({ logs: tailAddonLogs(req.params.id, limit) });
   });
 
-  /** v2 (A5): HOST SHIM — bare-import endpoints that re-export the ONE React
-   *  instance + host hooks from window.__MORIKO_HOST__ (src/addons/host.ts
-   *  installs it at boot). Two React instances break hooks; this guarantees
-   *  addon code and the app share one. */
+  
   const SHIM_FILES: Record<string, string> = {
     'react.js': [
       'const H = window.__MORIKO_HOST__;',
@@ -269,7 +262,7 @@ export const addonRouter = () => {
     res.send(file);
   });
 
-  /** v2 (A5): transpiled addon client modules + raw assets (css/font/svg). */
+  
   router.get('/:id/client/*', (req, res) => {
     const rel = req.path.slice(req.path.indexOf('/client/') + '/client/'.length);
     const assetExt = path.extname(rel.split('?')[0]).toLowerCase();
@@ -291,9 +284,7 @@ export const addonRouter = () => {
     res.send(result.js);
   });
 
-  /** SSE bus — realtime client push from addon bus.publish().
-   *  v2 (A7): `id:` lines + Last-Event-ID replay; `?topics=` filter;
-   *  `?scope=others` restores the v1 self-exclusion if ever needed. */
+  
   router.get('/events', (req, res) => {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',

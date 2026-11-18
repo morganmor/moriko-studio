@@ -1,9 +1,4 @@
-/**
- * Moco Canvas — studio panel styles (P0). Injected as a string (RSAT pattern).
- * Addon-owned: every selector is scoped under .mcv. Three themes, zero native title attributes.
- * Full Canvas Workspace: full-height canvas viewport, collapsible bottom readout tray,
- * right inspector dock, and live drag-drop overlays.
- */
+
 export const MCV_CSS = `
 .mcv{
   --mcv-canvas: oklch(97.5% 0.008 85);

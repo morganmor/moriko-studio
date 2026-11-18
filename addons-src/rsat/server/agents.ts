@@ -1,35 +1,18 @@
-/**
- * RSA/T agent registry — identitas persisten per workspace.
- * File: .moriko/rsat/agents.json
- *
- * Agent = "karakter": id unik (AG-001…), nama, logo (data URL), provider/model
- * (bisa di-swap tanpa ganti identitas), reasoning effort pilihan user, memory
- * terstruktur (fakta/keputusan/alasan — BUKAN transkrip), dan activeSessionId
- * (binding sesi chat → klaim). Dua instance model sama = dua agent berbeda.
- *
- * PENTING: lookup (agentBySession / findAgent) memindai SEMUA workspace
- * terdaftar. Klaim/guard/ledger berjalan di sesi agent yang workspace-nya bisa
- * berbeda dari workspace papan — identitas tidak boleh hilang karena itu.
- *
- * API key provider TIDAK disimpan di sini — tetap di konfigurasi host;
- * record hanya menyimpan providerId + model (label wire, bukan rahasia).
- */
+
 import { workspaceOf, appendEventFrom, DIR, PRD_FILE } from './store.js';
 
 const FILE = `${DIR}/agents.json`;
-/** PER-WORKSPACE MEMORY (ADR 0001): <board>/.moriko/rsat/agent-memory.json.
- *  Identitas agent tetap lintas-workspace (agents.json); catatan kerja per
- *  workspace supaya proyek A tidak menimpa proyek B. */
+
 const MEMORY_FILE = `${DIR}/agent-memory.json`;
 const KINDS = new Set(['fact', 'decision', 'reason']);
-/** Ladder reasoning effort (ThinkingLevel host). '' = ikut setelan percakapan. */
+
 const EFFORTS = new Set(['', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 
-/** root → cached agents list. */
+
 const caches = new Map();
-/** sessionId → agent record (indeks GLOBAL lintas workspace). */
+
 const sessionIndex = new Map();
-/** Throttle prime: pemindaian ulang paling cepat tiap 1,5 detik. */
+
 let lastPrime = 0;
 
 function normMemory(m) {
@@ -56,7 +39,7 @@ function normAgent(a) {
   };
 }
 
-/** Root yang mungkin menyimpan registry: registered + pin papan + sesi ini. */
+
 function rootsOf(api, sessionId) {
   const out = new Set();
   try { for (const w of api.workspace.listRegistered?.() ?? []) out.add(w.path); } catch {  }
@@ -66,12 +49,12 @@ function rootsOf(api, sessionId) {
   return [...out];
 }
 
-/** Root workspace untuk sesi ini (papan mandiri → pin, else binding sesi). */
+
 function safeRoot(api, sessionId) {
   try { return workspaceOf(api, sessionId).root(); } catch { return null; }
 }
 
-/** Baca registry satu root (cached; file rusak → list kosong). */
+
 function readRoot(api, root) {
   if (!root) return [];
   if (caches.has(root)) return caches.get(root);
@@ -85,7 +68,7 @@ function readRoot(api, root) {
   return clean;
 }
 
-/** Bangun ulang indeks sesi→agent dari SEMUA root (murah: list sudah cached). */
+
 function primeIndex(api, sessionId) {
   const now = Date.now();
   if (sessionIndex.size > 0 && now - lastPrime < 1500) return;
@@ -98,13 +81,13 @@ function primeIndex(api, sessionId) {
   }
 }
 
-/** Roster untuk papan (workspace sesi ini). */
+
 export function loadAgents(api, sessionId) {
   primeIndex(api, sessionId);
   return readRoot(api, safeRoot(api, sessionId));
 }
 
-/** Cari agent di SEMUA root — identitas ditemukan walau workspace beda. */
+
 function findAgent(api, id, sessionId) {
   for (const root of rootsOf(api, sessionId)) {
     const list = readRoot(api, root);
@@ -114,7 +97,7 @@ function findAgent(api, id, sessionId) {
   return null;
 }
 
-/** Simpan registry ke root pemiliknya + audit + bus frame (roster live). */
+
 async function saveAgentsTo(api, root, list, actor, event) {
   if (!root) throw new Error('No workspace for the agent registry yet.');
   const clean = list.map(normAgent).filter((a) => a.id && a.name);
@@ -129,9 +112,7 @@ async function saveAgentsTo(api, root, list, actor, event) {
   return clean;
 }
 
-/** Root papan: workspace yang SUDAH punya state RSAT (registry atau PRD).
- *  Sesi yang belum punya binding workspace jatuh ke workspace aktif global —
- *  agent baru tidak boleh mendarat di sana kalau papan hidup di tempat lain. */
+
 function boardRoot(api, sessionId) {
   const own = safeRoot(api, sessionId);
   if (own && hasBoardState(api, own)) return own;
@@ -148,7 +129,7 @@ function hasBoardState(api, root) {
   } catch { return false; }
 }
 
-/** ID berikutnya berdasarkan nomor terbesar yang ada (AG-014 → AG-015). */
+
 function nextId(agents) {
   const max = agents.reduce((m, a) => {
     const n = Number(/^AG-(\d+)$/.exec(a.id)?.[1] ?? 0);
@@ -157,7 +138,7 @@ function nextId(agents) {
   return `AG-${String(max + 1).padStart(3, '0')}`;
 }
 
-/** USER-only: buat agent baru (identitas + provider/model + effort + catatan). */
+
 export async function createAgent(api, sessionId, actor, fields) {
   const root = boardRoot(api, sessionId);
   if (!root) throw new Error('No workspace for the agent registry yet.');
@@ -181,7 +162,7 @@ export async function createAgent(api, sessionId, actor, fields) {
   return rec;
 }
 
-/** USER-only: edit agent — identitas/memory tetap, provider/model/effort bisa diganti. */
+
 export async function updateAgent(api, sessionId, actor, id, fields) {
   const found = findAgent(api, id, sessionId);
   if (!found) throw new Error(`Agent "${id}" not found.`);
@@ -198,7 +179,7 @@ export async function updateAgent(api, sessionId, actor, id, fields) {
   return rec;
 }
 
-/** USER-only: hapus agent (klaim aktifnya dilepas reaper/board). */
+
 export async function deleteAgent(api, sessionId, actor, id) {
   const found = findAgent(api, id, sessionId);
   if (!found) throw new Error(`Agent "${id}" not found.`);
@@ -208,7 +189,7 @@ export async function deleteAgent(api, sessionId, actor, id) {
   return { deleted: true };
 }
 
-/** Binding sesi chat → agent (dispatch quest): klaim/guard mengikat ke identitas. */
+
 export async function bindSession(api, sessionId, actor, agentId, conversationId) {
   const found = findAgent(api, agentId, sessionId);
   if (!found) throw new Error(`Agent "${agentId}" not found.`);
@@ -222,9 +203,7 @@ export async function bindSession(api, sessionId, actor, agentId, conversationId
   return { bound: rec.activeSessionId };
 }
 
-/** Agent record untuk sebuah harness session (identitas klaim), atau null.
- *  Indeks di-prime malas dari api — tool call agent sering datang sebelum
- *  panel roster pernah dibuka. */
+
 export function agentBySession(api, sessionId) {
   if (!sessionId) return null;
   const sid = String(sessionId);
@@ -234,10 +213,10 @@ export function agentBySession(api, sessionId) {
   return sessionIndex.get(sid) ?? null;
 }
 
-/** root → cached memory doc (agentId → entries). */
+
 const memoryCaches = new Map();
 
-/** Baca doc memory per-workspace (cached; file rusak → map kosong). */
+
 function readMemoryMap(api, root) {
   if (!root) return {};
   if (memoryCaches.has(root)) return memoryCaches.get(root);
@@ -253,16 +232,14 @@ function readMemoryMap(api, root) {
   return map;
 }
 
-/** Tulis doc memory per-workspace + update cache. */
+
 async function writeMemoryMap(api, root, map) {
   const ws = api.workspace.forPath(root);
   await ws.write(MEMORY_FILE, JSON.stringify({ rev: Date.now(), memory: map }, null, 2));
   memoryCaches.set(root, map);
 }
 
-/** Memory terstruktur agent pemilik sesi — PER-WORKSPACE (ADR 0001):
- *  baca dari file memory workspace papan; fallback ke inline legacy di
- *  agents.json (migrasi malas, tanpa data loss). */
+
 export function memoryOfSession(api, sessionId) {
   const rec = agentBySession(api, sessionId);
   if (!rec) return [];
@@ -275,9 +252,7 @@ export function memoryOfSession(api, sessionId) {
   return rec.memory ?? [];
 }
 
-/** Agent menulis satu catatan terstruktur (rsat_remember) — mendarat di file
- *  memory workspace PAPAN (workspace tempat proyek ini hidup), bukan di root
- *  pemilik identitas, supaya kerja proyek B tidak menumpuk di registry A. */
+
 export async function addMemory(api, sessionId, actor, agentId, kind, text) {
   const rec = agentBySession(api, sessionId);
   const id = agentId || rec?.id;
@@ -302,8 +277,7 @@ export async function addMemory(api, sessionId, actor, agentId, kind, text) {
   return { id, memory: clean };
 }
 
-/** TTL reaper: klaim yang heartbeats-nya mati/melewati window → kembali available.
- *  Menjalankan untuk SEMUA workspace terdaftar — tugas tak pernah tersandera. */
+
 export async function reapStaleClaims(api) {
   const registered = api.workspace.listRegistered?.() ?? [];
   const { loadDocFrom, saveDocFrom } = await import('./store.js');

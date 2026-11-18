@@ -1,9 +1,4 @@
-/**
- * ports.ts — detect locally LISTENING TCP ports (candidates for the "web dev
- * port" that Mobile Watching tunnels to). Windows parses `netstat -ano -p tcp`,
- * POSIX falls back to `ss -ltn`. Known harness ports get labels; the internal
- * proxy port is excluded from the candidate list.
- */
+
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -15,7 +10,7 @@ export interface ListeningPort {
   pid?: number;
 }
 
-/** Ports the harness owns — labeled so the user knows what they pick. */
+
 const KNOWN: Record<number, string> = {
   5588: 'Moriko web (Vite)',
   5178: 'Moriko web (Vite, legacy)',
@@ -23,10 +18,10 @@ const KNOWN: Record<number, string> = {
   8826: 'Moriko proxy (internal)',
 };
 
-/** Never offered as a tunnel target. */
+
 const EXCLUDED = new Set([8826, 8791]);
 
-/** Preferred default when it is actually listening. */
+
 export const PREFERRED_PORT = 5588;
 
 async function listRaw(): Promise<{ port: number; pid?: number }[]> {
@@ -56,7 +51,7 @@ async function listRaw(): Promise<{ port: number; pid?: number }[]> {
   return out;
 }
 
-/** Unique, annotated listening ports — preferred candidate first. */
+
 export async function listListeningPorts(): Promise<ListeningPort[]> {
   const raw = await listRaw();
   const byPort = new Map<number, ListeningPort>();

@@ -1,9 +1,4 @@
-/**
- * F5.3 — shader_check: compile GLSL (via headless Chromium WebGL) or WGSL
- * (via WebGPU when available) and report errors mapped to file lines.
- * Optional three.js ShaderMaterial prelude so three shaders pass without
- * their injected uniforms. Browser instance reused for ~60 s.
- */
+
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AgentToolContext, HarnessToolResult } from './shared.js';
@@ -11,7 +6,7 @@ import { str, truncateOutput, resolveWithPermission } from './shared.js';
 import { getReusableBrowser } from '../spatial-runtime.js';
 import { defineTool } from './registry.js';
 
-/** Browser-side GLSL compile check (runs as a string inside the page). */
+
 const GLSL_CHECK_FN = `function (src, isVertex) {
   const canvas = document.createElement('canvas');
   const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
@@ -34,7 +29,7 @@ const GLSL_CHECK_FN = `function (src, isVertex) {
   return { ok: false, backend: 'webgl', errors, renderer };
 }`;
 
-/** Browser-side WGSL compile check (async; runs as a string inside the page). */
+
 const WGSL_CHECK_FN = `async function (src) {
   const nav = navigator;
   if (!nav.gpu) return { ok: false, backend: 'no-webgpu', errors: [{ line: 0, message: 'WebGPU not available headless' }] };
@@ -52,7 +47,7 @@ const WGSL_CHECK_FN = `async function (src) {
   }
 }`;
 
-/** three.js ShaderMaterial built-ins (vertex + fragment merged; unused = ok). */
+
 const THREE_PRELUDE_VERT = `
 precision highp float; precision highp int;
 uniform mat4 modelMatrix; uniform mat4 modelViewMatrix; uniform mat4 projectionMatrix;
@@ -68,10 +63,9 @@ uniform mat4 viewMatrix; uniform vec3 cameraPosition;
 uniform bool isOrthographic;
 `;
 
-/** Shared probe-browser cache lives in spatial-runtime.ts (sliding 60 s TTL) —
- *  game_probe and shader_check reuse the SAME instance, one cold launch. */
 
-/** Extract shader source from a .ts/.js template literal via exportName. */
+
+
 function extractInlineShader(content: string, exportName: string): string | null {
   const re = new RegExp(`(?:const|let|var)\\s+${exportName}\\s*=\\s*\`([\\s\\S]*?)\``);
   const m = content.match(re);

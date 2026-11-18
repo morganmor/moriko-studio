@@ -1,8 +1,4 @@
-/**
- * RSA/T LangGate — layar pemilihan bahasa (RSAT.txt butir 0).
- * Papan tertutup sampai user MEMILIH bahasa: default English, bahasa lokal
- * hanya aktif lewat persetujuan eksplisit (tombol Bahasa Indonesia).
- */
+
 import { Spr, sa } from './sprites.tsx';
 
 export default function LangGate({ onPick }: { onPick: (lang: string) => void }) {

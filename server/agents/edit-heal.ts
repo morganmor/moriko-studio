@@ -1,49 +1,21 @@
-/**
- * edit-heal.ts — post-edit self-repair shared by EVERY edit tool.
- *
- * Runs BEFORE the syntax guard, on the content an edit is about to write:
- *
- *  1. DUPLICATE / SEAM OVERLAP (1-5 lines)
- *     - a block the edit repeated inside the written region is removed;
- *     - a 1-5 line overlap at the TOP or BOTTOM seam of the edit region
- *       (the model re-typed the anchor lines) is removed.
- *     Only duplication that is NEW (not already present in the original file)
- *     and only statement-like blocks are touched, so legitimate repeated data
- *     (array values, blank lines, bare `}`) is never destroyed.
- *
- *  2. DELIMITER AUTO-HEAL ( {}, (), [] )
- *     Scanning ignores strings, template literals and comments. When the file
- *     was BALANCED before the edit and the edit broke it at the boundary:
- *       - surplus closers near the region are deleted;
- *       - up to 3 missing `}` are re-added at the end of the region.
- *     Anything still unbalanced is reported with its exact line number.
- *
- *  3. SYNTAX + REDECLARATION
- *     JSON.parse / TypeScript parser diagnostics with line:col, plus duplicate
- *     block-scoped declarations (const/let, imports, classes) in the same
- *     scope. Functions/interfaces/type aliases are exempt (overloads and
- *     declaration merging are legal).
- *
- * Every automatic repair and every remaining problem is returned so the edit
- * tool can report it to the model immediately — no build/test round-trip.
- */
+
 import path from 'node:path';
 import * as ts from 'typescript';
 
 export interface HealOutcome {
-  /** Healed content — byte-identical to the input when nothing was repaired. */
+  
   content: string;
   changed: boolean;
-  /** Automatic repairs applied (each one names the line(s) it touched). */
+  
   repairs: string[];
-  /** Problems left for the model, each with its exact line number. */
+  
   warnings: string[];
 }
 
 const MAX_SEAM = 5;
 const MAX_REPAIRS = 3;
 
-/** Lines that carry no meaning on their own — never treated as duplicates. */
+
 const STRUCTURAL = /^(?:[)\]}]+[;,) ]*|\{|\}|else\s*\{?|\};?|<\/?[A-Za-z][\w.:-]*(?:\s[^>]*)?\/?>|\/>)$/;
 
 function isTrivialLine(line: string): boolean {
@@ -53,7 +25,7 @@ function isTrivialLine(line: string): boolean {
   return STRUCTURAL.test(trimmed);
 }
 
-/** A line worth treating as an accidentally repeated statement. */
+
 function isCodeStatement(line: string): boolean {
   const trimmed = line.trim();
   if (isTrivialLine(trimmed) || trimmed.length < 12) return false;
@@ -74,7 +46,7 @@ function clip(text: string, max = 70): string {
   return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
 }
 
-/** 0-based [start, end] window of lines the edit actually changed. */
+
 function changedWindow(beforeLines: string[], afterLines: string[]): { start: number; end: number } {
   const minLen = Math.min(beforeLines.length, afterLines.length);
   let prefix = 0;
@@ -108,7 +80,7 @@ function countBlock(lines: string[], block: string[]): number {
   return count;
 }
 
-/** Removes duplicated blocks the edit introduced; returns the cleaned lines. */
+
 function healDuplicates(beforeLines: string[], afterLines: string[], repairs: string[]): string[] {
   const lines = [...afterLines];
   if (lines.length === 0) return lines;
@@ -118,7 +90,6 @@ function healDuplicates(beforeLines: string[], afterLines: string[], repairs: st
 
   const remove = (from: number, count: number, block: string[], why: string): boolean => {
     if (count <= 0 || from < 0 || from + count > lines.length) return false;
-    // Only duplication the edit INTRODUCED — never a pre-existing repetition.
     if (countBlock(beforeLines, block) >= countBlock(lines, block)) return false;
     lines.splice(from, count);
     const span = count > 1 ? `L${from + 1}–L${from + count}` : `L${from + 1}`;
@@ -126,7 +97,6 @@ function healDuplicates(beforeLines: string[], afterLines: string[], repairs: st
     return true;
   };
 
-  // 1) Overlap with the block directly ABOVE the edited region.
   for (let k = Math.min(MAX_SEAM, start, lines.length - start); k >= 1; k -= 1) {
     const above = lines.slice(start - k, start);
     const head = lines.slice(start, start + k);
@@ -138,7 +108,6 @@ function healDuplicates(beforeLines: string[], afterLines: string[], repairs: st
     }
   }
 
-  // 2) Overlap with the block directly BELOW the edited region.
   for (let k = Math.min(MAX_SEAM, end + 1, lines.length - end - 1); k >= 1; k -= 1) {
     const tail = lines.slice(end - k + 1, end + 1);
     const below = lines.slice(end + 1, end + 1 + k);
@@ -150,7 +119,6 @@ function healDuplicates(beforeLines: string[], afterLines: string[], repairs: st
     }
   }
 
-  // 3) Blocks repeated back-to-back INSIDE the written region.
   for (let i = start; i <= end && i < lines.length; i += 1) {
     for (let k = 1; k <= MAX_SEAM; k += 1) {
       if (i + 2 * k > lines.length) break;
@@ -183,10 +151,7 @@ const REGEX_PREFIX_KEYWORDS = new Set([
 
 const COND_PAREN_KEYWORDS = new Set(['if', 'while', 'for', 'with', 'catch']);
 
-/**
- * Consume `/pattern/flags` on a single line when valid; returns the index
- * immediately past the trailing flags, or -1 when `/` is not a RegExp literal.
- */
+
 function consumeRegexLiteral(text: string, slashIndex: number): number {
   let j = slashIndex + 1;
   if (j >= text.length || text[j] === '\n' || text[j] === '\r' || text[j] === '/' || text[j] === '*') {
@@ -221,11 +186,7 @@ function consumeRegexLiteral(text: string, slashIndex: number): number {
   return -1;
 }
 
-/**
- * Delimiter scanner — ignores strings, RegExp literals (including `[...]`
- * character classes and escapes), template literals (including nested `${…}`
- * interpolations) and both comment forms.
- */
+
 function scanDelimiters(text: string): DelimScan {
   const stack: Array<{ ch: string; line: number; afterCond?: boolean }> = [];
   const extra: Array<{ ch: string; line: number }> = [];
@@ -407,26 +368,13 @@ function scanDelimiters(text: string): DelimScan {
     i += 1;
   }
 
-  // Interpolation sentinels are not real delimiters — never report them.
   const unclosed = stack
     .filter((entry) => entry.ch !== '${')
     .map((entry) => ({ ch: entry.ch, line: entry.line }));
   return { extra, unclosed };
 }
 
-/**
- * Restores delimiter balance when an edit broke an otherwise balanced file.
- *
- * REMOVAL ONLY. Deleting a genuinely duplicated closer is recoverable — a
- * syntax error is reported and the model fixes it. INVENTING a closer is not:
- * the scanner cannot see inside every literal, and appending a brace to a file
- * that was already correct silently changes the program. So a missing closer
- * is reported with its line number and left for the model to place.
- *
- * A surplus closer is only removed when it stands ALONE on its line — a brace
- * sharing a line with code may be a character inside a string or template
- * literal, and deleting that would corrupt real content.
- */
+
 function healDelimiters(
   beforeText: string,
   lines: string[],
@@ -436,7 +384,6 @@ function healDelimiters(
 ): string[] {
   const before = scanDelimiters(beforeText);
   if (before.extra.length > 0 || before.unclosed.length > 0) {
-    // The file was already unbalanced — do not guess, only report the edit's own.
     const after = scanDelimiters(lines.join('\n'));
     reportRemaining(after, window, warnings);
     return lines;
@@ -466,7 +413,7 @@ function healDelimiters(
   return lines;
 }
 
-/** Reports only what still matters — unclosed/mismatched delimiters by line. */
+
 function reportRemaining(scan: DelimScan, window: { start: number; end: number }, warnings: string[]): void {
   for (const entry of scan.unclosed.slice(0, MAX_REPAIRS)) {
     const inEdit = entry.line - 1 >= window.start - MAX_SEAM && entry.line - 1 <= window.end + MAX_SEAM;
@@ -481,7 +428,7 @@ function reportRemaining(scan: DelimScan, window: { start: number; end: number }
 
 const CODE_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']);
 
-/** Fast in-memory syntax + duplicate-declaration analysis with line numbers. */
+
 function analyzeCode(absolute: string, content: string): { syntax: string[]; redecl: string[] } {
   const ext = path.extname(absolute).toLowerCase();
   const normalized = content.replace(/\r\n/g, '\n');
@@ -537,11 +484,7 @@ function analyzeCode(absolute: string, content: string): { syntax: string[]; red
   return { syntax, redecl: findRedeclarations(sourceFile) };
 }
 
-/**
- * Duplicate declarations in the SAME scope. Block-scoped bindings only
- * (const/let, imports, classes) — `var`, functions, interfaces and type
- * aliases are exempt because redeclaration/merging is legal there.
- */
+
 function findRedeclarations(sourceFile: ts.SourceFile): string[] {
   const scopes: ts.Node[] = [sourceFile];
   const collect = (node: ts.Node): void => {
@@ -594,22 +537,13 @@ function findRedeclarations(sourceFile: ts.SourceFile): string[] {
   return problems;
 }
 
-/**
- * Heals an edit about to be written. `before` is the file content prior to the
- * edit ('' for a brand-new file). Returns the content to write plus the notes
- * the edit tool must show the model.
- */
+
 export function healEditedContent(before: string, after: string, absolute: string): HealOutcome {
   const repairs: string[] = [];
   const warnings: string[] = [];
   const eol = after.includes('\r\n') ? '\r\n' : '\n';
   const hadTrailingNewline = /(?:\r\n|\n)$/.test(after);
 
-  // BRAND-NEW FILE (before === ''): the duplicate/seam heuristics are defined
-  // by before-vs-after. With no previous state there is no seam and no
-  // introduced duplication — countBlock([], block) is always 0, so the guard
-  // would pass and every legitimate repetition in the new content would be
-  // deleted as if the edit had repeated it. Detection only, never mutation.
   if (before.length === 0) {
     const analysis = analyzeCode(absolute, after);
     warnings.push(...analysis.syntax, ...analysis.redecl);
@@ -627,10 +561,6 @@ export function healEditedContent(before: string, after: string, absolute: strin
   const afterDupContent =
     repairs.length > 0 ? lines.join(eol) + (hadTrailingNewline ? eol : '') : after;
 
-  // For TS/JS/JSX/TSX code files: if the TypeScript AST parser already parses
-  // the candidate with 0 syntax errors, the delimiters are provably balanced —
-  // NEVER mutate lines with `healDelimiters` and NEVER emit false-positive
-  // `unclosed` / `unmatched` delimiter warnings.
   if (CODE_EXTENSIONS.has(ext)) {
     const preAnalysis = analyzeCode(absolute, afterDupContent);
     if (preAnalysis.syntax.length === 0) {
@@ -661,7 +591,7 @@ export function healEditedContent(before: string, after: string, absolute: strin
   return { content: finalContent, changed, repairs, warnings };
 }
 
-/** Renders the heal report appended to an edit tool's result text. */
+
 export function formatHealNotes(outcome: HealOutcome): string {
   if (outcome.repairs.length === 0 && outcome.warnings.length === 0) return '';
   const blocks: string[] = [];

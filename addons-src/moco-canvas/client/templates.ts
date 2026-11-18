@@ -1,8 +1,4 @@
-/**
- * Moco Canvas — scene templates (P1).
- * A template is a plain scene factory: `new { template }` builds the doc, and
- * the log replay starts from the same function, so undo works across restarts.
- */
+
 
 import { BREAKPOINTS, dnaOf, type Scene, type SceneNode } from './scene.ts';
 
@@ -137,7 +133,7 @@ export function templateById(id: string): TemplateDef | null {
 
 export const DEFAULT_TEMPLATE = 'split-diptych';
 
-/** Build a fresh scene document from a template (or blank). */
+
 export function buildScene(docId: string, templateId = DEFAULT_TEMPLATE, dna = 'editorial'): Scene {
   const template = templateById(templateId) ?? templateById(DEFAULT_TEMPLATE)!;
   const dnaDef = dnaOf(dna);

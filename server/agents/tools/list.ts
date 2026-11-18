@@ -1,12 +1,4 @@
-/**
- * agent__list — list files and directories of a folder in the active workspace.
- *
- * Non-recursive by default; set recursive for a full tree (heavy folders like
- * node_modules are skipped). Supports: sizes (aggregate bytes per dir),
- * sort: "modified" (most recently changed first), git badges, maxEntries cap,
- * glob filter, and mode: "touched" (session footprint — everything this
- * conversation has read or edited, with live staleness).
- */
+
 import { readdirSync, statSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
@@ -119,8 +111,7 @@ export async function listTool(args: Record<string, unknown>, ctx: AgentToolCont
   const files: Array<{ path: string; size: number; mtime: number }> = [];
   let truncated = false;
 
-  /** Walk a directory subtree to compute aggregate bytes + file count.
-   *  Used when sizes=true — aggregate directory sizes. */
+  
   function subtreeStats(dir: string): { totalBytes: number; fileCount: number } {
     let totalBytes = 0;
     let fileCount = 0;
@@ -266,7 +257,7 @@ export async function listTool(args: Record<string, unknown>, ctx: AgentToolCont
   };
 }
 
-/** Collects candidate files under `root`, applying the caps and skip list. */
+
 export function walkFiles(root: string): { files: string[]; truncated: boolean } {
   const files: string[] = [];
   let truncated = false;

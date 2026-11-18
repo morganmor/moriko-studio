@@ -1,15 +1,4 @@
-/**
- * agent__glob — find files by glob pattern across the active workspace.
- *
- * A recursive file finder that returns PATHS ONLY (no directory listing,
- * no file contents). Unlike agent__list (which is folder-oriented and
- * interleaves dirs+files), this is a pure file-finder: give it a double-
- * star-slash-.test.ts pattern and get back every matching file path.
- *
- * Supports: multiple patterns (OR logic), subpath scoping, sort by "name"
- * or "modified", and a maxResults cap. Heavy dirs (node_modules, .git, …)
- * are always skipped.
- */
+
 import { statSync } from 'node:fs';
 import path from 'node:path';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';

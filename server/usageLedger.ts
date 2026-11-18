@@ -1,18 +1,4 @@
-/**
- * USAGE LEDGER — the persistent, per-provider token record.
- *
- * THE BUG THIS KILLS: the dashboard's "Tokens used" was summed from
- * conversation turns currently loaded in memory — a number that (a) vanished
- * whenever the user switched providers or cleared chats, (b) had no
- * per-provider attribution, and (c) could not answer "how many tokens in the
- * last 7 days?".
- *
- * Every live run's `usage` stream event lands here (fed from the turn
- * mirror, the same choke point that persists turns). Storage is ONE json
- * file in the app data root — append-in-memory, debounced atomic flush,
- * retention trimmed to ~13 months on write so the 12-month window is always
- * fully covered without unbounded growth.
- */
+
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -49,7 +35,7 @@ export interface UsageAggregate {
   totals: { requests: number; prompt: number; completion: number; total: number; cacheRead: number };
 }
 
-/** The canonical window selector — 1 day up to 12 months. */
+
 export const USAGE_WINDOWS: Record<string, number> = {
   '1d': 1 * 86_400_000,
   '3d': 3 * 86_400_000,
@@ -87,7 +73,7 @@ function flush(): void {
   }
 }
 
-/** Record one run's provider-reported usage. Never throws. */
+
 export function recordUsage(entry: Omit<UsageEntry, 'ts'>): void {
   try {
     const list = ensureLoaded();
@@ -98,7 +84,7 @@ export function recordUsage(entry: Omit<UsageEntry, 'ts'>): void {
   }
 }
 
-/** Aggregate the ledger over a window, grouped per provider. */
+
 export function aggregateUsage(windowKey: string): UsageAggregate {
   const list = ensureLoaded();
   const windowMs = USAGE_WINDOWS[windowKey] ?? USAGE_WINDOWS['30d'];
@@ -130,7 +116,7 @@ export function aggregateUsage(windowKey: string): UsageAggregate {
 }
 
 export interface DailyUsage {
-  /** Local calendar day, YYYY-MM-DD. */
+  
   date: string;
   requests: number;
   prompt: number;
@@ -145,12 +131,7 @@ function dayKey(date: Date): string {
   return `${date.getFullYear()}-${month}-${day}`;
 }
 
-/**
- * Per-calendar-day series over the window, oldest → newest, gaps zero-filled
- * — the dashboard's bar chart source. Long windows stay one row per day; the
- * client buckets them (week/month) so bars remain readable. Pass `providerIds`
- * to narrow the series to a checked provider subset (chart = headline).
- */
+
 export function dailyUsage(windowKey: string, providerIds?: string[]): DailyUsage[] {
   const list = ensureLoaded();
   const windowMs = USAGE_WINDOWS[windowKey] ?? USAGE_WINDOWS['30d'];

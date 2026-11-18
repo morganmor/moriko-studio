@@ -1,12 +1,4 @@
-/**
- * Moco Canvas — React export (P3, plan §8.2).
- *
- * One component per top-level frame, in JSX, mirroring the HTML compiler's
- * class hooks. Managed-region markers (`mcv:begin/end`, §8.3) wrap every
- * region so the agent can paste each one into a project file between them —
- * the agent does the actual file writing via agent__write (adopted decision
- * §19.4-3), keeping the vault, diagnostics, and the slop gate in force.
- */
+
 
 import { type Scene, type SceneNode } from '../client/scene.ts';
 
@@ -14,7 +6,6 @@ export const regionBegin = (doc: string, region: string, rev: number) =>
   `{/* mcv:begin ${doc}/${region} rev=${rev} */}`;
 export const regionEnd = (doc: string, region: string) => `{/* mcv:end ${doc}/${region} */}`;
 
-// ── React compile (mirror of compile.ts's HTML structure) ────────────────────
 
 const kebab = (id: string) => id.replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase();
 
@@ -69,23 +60,20 @@ function jsxNode(node: SceneNode, indent: string): string {
 export interface ReactExport {
   regions: Array<{ region: string; code: string }>;
   css: string;
-  /** runtime glue — a minimal renderer for the Mc* primitives */
+  
   runtime: string;
 }
 
-/** Compile a scene into per-frame React region code (no layout math here —
- *  layout lives in the CSS, ids drive the class hooks, mirroring compile.ts). */
+
 export function compileReact(scene: Scene, css: string): ReactExport {
   const list = scene.root.children ?? [];
   const regions = list.map((child) => ({
     region: child.id,
-    // The frame IS the region — render the node itself, no extra wrapper.
     code: jsxNode(child, ''),
   }));
   return { regions, css, runtime: MCV_RUNTIME };
 }
 
-// ── managed-region markers only (the agent writes files via agent__write) ────
 
 const MCV_RUNTIME = `// Moco Canvas runtime primitives — render the scene graph's compiled layout.
 // These are thin div wrappers; all geometry lives in the mcv stylesheet.
@@ -110,11 +98,6 @@ export function McPage(p: React.PropsWithChildren<Record<string, unknown>>) {
   return <div {...rest} className={\`mcv-page \${rest.className ?? ''}\`}>{children}</div>;
 }`;
 
-// ── P4: Tailwind export (plan §8.2, "opsional, hanya bila proyek user
-// memakai Tailwind") — the scene's px spacing scale (4..96, multiples of 4)
-// maps cleanly onto Tailwind spacing; responsive overrides become arbitrary
-// variants (max-[767px]:, min-[390px]:max-[767px]:). Colours stay token
-// references: the agent maps --mcv-* in the project's own CSS variables.
 
 const TAILWIND_SPACE: Record<string, string> = {
   $s1: '1', $s2: '2', $s3: '3', $s4: '4', $s5: '6', $s6: '8',
@@ -147,7 +130,6 @@ function twClass(node: SceneNode): string {
   if (node.style?.border) cls.push('border border-(--mcv-hairline)');
   if (node.style?.weight) cls.push(`font-[${node.style.weight}]`);
   if (node.maxWidth) cls.push(`max-w-[${node.maxWidth}]`);
-  // responsive overrides → arbitrary variants
   for (const [bp, spec] of Object.entries(node.responsive ?? {})) {
     const v = bpVariant[bp as keyof typeof bpVariant];
     if (!v) continue;
@@ -173,7 +155,6 @@ function twLayout(node: SceneNode): string {
     if (l.wrap) cls.push('flex-wrap');
     if (l.pad) cls.push(`p-${twSpace(l.pad, '4')}`);
   }
-  // responsive frame layout overrides
   for (const [bp, spec] of Object.entries(node.responsive ?? {})) {
     const v = bpVariant[bp as keyof typeof bpVariant];
     const rl = spec.layout;
@@ -203,11 +184,11 @@ function twNode(node: SceneNode, indent: string): string {
 
 export interface TailwindExport {
   regions: Array<{ region: string; code: string }>;
-  /** setup notes the agent must apply in the project (font/colour tokens) */
+  
   notes: string[];
 }
 
-/** P4: Tailwind-flavoured JSX per top-level frame (plan §8.2). */
+
 export function compileTailwind(scene: Scene): TailwindExport {
   const regions = (scene.root.children ?? []).map((child) => ({ region: child.id, code: twNode(child, '') }));
   const notes = [

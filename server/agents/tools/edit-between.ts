@@ -1,10 +1,4 @@
-/**
- * agent__edit_between — replace everything between two UNIQUE anchors. The
- * region resolves to a line range and executes through replaceLineRange, so
- * the whole safe path (read-receipt, snapshot, syntax guard) applies
- * unchanged. start must match exactly once; end is the FIRST occurrence after
- * start (more than one after start -> refused with a pointer to edit_lines).
- */
+
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, bool, num } from './shared.js';
 import { diagnoseNoMatch, occurrenceLines } from '../edit-diagnostics.js';

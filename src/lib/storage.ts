@@ -1,84 +1,55 @@
-import type { Accent, Conversation, Density, FontFamily, ImageSizeMode, ProviderDraft, SavedPrompt, ThemeMode, ViewId } from '../types';
+import type {
+  Accent,
+  ChatSettings,
+  Conversation,
+  Density,
+  FontFamily,
+  ImageSizeMode,
+  ProviderDraft,
+  SavedPrompt,
+  ThemeMode,
+  ViewId,
+} from '../types';
 
-/** Left-sidebar collapsible sections — last user condition, device-persisted. */
+
 export interface SidebarSections {
   chat?: boolean;
   image?: boolean;
   workspace?: boolean;
   recent?: boolean;
-  /** Which workspace row is expanded (id), or null when all are collapsed. */
+  
   expanded?: string | null;
 }
 
-/** G5: a conversation's scroll anchor — the topmost visible turn + its offset. */
+
 export interface ViewAnchor {
   turnId: string;
-  /** Row top relative to the scroller's viewport top (px, may be negative). */
+  
   offset: number;
   savedAt: number;
 }
 
-/** Valid ViewId members — loadView rejects anything else from a stale file.
- *  Addon v2 (A6): `addon:<id>/<view>` opens addon-contributed sidebar views;
- *  `addons` opens the Addon Hub. */
+
 const VIEW_IDS: readonly ViewId[] = ['playground', 'history', 'imagehistory', 'gallery', 'dashboard', 'imagestudio', 'addons'];
 
 function isValidViewId(value: string): value is ViewId {
   return VIEW_IDS.includes(value as ViewId) || /^addon:[a-z0-9][a-z0-9-]*\/[\w.-]+$/.test(value);
 }
 
-/**
- * DEVICE STATE — THE BROWSER STORES NOTHING.
- *
- * Everything this module keeps used to live in localStorage: theme, zoom, font,
- * sidebar, saved prompts, the last provider/model, the active conversation and
- * Image Studio session, the client's run journal. That made every browser — and
- * every profile, and every incognito window — a separate universe: the same
- * account showed 2 chats in one browser and 7 in another, and some of that data
- * existed in exactly ONE place, the browser that typed it.
- *
- * The device (`~/.moriko`, see server/paths.ts) is now the only store. This
- * module is an in-memory VIEW of it:
- *
- *   bootUiState()  — ONE fetch at boot, before the first render, fills the view.
- *   read()         — synchronous read from that view (call sites unchanged).
- *   write()        — updates the view, marks the key dirty, schedules a patch.
- *   flushUiState() — sends ONLY the dirty keys (per-key merge, see uiState.ts),
- *                    so two tabs changing different preferences can never
- *                    revert each other.
- *
- * WHY IN-MEMORY + PATCH, not "read the file every time": every existing caller
- * reads synchronously during render (the store's initial state, the theme
- * effect, the composer). Keeping those call sites intact is what makes this
- * migration safe; the network work happens once at boot and once per quiet
- * window after a change.
- *
- * WHAT IS *NOT* HERE, DELIBERATELY:
- *  - sessionStorage (genRunning / streamIds): transient CONNECTION state, not
- *    user data. It describes what THIS TAB is attached to, dies with the tab,
- *    and is useless on disk. It is the one thing a browser is the right home
- *    for.
- *  - Conversations: also on the device, but they cannot ride this patch
- *    mechanism — a boot must not pull every multi-megabyte thread. They live in
- *    the store as summary shells with lazy bodies (see Conversation.turnsLoaded
- *    and `hydrateConversation`). What remains in this file is MIGRATION ONLY:
- *    `readLegacyConversations` / `clearLegacyConversations` hand a pre-existing
- *    browser cache to the device once, and erase it only after the device has
- *    acknowledged every record.
- */
 
-/** Device keys — must match the allowlist in server/uiState.ts. */
+
+
 const DEVICE_KEYS = {
   activeId: 'activeId',
   theme: 'theme',
-  /** Theme mechanism (design theme-mechanism + panel-settings). */
+  
   accent: 'accent',
   density: 'density',
   ambient: 'ambient',
   reduceMotion: 'reduceMotion',
   confirmDel: 'confirmDel',
   sidebar: 'sidebarCollapsed',
-  /** Resizable panel widths (px) — device-persisted like the collapse flags. */
+  
   sidebarWidth: 'sidebarWidth',
   settingsWidth: 'settingsWidth',
   defaults: 'defaults',
@@ -93,30 +64,26 @@ const DEVICE_KEYS = {
   jobRuns: 'jobRuns',
   treePanelOpen: 'treePanelOpen',
   treePanelGeometry: 'treePanelGeometry',
-  /** 6B: which panel lives in the right dock — Configuration or Tree. */
+  
   rightPanelMode: 'rightPanelMode',
-  /** Fase D: per-visual manual sizing map (keyed by visual id). */
+  
   visualGeometry: 'visualGeometry',
-  /** Dashboard usage preferences (aggregation window + folded providers). */
+  
   dashboardUsageWindow: 'dashboardUsageWindow',
   dashboardUsageProviders: 'dashboardUsageProviders',
-  /** Left-sidebar dropdown states — the user's last condition across reloads. */
+  
   sidebarSections: 'sidebarSections',
-  /** G1–G4: right-dock open flag, active view, diff dock width, diff turn scope. */
+  
   settingsOpen: 'settingsOpen',
   view: 'view',
   diffDockWidth: 'diffDockWidth',
   diffPanelTurnId: 'diffPanelTurnId',
-  /** G5: per-conversation scroll anchor — refresh reopens at the same turn. */
+  
   viewAnchors: 'viewAnchors',
+  pendingSettings: 'pendingSettings',
 } as const;
 
-/**
- * sessionStorage keys. The ONLY browser storage left, on purpose: a generation
- * in flight is SESSION state. It must survive a reload (so the badge keeps
- * showing and the client can re-attach the SSE) but it must NOT survive a full
- * close — a stream nobody reconnects to is already gone server-side.
- */
+
 const SESSION_KEYS = {
   genRunning: 'nova.genRunning.v1',
   genStartedAt: 'nova.genStartedAt.v1',
@@ -124,40 +91,27 @@ const SESSION_KEYS = {
   contextIds: 'nova.contextIds.v1',
 } as const;
 
-/**
- * THE LAST BROWSER KEY — read once, to hand to the device, then erased (see
- * readLegacyConversations / clearLegacyConversations). Nothing writes it any
- * more. Kept named so that any lingering browser storage stays greppable.
- */
+
 const BROWSER_CACHE_KEYS = {
   conversations: 'nova.conversations.v1',
 } as const;
 
 
 const DEVICE_ENDPOINT = '/api/ui-state';
-/** Coalesce a burst of preference changes into one patch. */
+
 const PUT_DEBOUNCE_MS = 400;
-/** P3: sustained writes still flush at least this often (max-wait cap). */
+
 const PUT_MAX_WAIT_MS = 2_000;
 
 let deviceState: Record<string, unknown> = {};
-/** Keys changed since the last successful patch — the only thing we send. */
+
 const dirtyKeys = new Set<string>();
 let putTimer: number | null = null;
-/** When the CURRENT burst began (trailing-debounce max-wait bookkeeping). */
+
 let putBurstStartedAt = 0;
 let deviceReachable = true;
 
-/**
- * Load the device's client state. Called ONCE from main.tsx, awaited before the
- * first render, so the first paint already carries the real theme/zoom instead
- * of flashing the defaults.
- *
- * A failure is NOT fatal and NOT silent: the session runs on in-memory defaults
- * and `uiStateReachable()` stays false so the UI can say so. There is no
- * browser copy to fall back to by design — pretending otherwise is how a user
- * ends up "saving" preferences that go nowhere.
- */
+
 export async function bootUiState(): Promise<void> {
   if (typeof window === 'undefined') return;
   try {
@@ -173,15 +127,12 @@ export async function bootUiState(): Promise<void> {
   }
 }
 
-/** False when boot could not reach the device (no fallback copy exists). */
+
 export function uiStateReachable(): boolean {
   return deviceReachable;
 }
 
-/**
- * The browser keys a previous version wrote, and where each one now lives on
- * the device. Kept as one list so adoption and cleanup can never disagree.
- */
+
 const LEGACY_BROWSER_KEYS: Array<[legacy: string, device: string]> = [
   ['nova.activeConversation.v1', DEVICE_KEYS.activeId],
   ['nova.theme.v1', DEVICE_KEYS.theme],
@@ -200,16 +151,10 @@ const LEGACY_BROWSER_KEYS: Array<[legacy: string, device: string]> = [
   ['dashboard.usage.window', DEVICE_KEYS.dashboardUsageWindow],
 ];
 
-/** The legacy key map, for the provider-key migration (see lib/providerKeys). */
+
 const LEGACY_PROVIDER_KEYS = 'nova.providerKeys.v1';
 
-/**
- * One-shot migration: adopt values a previous version left in localStorage.
- * Runs AFTER bootUiState, so a value the device already holds always wins and
- * this can only fill gaps. The browser keys are NOT deleted here — that waits
- * for the patch to be acknowledged (see flushUiState), because deleting first
- * would lose the value if the device were unreachable.
- */
+
 export function adoptLegacyBrowserState(): void {
   if (typeof window === 'undefined') return;
   let adopted = 0;
@@ -227,7 +172,7 @@ export function adoptLegacyBrowserState(): void {
   if (adopted > 0) scheduleFlush();
 }
 
-/** Drop the adopted browser keys. Only ever called once they are on the device. */
+
 function clearLegacyBrowserKeys(): void {
   if (typeof window === 'undefined') return;
   for (const [legacyKey] of LEGACY_BROWSER_KEYS) {
@@ -238,12 +183,7 @@ function clearLegacyBrowserKeys(): void {
   }
 }
 
-/**
- * The provider keys a previous version kept in the browser. READ ONLY — the
- * erase is a separate step (clearLegacyProviderKeys) because a key must never
- * be dropped from the only place that holds it before the device vault has
- * accepted it. A secret is the one thing here that cannot be re-derived.
- */
+
 export function readLegacyProviderKeys(): Record<string, string> {
   if (typeof window === 'undefined') return {};
   try {
@@ -261,7 +201,7 @@ export function readLegacyProviderKeys(): Record<string, string> {
   }
 }
 
-/** Erase the legacy browser key map. Only ever called once it is in the vault. */
+
 export function clearLegacyProviderKeys(): void {
   if (typeof window === 'undefined') return;
   try {
@@ -281,6 +221,17 @@ function write(key: string, value: unknown): void {
   scheduleFlush();
 }
 
+function writeImmediate(key: string, value: unknown): void {
+  deviceState[key] = value;
+  dirtyKeys.add(key);
+  if (putTimer !== null) {
+    window.clearTimeout(putTimer);
+    putTimer = null;
+  }
+  putBurstStartedAt = 0;
+  void flushUiState();
+}
+
 function scheduleFlush(): void {
   if (typeof window === 'undefined') return;
   const now = Date.now();
@@ -296,16 +247,12 @@ function scheduleFlush(): void {
   }, wait);
 }
 
-/**
- * Send the pending keys to the device. The patch carries ONLY what changed, so
- * a stale tab can never revert a preference another tab just set.
- */
+
 export async function flushUiState(): Promise<void> {
   if (typeof window === 'undefined') return;
   if (dirtyKeys.size === 0) return;
   const patch: Record<string, unknown> = {};
   for (const key of dirtyKeys) patch[key] = deviceState[key] ?? null;
-  const sent = [...dirtyKeys];
   try {
     const response = await fetch(DEVICE_ENDPOINT, {
       method: 'PUT',
@@ -313,19 +260,19 @@ export async function flushUiState(): Promise<void> {
       body: JSON.stringify({ patch }),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    for (const key of sent) dirtyKeys.delete(key);
+    for (const [key, sentValue] of Object.entries(patch)) {
+      const currentValue = deviceState[key] ?? null;
+      if (Object.is(currentValue, sentValue)) dirtyKeys.delete(key);
+    }
     deviceReachable = true;
     clearLegacyBrowserKeys();
+    if (dirtyKeys.size > 0) void flushUiState();
   } catch {
     deviceReachable = false;
   }
 }
 
-/**
- * UNLOAD-SAFE flush — `navigator.sendBeacon` survives the page teardown that
- * cancels a `fetch` fired from pagehide. Exit-moment saves (the scroll anchor)
- * MUST use this: a plain flushUiState() at unload can silently drop the write.
- */
+
 export function flushUiStateBeacon(): void {
   if (typeof window === 'undefined') return;
   if (dirtyKeys.size === 0) return;
@@ -381,12 +328,7 @@ function readBrowserCache<T>(key: string, fallback: T): T {
 }
 
 
-/**
- * The browser's conversation cache from before the device became the only
- * store. READ ONLY, and only until the migration has pushed it up: this was
- * the sole copy of those chats for any browser that had not synced them, so
- * dropping it before the device acknowledges them would lose them for good.
- */
+
 export function readLegacyConversations(): Conversation[] {
   if (typeof window === 'undefined') return [];
   return readBrowserCache<Conversation[]>(BROWSER_CACHE_KEYS.conversations, []).map(
@@ -394,7 +336,7 @@ export function readLegacyConversations(): Conversation[] {
   );
 }
 
-/** Erase the legacy cache. Only ever called once the device holds the records. */
+
 export function clearLegacyConversations(): void {
   if (typeof window === 'undefined') return;
   try {
@@ -403,12 +345,7 @@ export function clearLegacyConversations(): void {
   }
 }
 
-/**
- * Bring a record persisted by an older version up to the current settings
- * shape. Applied to the legacy browser cache on its way to the device, so a
- * thread written before (say) probation existed does not arrive with a hole
- * where the wire expects a value.
- */
+
 function normalizeStoredConversation(conversation: Conversation): Conversation {
   return {
     ...conversation,
@@ -424,7 +361,7 @@ function normalizeStoredConversation(conversation: Conversation): Conversation {
         agentMode: conversation.settings?.agentMode ?? false,
         agentWorkflow: conversation.settings?.agentWorkflow ?? '',
         terminalMode: conversation.settings?.terminalMode ?? 'auto',
-        confirmDeletes: conversation.settings?.confirmDeletes ?? false,
+        confirmDeletes: conversation.settings?.confirmDeletes ?? true,
         maxContextTokens: conversation.settings?.maxContextTokens ?? null,
         autoCompact: conversation.settings?.autoCompact ?? true,
         compactThresholdTokens: conversation.settings?.compactThresholdTokens ?? null,
@@ -446,7 +383,7 @@ function normalizeStoredConversation(conversation: Conversation): Conversation {
 
 export const storage = {
   loadActiveId: (): string | null => read<string | null>(DEVICE_KEYS.activeId, null),
-  saveActiveId: (id: string | null): void => write(DEVICE_KEYS.activeId, id),
+  saveActiveId: (id: string | null): void => writeImmediate(DEVICE_KEYS.activeId, id),
 
   loadTheme: (): ThemeMode => {
     const value = read<string>(DEVICE_KEYS.theme, 'dark');
@@ -454,7 +391,7 @@ export const storage = {
   },
   saveTheme: (theme: ThemeMode): void => write(DEVICE_KEYS.theme, theme),
 
-  /** Accent swatch driving --al/--ad via <html data-accent>. */
+  
   loadAccent: (): Accent => {
     const value = read<string>(DEVICE_KEYS.accent, 'ember');
     return value === 'sakura' || value === 'matcha' || value === 'ocean' || value === 'violet'
@@ -463,16 +400,16 @@ export const storage = {
   },
   saveAccent: (accent: Accent): void => write(DEVICE_KEYS.accent, accent),
 
-  /** Row density preset driving --row via <html data-density>. */
+  
   loadDensity: (): Density =>
     read<string>(DEVICE_KEYS.density, 'comfy') === 'compact' ? 'compact' : 'comfy',
   saveDensity: (density: Density): void => write(DEVICE_KEYS.density, density),
 
-  /** Ambient glow behind the app — default on (design default). */
+  
   loadAmbient: (): boolean => read<unknown>(DEVICE_KEYS.ambient, true) !== false,
   saveAmbient: (ambient: boolean): void => write(DEVICE_KEYS.ambient, ambient),
 
-  /** null = follow prefers-reduced-motion (tri-state like the design). */
+  
   loadReduceMotion: (): boolean | null => {
     const value = read<unknown>(DEVICE_KEYS.reduceMotion, null);
     return typeof value === 'boolean' ? value : null;
@@ -480,16 +417,14 @@ export const storage = {
   saveReduceMotion: (reduceMotion: boolean | null): void =>
     write(DEVICE_KEYS.reduceMotion, reduceMotion),
 
-  /** Confirm before deleting a chat (design's confirmDel) — default off. */
+  
   loadConfirmDel: (): boolean => read<unknown>(DEVICE_KEYS.confirmDel, false) === true,
   saveConfirmDel: (confirmDel: boolean): void => write(DEVICE_KEYS.confirmDel, confirmDel),
 
   loadSidebarCollapsed: (): boolean => read<boolean>(DEVICE_KEYS.sidebar, false),
   saveSidebarCollapsed: (collapsed: boolean): void => write(DEVICE_KEYS.sidebar, collapsed),
 
-  /** Resizable panel widths — clamped on write; drag handlers re-clamp too.
-   *  Sidebar floor = 260 (design rail width); older persisted values below it
-   *  (dragged before the design pass) migrate up on load. */
+  
   loadSidebarWidth: (): number => Math.max(260, read<number>(DEVICE_KEYS.sidebarWidth, 260)),
   saveSidebarWidth: (width: number): void => write(DEVICE_KEYS.sidebarWidth, width),
   loadSettingsWidth: (): number => read<number>(DEVICE_KEYS.settingsWidth, 340),
@@ -498,11 +433,11 @@ export const storage = {
   loadDefaults: (): Partial<ProviderDraft> => read<Partial<ProviderDraft>>(DEVICE_KEYS.defaults, {}),
   saveDefaults: (defaults: Partial<ProviderDraft>): void => write(DEVICE_KEYS.defaults, defaults),
 
-  /** User-saved system prompts, applied from the Configuration panel. */
+  
   loadSavedPrompts: (): SavedPrompt[] => read<SavedPrompt[]>(DEVICE_KEYS.savedPrompts, []),
   saveSavedPrompts: (prompts: SavedPrompt[]): void => write(DEVICE_KEYS.savedPrompts, prompts),
 
-  /** Dashboard usage preferences — device, never localStorage (privacy 2026-10). */
+  
   loadDashboardUsageWindow: (): string => read<string>(DEVICE_KEYS.dashboardUsageWindow, '30d'),
   saveDashboardUsageWindow: (value: string): void => write(DEVICE_KEYS.dashboardUsageWindow, value),
   loadDashboardUsageProviders: (): string[] =>
@@ -510,33 +445,30 @@ export const storage = {
   saveDashboardUsageProviders: (ids: string[]): void =>
     write(DEVICE_KEYS.dashboardUsageProviders, ids),
 
-  /** Left-sidebar dropdowns — remember open/closed exactly as the user left it. */
+  
   loadSidebarSections: (): SidebarSections =>
     read<SidebarSections>(DEVICE_KEYS.sidebarSections, {}),
   saveSidebarSections: (sections: SidebarSections): void =>
     write(DEVICE_KEYS.sidebarSections, sections),
 
-  /** G1: right-dock open flag — TRI-STATE: null = never saved → the caller's
-   *  first-run default (matchMedia) applies; false/true = the user's last
-   *  actual condition, restored verbatim. */
+  
   loadSettingsOpen: (): boolean | null => read<boolean | null>(DEVICE_KEYS.settingsOpen, null),
   saveSettingsOpen: (open: boolean): void => write(DEVICE_KEYS.settingsOpen, open),
 
-  /** G2: active top-level view — validated against the ViewId allowlist. */
+  
   loadView: (): ViewId => {
     const value = read<string>(DEVICE_KEYS.view, 'playground');
     return isValidViewId(value) ? (value as ViewId) : 'playground';
   },
   saveView: (view: ViewId): void => write(DEVICE_KEYS.view, view),
 
-  /** G3/G4: diff dock width (px) + turn scope (null = all turns). */
+  
   loadDiffDockWidth: (): number => read<number>(DEVICE_KEYS.diffDockWidth, 760),
   saveDiffDockWidth: (width: number): void => write(DEVICE_KEYS.diffDockWidth, width),
   loadDiffPanelTurnId: (): string | null => read<string | null>(DEVICE_KEYS.diffPanelTurnId, null),
   saveDiffPanelTurnId: (turnId: string | null): void => write(DEVICE_KEYS.diffPanelTurnId, turnId),
 
-  /** G5: scroll anchors per conversation — refresh reopens where you left.
-   *  Capped LRU-style (50) so the map cannot grow forever. */
+  
   loadViewAnchor: (conversationId: string): ViewAnchor | null =>
     read<Record<string, ViewAnchor>>(DEVICE_KEYS.viewAnchors, {})[conversationId] ?? null,
   saveViewAnchor: (conversationId: string, anchor: ViewAnchor): void => {
@@ -551,48 +483,37 @@ export const storage = {
     write(DEVICE_KEYS.viewAnchors, all);
   },
 
-  /** UI zoom applied to the workspace content (1 = default size). */
+  
   loadFontScale: (): number => read<number>(DEVICE_KEYS.fontScale, 0.9),
   saveFontScale: (scale: number): void => write(DEVICE_KEYS.fontScale, scale),
 
   loadContextScale: (): number => read<number>(DEVICE_KEYS.contextScale, 0.85),
   saveContextScale: (scale: number): void => write(DEVICE_KEYS.contextScale, scale),
 
-  /** The provider/model the user picked — kept across reloads, on the device. */
+  
   loadProviderId: (): string => read<string>(DEVICE_KEYS.providerId, ''),
-  saveProviderId: (id: string): void => write(DEVICE_KEYS.providerId, id),
+  saveProviderId: (id: string): void => writeImmediate(DEVICE_KEYS.providerId, id),
   loadModel: (): string => read<string>(DEVICE_KEYS.model, ''),
-  saveModel: (model: string): void => write(DEVICE_KEYS.model, model),
+  saveModel: (model: string): void => writeImmediate(DEVICE_KEYS.model, model),
 
-  /**
-   * Conversations that had a generation in flight when the tab reloaded.
-   * With the server-side stream registry a reload does NOT kill the run —
-   * these entries tell the boot reconcile which conversations to re-attach
-   * (see useChatController). Entries must still be re-validated against
-   * live stream ids: a proxy restart really does drop the run.
-   */
+  loadPendingSettings: (): Partial<ChatSettings> | null =>
+    read<Partial<ChatSettings> | null>(DEVICE_KEYS.pendingSettings, null),
+  savePendingSettings: (settings: ChatSettings): void =>
+    writeImmediate(DEVICE_KEYS.pendingSettings, settings),
+
+  
   loadGenRunning: (): Record<string, boolean> =>
     readSession<Record<string, boolean>>(SESSION_KEYS.genRunning, {}),
   saveGenRunning: (running: Record<string, boolean>): void =>
     writeSession(SESSION_KEYS.genRunning, running),
 
-  /**
-   * Run start epoch per conversation — the response timer's live clock reads
-   * `Date.now() - start`. Session-persisted alongside genRunning so a browser
-   * reload continues the SAME elapsed time instead of restarting at 00.00.00.
-   */
+  
   loadGenStartedAt: (): Record<string, number> =>
     readSession<Record<string, number>>(SESSION_KEYS.genStartedAt, {}),
   saveGenStartedAt: (started: Record<string, number>): void =>
     writeSession(SESSION_KEYS.genStartedAt, started),
 
-  /**
-   * Counterpart of streamIds — see there for the lifecycle rationale. The
-   * CONTEXT ID keys the read-before-edit policy: it survives a reload (the
-   * conversation keeps its read receipts) and dies with the tab, after
-   * which the next send mints a fresh id and the server voids old receipts
-   * (a re-opened chat must re-read before editing).
-   */
+  
   loadContextIds: (): Record<string, string> =>
     readSession<Record<string, string>>(SESSION_KEYS.contextIds, {}),
   saveContextId: (conversationId: string, id: string): void => {
@@ -601,12 +522,7 @@ export const storage = {
     writeSession(SESSION_KEYS.contextIds, map);
   },
 
-  /**
-   * RESUME handles: the `stream_id` frame each running generation echoes,
-   * keyed by conversation. sessionStorage on purpose — it survives a reload
-   * (the exact case resume exists for) and dies with the tab, after which
-   * nobody would re-attach anyway.
-   */
+  
   loadStreamIds: (): Record<string, StreamResumeRecord> =>
     readSession<Record<string, StreamResumeRecord>>(SESSION_KEYS.streamIds, {}),
   saveStreamId: (conversationId: string, record: StreamResumeRecord): void => {
@@ -622,13 +538,7 @@ export const storage = {
     }
   },
 
-  /**
-   * DURABLE RUNS — the client half of the job journal (see
-   * docs/ARCHITECTURE.md). Now on the DEVICE: an interrupted run must
-   * survive a tab close or a browser restart, and the browser is no longer a
-   * place where anything survives. Keyed by conversation, since that is what
-   * the UI surfaces.
-   */
+  
   loadJobRuns: (): Record<string, JobRunRecord> => read<Record<string, JobRunRecord>>(DEVICE_KEYS.jobRuns, {}),
   saveJobRun: (conversationId: string, record: JobRunRecord): void => {
     const map = read<Record<string, JobRunRecord>>(DEVICE_KEYS.jobRuns, {});
@@ -643,16 +553,13 @@ export const storage = {
     }
   },
 
-  /** Workspace font style chosen in Settings → Appearance. */
+  
   loadFontFamily: (): FontFamily => {
     const value = read<FontFamily>(DEVICE_KEYS.fontFamily, 'inter');
     return value === 'mono' || value === 'system' ? value : 'inter';
   },
   saveFontFamily: (family: FontFamily): void => write(DEVICE_KEYS.fontFamily, family),
-  /**
-   * Image Studio's own provider/model choice plus the output-size test
-   * settings, separate from the chat ones.
-   */
+  
   loadImageStudioModel: (): {
     providerId: string;
     model: string;
@@ -689,7 +596,7 @@ export const storage = {
     pixelHeight: string;
   }): void => write(DEVICE_KEYS.imageStudio, value),
 
-  /** The Image Studio session the user is currently working in. */
+  
   loadActiveImageSessionId: (): string | null => read<string | null>(DEVICE_KEYS.imageSession, null),
   saveActiveImageSessionId: (id: string | null): void => write(DEVICE_KEYS.imageSession, id),
 
@@ -708,8 +615,7 @@ export const storage = {
     write(DEVICE_KEYS.rightPanelMode, mode),
 
 
-  /** One visual's manual sizing state. `autoFit` distinguishes "the user took
-   *  control" (persisted height) from "content-driven" (no entry needed). */
+  
   loadVisualGeometry: (
     visualId: string,
   ): { width: number | null; height: number; autoFit: boolean } | null => {
@@ -733,29 +639,25 @@ export const storage = {
   },
 };
 
-/** One live generation's resume handle, keyed by conversation in sessionStorage. */
+
 export interface StreamResumeRecord {
   streamId: string;
   providerId: string;
   model: string;
-  /** Date.now() at the moment the id was captured — boot staleness guard. */
+  
   at: number;
 }
 
-/**
- * The client's mirror of the durable job journal: the interrupted runs this
- * client knows about, keyed by conversation id. Device-backed because it must
- * outlive the tab it started in.
- */
+
 export interface JobRunRecord {
-  /** The journal run id — == the stream id the run carried. */
+  
   runId: string;
   status: 'running' | 'completed' | 'errored' | 'aborted' | 'crashed';
-  /** Date.now() when the client learned of this run (the stream_id frame). */
+  
   at: number;
 }
 
-/** Creates a reasonably unique id without pulling in a dependency. */
+
 export function uid(prefix = 'id'): string {
   const random =
     typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -764,7 +666,7 @@ export function uid(prefix = 'id'): string {
   return `${prefix}_${Date.now().toString(36)}_${random}`;
 }
 
-/** Derives a short, human-readable conversation title from its first message. */
+
 export function deriveTitle(text: string): string {
   const cleaned = text.replace(/\s+/g, ' ').trim();
   if (!cleaned) return 'New chat';

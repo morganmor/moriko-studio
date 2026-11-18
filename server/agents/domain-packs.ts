@@ -1,8 +1,4 @@
-/**
- * F6.4 — domain packs: conditionally injected prompt guidance detected from
- * the workspace itself (3D/game dependencies, project files, repo size).
- * Cached per workspace root + package.json mtime.
- */
+
 import { existsSync, readFileSync, statSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
@@ -78,7 +74,7 @@ function countSourceFiles(root: string): number {
   return count;
 }
 
-/** Packs to inject into the system prompt; cached per root + package.json mtime. */
+
 export function domainPackInjections(root: string): string[] {
   let pkgMtime = 0;
   try { pkgMtime = statSync(path.join(root, 'package.json')).mtimeMs; } catch {  }

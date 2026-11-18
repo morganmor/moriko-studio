@@ -1,19 +1,4 @@
-/**
- * agent__lsp_symbols — AST-level symbol navigation via the TypeScript
- * Language Service (in-process, no separate server).
- *
- * Modes:
- *  - definition:  given file + line + column, return where the symbol is defined.
- *  - references:  given file + line + column, return all reference locations.
- *  - symbols:     given file, list all top-level symbols (functions, classes,
- *                  interfaces, types, etc.) with their line numbers.
- *  - rename:       given file + line + column + newName, return all locations
- *                  that need renaming.
- *
- * One LanguageService is cached per workspace root. The host reads files from
- * disk on demand; heavy dirs (node_modules, .git, ...) are skipped from the
- * initial file list but still resolvable on demand.
- */
+
 import * as ts from 'typescript';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -21,7 +6,7 @@ import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, num, truncateOutput, requireWorkspace, resolveWithPermission } from './shared.js';
 import { getLanguageService } from '../lsp-service.js';
 
-/** Convert 1-based line+column to 0-based character offset. */
+
 function positionFromLineCol(content: string, line: number, column: number): number {
   const lines = content.split('\n');
   let offset = 0;
@@ -31,7 +16,7 @@ function positionFromLineCol(content: string, line: number, column: number): num
   return Math.min(offset + Math.max(column - 1, 0), content.length);
 }
 
-/** Convert 0-based offset to 1-based line+column. */
+
 function lineColFromPosition(content: string, position: number): { line: number; column: number } {
   let line = 1;
   let col = 1;

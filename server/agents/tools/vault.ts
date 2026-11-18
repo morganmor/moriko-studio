@@ -1,11 +1,4 @@
-/**
- * agent__vault_list / agent__vault_restore / agent__vault_diff — the undo
- * system. Every edit and delete snapshots the prior state into the vault;
- * restore brings it back (full file or a surgical line range); vault_diff is
- * the "magnifier" — current vs snapshot WITHOUT touching disk. Snapshot
- * CONTENT lives inside the workspace (`.moriko/vault/`), so glob/grep/read
- * can browse it directly; these tools cover metadata + comparison + restore.
- */
+
 import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
@@ -28,7 +21,7 @@ export async function vaultListTool(args: Record<string, unknown>, ctx: AgentToo
   return { ok: true, isError: false, text: truncateOutput(entries.slice(0, 60).map(renderVaultEntry).join('\n') + (entries.length > 60 ? `\n…${entries.length - 60} more` : '')) };
 }
 
-/** Shared body of vault_diff + vault_restore dryRun: diff current ↔ snapshot. */
+
 function diffAgainstSnapshot(
   ctx: AgentToolContext,
   snapshotId: string,
@@ -64,7 +57,6 @@ function diffAgainstSnapshot(
       diffstat: diffStatFromOps(currentText, snapshotText),
     };
   } catch {
-    // Target missing — show the snapshot content head instead of a dead diff.
     const lines = snapshotText.split(/\r\n|\n|\r/);
     return {
       ok: true, isError: false,
@@ -90,9 +82,6 @@ export async function vaultRestoreTool(args: Record<string, unknown>, ctx: Agent
   const to = str(args, 'to').trim() || undefined;
   const dryRun = bool(args, 'dryRun');
 
-  // Range restore: surgical splice of snapshot lines [from..to] into the
-  // target at the same positions — the engine does the splice, the model
-  // never re-types restored code.
   const hasRange = args.rangeFrom !== undefined || args.rangeTo !== undefined;
   let range: RestoreRange | undefined;
   if (hasRange) {

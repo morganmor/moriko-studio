@@ -1,58 +1,13 @@
-/**
- * agent__screenshot — STANDALONE headless page capture for Moriko.
- *
- * Deliberately INDEPENDENT of the built-in browser toolkit and its Web Access
- * kill-switch (owner decision 2026-10-21): this is an ephemeral, read-only,
- * profile-less capture — navigate (localhost or any http/https URL), shoot,
- * collect a text-first page report, close. It never touches the persistent
- * browser context, its cookies, or its panel, and writes nothing to disk —
- * the JPEG returns inline.
- *
- *   url (required) — http/https target
- *   fullPage?      — capture beyond the viewport
- *   selector?      — photograph ONE element
- *   full?          — widen the interactive-element map (40 vs 20)
- *
- * Result = text report (URL/title/viewport, FCP/TTFB/LCP, numbered
- * interactive-element map for click targeting) + inline JPEG for
- * vision-capable models; text-only models still get the full report.
- */
-import { chromium, type Browser } from 'playwright-core';
 
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
-import { bool, str } from './shared.js';
+import { bool, checkWebAccessUrl, str } from './shared.js';
 import { lookupModelMetadata } from '../../modelMetadata.js';
 import { CAPTURE_SCRIPT, type CaptureReport } from './page-report.js';
+import { acquireEphemeralContext } from '../browser/engine.js';
 
 const JPEG_QUALITY = 72;
 const MAX_ELEMENTS = 20;
 const MAX_ELEMENTS_FULL = 40;
-/** Idle headless browser is torn down on the next call after this. */
-const IDLE_CLOSE_MS = 5 * 60_000;
-
-let sharedBrowser: { browser: Browser; lastUsed: number } | null = null;
-
-/** Reuses a healthy headless browser across calls; relaunches when dead. */
-async function getBrowser(): Promise<Browser> {
-  if (sharedBrowser && sharedBrowser.browser.isConnected()) {
-    sharedBrowser.lastUsed = Date.now();
-    return sharedBrowser.browser;
-  }
-  if (sharedBrowser) {
-    await sharedBrowser.browser.close().catch(() => undefined);
-    sharedBrowser = null;
-  }
-  const browser = await chromium.launch({ headless: true });
-  sharedBrowser = { browser, lastUsed: Date.now() };
-  return browser;
-}
-
-async function shutdownIdleBrowser(): Promise<void> {
-  if (sharedBrowser && Date.now() - sharedBrowser.lastUsed > IDLE_CLOSE_MS) {
-    await sharedBrowser.browser.close().catch(() => undefined);
-    sharedBrowser = null;
-  }
-}
 
 export async function screenshotTool(
   args: Record<string, unknown>,
@@ -63,20 +18,23 @@ export async function screenshotTool(
   if (!url || !/^https?:\/\//i.test(url)) {
     return { ok: false, isError: true, errorCode: 'schema_error', text: 'screenshot needs "url" (http/https).' };
   }
+  const blocked = checkWebAccessUrl(url, ctx, 'agent__screenshot');
+  if (blocked) {
+    return { ok: false, isError: true, errorCode: 'web_access_off', text: blocked };
+  }
 
-  await shutdownIdleBrowser();
-  let browser: Browser;
+  let context: import('playwright-core').BrowserContext;
   try {
-    browser = await getBrowser();
+    context = await acquireEphemeralContext();
   } catch (error) {
     return { ok: false, isError: true, text: `screenshot failed to launch a headless browser: ${error instanceof Error ? error.message : String(error)}` };
   }
 
-  const page = await browser.newPage();
+  const page = await context.newPage();
   try {
     await page.goto(url, { waitUntil: 'commit', timeout: 30_000 });
     await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => undefined);
-    await page.waitForLoadState('networkidle', { timeout: 4_000 }).catch(() => undefined);
+    await page.waitForTimeout(150);
 
     const fullPage = bool(args, 'fullPage');
     const selector = str(args, 'selector');
@@ -116,5 +74,6 @@ export async function screenshotTool(
     };
   } finally {
     await page.close().catch(() => undefined);
+    await context.close().catch(() => undefined);
   }
 }

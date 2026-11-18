@@ -1,50 +1,36 @@
 import { useEffect, useRef, useState } from 'react';
 
-/**
- * SLASH COMMAND INPUT — ported from design/Moriko-Design2-slash-input.html.
- *
- * Typing "/" at the start of the composer opens this listbox above the input:
- * prefix filtering, ↑↓ navigation, Tab autocomplete, Enter run, Escape close,
- * pointer click. Built-in commands merge with the ones registered by addons
- * (GET /api/addons/commands); runs of addon commands go through
- * POST /api/addons/commands/run, which walks the addon "command.run" hooks.
- */
+
 
 export interface SlashCommand {
-  /** Canonical form, always starting with "/". */
+  
   c: string;
-  /** One-line description shown under the command name. */
+  
   h: string;
-  /** True when the command is handled locally by the app (never sent to the
-   *  server); false means "addon command" — POST /api/addons/commands/run. */
+  
   builtin: boolean;
-  /** Optional [arg] hint appended to the label in the list. */
+  
   argumentHint?: string;
-  /** True for discovered agent skills — sent as plain text; the harness
-   *  activates the skill server-side for that turn. */
+  
   skill?: boolean;
 }
 
 export interface SlashMenuHandle {
-  /** Filtered commands for the current draft ("/xyz" prefix), or null when the
-   *  menu is closed (draft not a bare command). */
+  
   list: SlashCommand[] | null;
-  /** Highlighted row (index into `list`, clamped). */
+  
   sel: number;
-  /** ↑↓ / Tab / Enter / Escape while the menu is open — returns true when the
-   *  key was consumed (the composer must then skip its own handling). */
+  
   key: (event: React.KeyboardEvent<HTMLTextAreaElement>) => boolean;
-  /** Replace the draft with "/name " and keep the menu's state in sync. */
+  
   tabComplete: () => void;
-  /** Run the highlighted row — clears the draft (design pickSlash) and fires
-   *  the command through `onRun`. */
+  
   pick: () => void;
-  /** Run a raw submitted draft ("/name arg") — returns false when it is not a
-   *  slash command (the composer sends it as a normal message). */
+  
   runText: (text: string) => boolean;
-  /** Mouse click on row index (pointerdown focus prevention is internal). */
+  
   click: (index: number) => void;
-  /** Hover-select: the row under the pointer becomes the highlighted one. */
+  
   hover: (index: number) => void;
 }
 
@@ -55,10 +41,7 @@ interface SlashState {
 
 const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
 
-/**
- * Shared wiring: one hook drives the open/close state and returns the handle
- * the composer proxies into its textarea events.
- */
+
 export function useSlashMenu(
   draft: string,
   onDraftChange: (value: string) => void,
@@ -100,9 +83,6 @@ export function useSlashMenu(
     };
   }, []);
 
-  // SKILLS — ONE slash entry: /skills lists what's available (hint shows the
-  // installed names); /skills <name> [args] — sent as text — activates that
-  // skill server-side (the harness injects its full body for the turn).
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
@@ -225,7 +205,7 @@ export function useSlashMenu(
   return handle;
 }
 
-/** The listbox itself — rendered above the composer textarea, design .slash. */
+
 export function SlashMenu({
   list,
   sel,

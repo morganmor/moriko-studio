@@ -12,57 +12,34 @@ export interface StoredProvider {
   kind: ProviderKind;
   baseUrl: string;
   models: string[];
-  /**
-   * LAYER 1 CAPABILITY TABLE — the user's per-model authority grid, keyed by
-   * model id. Sparse: a model with no row resolves through Layers 2/3. `models`
-   * above stays the membership list, so a row can never resurrect a removed id.
-   */
+  
   modelConfigs?: Record<string, ProviderModelConfig>;
-  /**
-   * LAYER 2 HINTS — what the provider's own /models endpoint published, kept
-   * separate from Layer 1 on purpose: re-fetching rewrites these without ever
-   * touching a field the user pinned.
-   */
+  
   modelHints?: Record<string, ProviderModelHint>;
-  /** Optional image-generation routing (see server/adapters/images). */
+  
   imageAdapter?: string;
   imageConfig?: Record<string, unknown>;
   createdAt: string;
 }
 
-/**
- * ONE key vault entry. Every provider credential — CUSTOM and BUILT-IN —
- * lives here, together with the endpoint (baseUrl) it belongs to, so the
- * vault file alone tells the whole "which key reaches which API" story.
- */
+
 export interface StoredKey {
   apiKey: string;
-  /** The provider endpoint this key is used against (informational/synced). */
+  
   baseUrl?: string;
 }
 
 interface ProvidersFile {
   version: 1;
-  /** Definitions ONLY — credentials never ride here (see api-keys.json). */
+  
   providers: StoredProvider[];
-  /**
-   * User-added model ids for BUILT-IN providers. Merged after
-   * the definition's curated list — never replacing it.
-   */
+  
   builtInModels?: Record<string, string[]>;
-  /**
-   * LIVE model lists fetched from a provider's own API (e.g. OpenAI
-   * /models). When present for a built-in, it REPLACES the definition's
-   * curated defaults — the catalogue always reflects the provider today.
-   */
+  
   builtInLiveModels?: Record<string, string[]>;
-  /**
-   * LAYER 1 tables for BUILT-IN providers, keyed by provider id and then by
-   * model id. Built-in definitions are immutable, but their capability grid is
-   * entirely the user's to control — a preset model is still the user's model.
-   */
+  
   builtInModelConfigs?: Record<string, Record<string, ProviderModelConfig>>;
-  /** LAYER 2 hints for BUILT-IN providers (see builtInModelConfigs). */
+  
   builtInModelHints?: Record<string, Record<string, ProviderModelHint>>;
 }
 
@@ -74,15 +51,7 @@ interface ApiKeysFile {
 const EMPTY_PROVIDERS: ProvidersFile = { version: 1, providers: [], builtInModels: {} };
 const EMPTY_KEYS: ApiKeysFile = { version: 1, keys: {} };
 
-/**
- * Tiny JSON-file store for user-defined providers.
- *
- * Deliberately boring: two small files under `~/.moriko/` — provider
- * DEFINITIONS (`providers.json`) and the API-KEY VAULT (`api-keys.json`,
- * every custom + built-in key beside its endpoint) — written atomically-ish,
- * no schema migration beyond a version field. The boot migration
- * (paths.ts) folds any historical shape into these two.
- */
+
 export class ProviderStore {
   private readonly providersPath: string;
   private readonly keysPath: string;
@@ -101,10 +70,6 @@ export class ProviderStore {
       const parsed = JSON.parse(raw) as Partial<ProvidersFile>;
       this.providersCache = {
         version: 1,
-        // MIGRATION: a legacy record carries only `models: string[]`. Reading it
-        // normalizes each model into a Layer-1-eligible row so the capability
-        // table opens populated instead of blank — no separate migration pass,
-        // no half-written state on disk until the next real write.
         providers: Array.isArray(parsed.providers)
           ? parsed.providers.map((provider) => normalizeStoredProvider(provider))
           : [],
@@ -125,7 +90,7 @@ export class ProviderStore {
     return this.providersCache;
   }
 
-  /** Accepts the current shape AND every historical one (raw id→string maps). */
+  
   private async loadKeys(): Promise<ApiKeysFile> {
     if (this.keysCache) return this.keysCache;
     try {
@@ -179,14 +144,7 @@ export class ProviderStore {
     return store.providers.find((provider) => provider.id === id);
   }
 
-  /**
-   * Upserts the DEFINITION. The key rides a side-channel: an OMITTED
-   * `apiKey` keeps the stored credential (renaming a provider or editing its
-   * model list must never silently drop a saved key); an empty string is the
-   * explicit clear signal; a non-empty string writes the vault entry together
-   * with the provider's endpoint. An existing entry's endpoint is kept in
-   * sync when the definition's baseUrl changes.
-   */
+  
   async upsert(
     input: Omit<StoredProvider, 'createdAt'> & { apiKey?: string; createdAt?: string },
   ): Promise<StoredProvider> {
@@ -199,8 +157,6 @@ export class ProviderStore {
       kind: input.kind,
       baseUrl: input.baseUrl,
       models: input.models,
-      // An OMITTED table keeps the stored one (a rename or key edit must never
-      // wipe the capability grid); an explicit object replaces it wholesale.
       modelConfigs: input.modelConfigs ?? existing?.modelConfigs,
       modelHints: input.modelHints ?? existing?.modelHints,
       imageAdapter: input.imageAdapter,
@@ -223,7 +179,7 @@ export class ProviderStore {
     return record;
   }
 
-  /** Removes the definition AND its vault entry. */
+  
   async remove(id: string): Promise<boolean> {
     const store = await this.load();
     const providers = store.providers.filter((provider) => provider.id !== id);
@@ -233,14 +189,14 @@ export class ProviderStore {
     return true;
   }
 
-  /** The vault entry for a provider id, if any. */
+  
   async getKey(id: string): Promise<StoredKey | undefined> {
     const keys = await this.loadKeys();
     const entry = keys.keys[id];
     return entry && entry.apiKey ? entry : undefined;
   }
 
-  /** Stores (or clears, with an empty string) a key together with its endpoint. */
+  
   async setKey(id: string, apiKey: string, baseUrl?: string): Promise<void> {
     if (!apiKey) {
       await this.clearKey(id);
@@ -263,23 +219,23 @@ export class ProviderStore {
     await this.persistKeys({ version: 1, keys: next });
   }
 
-  /** The stored UI-supplied key for a built-in provider, if any. */
+  
   async getBuiltInKey(id: string): Promise<string | undefined> {
     return (await this.getKey(id))?.apiKey;
   }
 
-  /** Stores or clears the UI-supplied key for a built-in provider. */
+  
   async setBuiltInKey(id: string, apiKey: string, baseUrl?: string): Promise<void> {
     await this.setKey(id, apiKey, baseUrl);
   }
 
-  /** The user-added model ids for a built-in provider. */
+  
   async getBuiltInModels(id: string): Promise<string[]> {
     const store = await this.load();
     return store.builtInModels?.[id] ?? [];
   }
 
-  /** Replaces the user-added model list for a built-in provider. */
+  
   async setBuiltInModels(id: string, models: string[]): Promise<void> {
     const store = await this.load();
     const builtInModels = { ...(store.builtInModels ?? {}) };
@@ -289,13 +245,13 @@ export class ProviderStore {
     await this.persistProviders({ ...store, builtInModels });
   }
 
-  /** The live-fetched model list for a built-in provider, if any. */
+  
   async getBuiltInLiveModels(id: string): Promise<string[]> {
     const store = await this.load();
     return store.builtInLiveModels?.[id] ?? [];
   }
 
-  /** Replaces the live-fetched model list (empty clears → curated defaults). */
+  
   async setBuiltInLiveModels(id: string, models: string[]): Promise<void> {
     const store = await this.load();
     const builtInLiveModels = { ...(store.builtInLiveModels ?? {}) };
@@ -305,17 +261,13 @@ export class ProviderStore {
     await this.persistProviders({ ...store, builtInLiveModels });
   }
 
-  /**
-   * LAYER 1 for a built-in provider. Built-ins have no StoredProvider record,
-   * so their capability grid lives in its own map — but it is the SAME table
-   * semantics: the user's pins win over everything below.
-   */
+  
   async getBuiltInModelConfigs(id: string): Promise<Record<string, ProviderModelConfig>> {
     const store = await this.load();
     return store.builtInModelConfigs?.[id] ?? {};
   }
 
-  /** Replaces the Layer-1 grid for a built-in (an empty map clears it). */
+  
   async setBuiltInModelConfigs(
     id: string,
     configs: Record<string, ProviderModelConfig>,
@@ -327,13 +279,13 @@ export class ProviderStore {
     await this.persistProviders({ ...store, builtInModelConfigs });
   }
 
-  /** LAYER 2 hints for a built-in provider. */
+  
   async getBuiltInModelHints(id: string): Promise<Record<string, ProviderModelHint>> {
     const store = await this.load();
     return store.builtInModelHints?.[id] ?? {};
   }
 
-  /** Merges fresh Layer-2 hints for a built-in (never removing older ones). */
+  
   async mergeBuiltInModelHints(
     id: string,
     hints: Record<string, ProviderModelHint>,
@@ -347,12 +299,7 @@ export class ProviderStore {
     await this.persistProviders({ ...store, builtInModelHints });
   }
 
-  /**
-   * Writes ONE custom provider's Layer-1 grid, leaving every other record
-   * untouched. Separate from `upsert` because saving the table must not
-   * require echoing the whole definition back (a stale client copy would
-   * otherwise overwrite a newer baseUrl or label).
-   */
+  
   async setModelConfigs(
     id: string,
     configs: Record<string, ProviderModelConfig>,
@@ -366,7 +313,7 @@ export class ProviderStore {
     return providers[index];
   }
 
-  /** Merges fresh Layer-2 hints into ONE custom provider. */
+  
   async mergeModelHints(
     id: string,
     hints: Record<string, ProviderModelHint>,
@@ -383,22 +330,12 @@ export class ProviderStore {
 
 }
 
-/** Keeps an existing endpoint when a new one isn't supplied. */
+
 function currentBaseUrlFallback(existing: StoredKey | undefined): { baseUrl?: string } {
   return existing?.baseUrl ? { baseUrl: existing.baseUrl } : {};
 }
 
-/**
- * LEGACY MIGRATION of one provider record. The historical shape carried only
- * `models: string[]`; this folds it into the capability-table world WITHOUT
- * inventing values.
- *
- * The migrated rows are built with `pinned: []` and `source: 'default'`,
- * meaning "no user opinion and no evidence yet" — so the cascade keeps
- * resolving them through Layer 2/3 at read time, and a later "Fetch from
- * provider" fills them in. Inventing `imageIn: false` here would be the exact
- * silent downgrade this whole change exists to remove.
- */
+
 function normalizeStoredProvider(raw: StoredProvider): StoredProvider {
   const models = Array.isArray(raw.models)
     ? [...new Set(raw.models.map((id) => String(id).trim()).filter(Boolean))]
@@ -413,7 +350,7 @@ function normalizeStoredProvider(raw: StoredProvider): StoredProvider {
   };
 }
 
-/** Drops rows for models that no longer exist and repairs truncated rows. */
+
 function normalizeConfigMap(
   raw: Record<string, ProviderModelConfig> | undefined,
 ): Record<string, ProviderModelConfig> {
@@ -484,9 +421,5 @@ function isCapabilitySource(value: unknown): value is ProviderModelConfig['sourc
   return typeof value === 'string' && CAPABILITY_SOURCES.has(value);
 }
 
-/**
- * Process-wide singleton. `server/index.ts` and the agent tools share ONE
- * instance (the vision tool resolves credentials through it) — constructing a
- * second would double the file cache and race the writes.
- */
+
 export const providerStore = new ProviderStore();

@@ -1,11 +1,4 @@
-/**
- * Moco Canvas — scene model (P1): node types, spacing scale, DNA tokens,
- * spreadsheet grid addresses, tree helpers.
- *
- * PURE: no DOM, no node APIs. Lives under client/ because the addon module
- * route only serves that subtree; server/main.ts imports it too, so the agent
- * tool and the panel share ONE model (no drifting copies).
- */
+
 
 export type NodeKind = 'page' | 'frame' | 'text' | 'image' | 'shape' | 'slot' | 'ref';
 export type LayoutMode = 'grid' | 'stack';
@@ -13,25 +6,25 @@ export type Role = 'display' | 'heading' | 'body' | 'caption' | 'mono';
 export type Align = 'start' | 'center' | 'end' | 'stretch';
 export type Justify = 'start' | 'center' | 'end' | 'between';
 
-/** Token references only — pixels never enter the scene (plan §5.3). */
+
 export interface NodeStyle {
-  /** token name from scene.tokens ("accent", "muted"…) */
+  
   color?: string;
   bg?: string;
   radius?: number;
   border?: boolean;
   weight?: number;
-  /** P3 co-edit: user-locked — agent ops on this node are rejected (plan §12) */
+  
   locked?: boolean;
-  /** P4 responsive hide — not a style, but rides here for CSS emission */
+  
   hidden?: boolean;
 }
 
 export interface FrameLayout {
   mode: LayoutMode;
-  /** grid: lattice width in columns (1..12) */
+  
   cols?: number;
-  /** grid: row band count used by address math */
+  
   rows?: number;
   dir?: 'row' | 'col';
   gap?: string;
@@ -44,7 +37,7 @@ export interface FrameLayout {
 export interface SceneNode {
   id: string;
   kind: NodeKind;
-  /** grid address "B2:H5" — lattice cells, not pixels */
+  
   at?: string;
   role?: Role;
   text?: string;
@@ -54,29 +47,25 @@ export interface SceneNode {
   layout?: FrameLayout;
   style?: NodeStyle;
   children?: SceneNode[];
-  /** P4: per-breakpoint overrides — mobile-first (sm ⊂ md; lg is the base) */
+  
   responsive?: ResponsiveMap;
 }
 
-/** P4 responsive override (plan §7.2): applies below the named breakpoint. */
+
 export interface ResponsiveSpec {
-  /** grid address override for grid-placed nodes */
+  
   at?: string;
-  /** drop the node at this breakpoint */
+  
   hide?: boolean;
   maxWidth?: string;
-  /** frame-only: layout overrides */
+  
   layout?: Partial<Pick<FrameLayout, 'mode' | 'cols' | 'rows' | 'dir' | 'gap' | 'pad' | 'align' | 'justify' | 'wrap'>>;
 }
 
 export type BreakpointKey = 'sm' | 'md';
 export type ResponsiveMap = Partial<Record<BreakpointKey, ResponsiveSpec>>;
 
-/**
- * P4 constraint (plan §7.3): a RELATION kept across ops, not a one-shot move.
- * The compiler satisfies it through structure (one grid column / one stack);
- * an agent op that breaks a stored constraint is rejected with an explanation.
- */
+
 export type ConstraintRule = 'same-left' | 'same-height' | 'same-gap';
 
 export interface Constraint {
@@ -84,11 +73,7 @@ export interface Constraint {
   ids: string[];
 }
 
-/**
- * Does the relation currently hold? (plan §7.3 — intent space, no solver.)
- * Shared by the op engine (store only true relations / reject violators) and
- * the readout (report each stored constraint). `parent` = the shared frame.
- */
+
 export function constraintStatus(scene: Scene, c: Constraint): { ok: boolean; detail: string } {
   const nodes: SceneNode[] = [];
   for (const id of c.ids) {
@@ -131,8 +116,6 @@ export function constraintStatus(scene: Scene, c: Constraint): { ok: boolean; de
     return { ok: false, detail: 'stack heights are content-driven — only a grid or align:stretch guarantees them' };
   }
 
-  // same-gap: stack = a consecutive run (every gap = the frame's gap token);
-  // grid = equal holes along the dominant axis.
   if (mode === 'stack') {
     const kids = (parent.children ?? []).map((k) => k.id);
     const idxs = c.ids.map((id) => kids.indexOf(id)).sort((a, b) => a - b);
@@ -158,15 +141,15 @@ export interface Scene {
   version: 1;
   id: string;
   dna: string;
-  /** monotonic revision — bumped by every accepted batch */
+  
   rev: number;
-  /** template the doc was created from */
+  
   template?: string;
   breakpoints: { sm: number; md: number; lg: number };
   tokens: Record<string, string>;
   fonts: { display: string; body: string };
   root: SceneNode;
-  /** P4 (plan §7.3): relations kept across ops — enforced in the op engine */
+  
   constraints?: Constraint[];
 }
 
@@ -177,7 +160,7 @@ export interface Rect {
   r2: number;
 }
 
-/** Spacing scale — the only legal gap/pad values. */
+
 export const SPACE: Record<string, number> = {
   $s1: 4, $s2: 8, $s3: 12, $s4: 16, $s5: 24, $s6: 32,
   $s7: 40, $s8: 48, $s9: 56, $s10: 64, $s11: 80, $s12: 96,
@@ -188,7 +171,7 @@ export const ROWS = 12;
 export const BREAKPOINTS = { sm: 390, md: 768, lg: 1440 } as const;
 export type Viewport = keyof typeof BREAKPOINTS;
 
-/** DNA token sets. Mococraft's own DNA is wired in P3 (mod API). */
+
 export const DNA: Record<string, { tokens: Record<string, string>; fonts: { display: string; body: string } }> = {
   editorial: {
     tokens: {
@@ -218,7 +201,7 @@ export function dnaOf(id: string) {
   return DNA[id] ?? DNA.editorial;
 }
 
-/** CSS-safe id ("hero.title" is not a valid grid-area name — plan §19.3). */
+
 export function slug(id: string): string {
   return id.replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase();
 }
@@ -243,7 +226,7 @@ export function colIndex(letter: string): number {
 
 const AT_RE = /^([A-L])(\d{1,2})(?::([A-L])(\d{1,2}))?$/i;
 
-/** "B2:H5" → 1-based rect. Missing end = single cell. */
+
 export function parseAt(at: string | undefined): Rect | null {
   if (!at) return null;
   const m = AT_RE.exec(at.trim());
@@ -278,8 +261,7 @@ export function intersects(a: Rect, b: Rect): boolean {
   return a.c1 <= b.c2 && b.c1 <= a.c2 && a.r1 <= b.r2 && b.r1 <= a.r2;
 }
 
-/** Cell-rect intersection (same rule as intersects — named for readability at
- *  call sites that compare grid cells rather than measured boxes). */
+
 export const intersectCells = intersects;
 
 export function clampRect(rect: Rect, cols: number, rows: number): Rect {
@@ -308,7 +290,7 @@ export function findParent(root: SceneNode, id: string): SceneNode | null {
   return null;
 }
 
-/** Root → node chain (used for geometry and ancestor-aware ops). */
+
 export function pathTo(root: SceneNode, id: string): SceneNode[] {
   const chain: SceneNode[] = [];
   const walkChain = (node: SceneNode): boolean => {
@@ -346,13 +328,12 @@ export function isFrameLike(node: SceneNode): boolean {
   return node.kind === 'page' || node.kind === 'frame';
 }
 
-/** Nodes that live inside a frame (frames, text, images, shapes). */
+
 export function childrenOf(node: SceneNode): SceneNode[] {
   return node.children ?? [];
 }
 
-/** Cascade responsive overrides: `at`/`layout` merge, breakpoint hierarchy
- *  sm ⊂ md (md inherits its sm overrides). `base` is the un-overridden node. */
+
 export function effectiveNode(node: SceneNode, viewport: Viewport): SceneNode {
   const specs: ResponsiveSpec[] = [];
   if (node.responsive?.sm) specs.push(node.responsive.sm);
@@ -368,8 +349,7 @@ export function effectiveNode(node: SceneNode, viewport: Viewport): SceneNode {
   return merged;
 }
 
-/** A viewport-projected copy of the scene: every node resolved through
- *  effectiveNode, so char-maps and lint reflect the @sm/@md overrides. */
+
 export function effectiveScene(scene: Scene, viewport: Viewport): Scene {
   if (viewport === 'lg') return scene;
   const clone = cloneScene(scene);

@@ -1,17 +1,11 @@
-/**
- * F5.2 — game-probe: runs a LOCAL game/3D app in headless Chromium and
- * reports runtime facts: console/page errors, failed requests, WebGL context
- * info, FPS sampling (rAF), canvas blank detection, three.js probe hook,
- * memory. Localhost/private hosts ONLY (never gated by Web Access).
- */
+
 import fs from 'node:fs';
 import path from 'node:path';
-import { loadPlaywright, assertAllowedTarget, getReusableBrowser, killProbeBrowser } from './spatial-runtime.js';
+import { loadPlaywright, assertAllowedTarget } from './spatial-runtime.js';
+import { acquireEphemeralContext } from './browser/engine.js';
 import { getActiveWorkspace } from './workspace.js';
 
-/** Probe data dir: <workspace>/.moriko-dat/probe/ — User decision: probe
- *  screenshots live INSIDE the workspace (agent can read them back).
- *  No workspace bound → screenshots are skipped, other facts still report. */
+
 function probeDataDir(): string | null {
   const root = getActiveWorkspace()?.path;
   return root ? path.join(root, '.moriko-dat', 'probe') : null;
@@ -46,7 +40,7 @@ export interface GameProbeResult {
   notes: string[];
 }
 
-/** rAF sampler injected BEFORE page scripts run. */
+
 const FPS_INIT_SCRIPT = `
 window.__MORIKO_FPS__ = { frames: [], last: performance.now() };
 (function () {
@@ -145,13 +139,11 @@ export async function runGameProbe(
   const screenshotCount = Math.min(Math.max(opts.screenshots ?? 3, 0), 6);
   const actions = opts.actions ?? [];
 
-  // Hard deadline: a hung page must not wedge the whole tool band — the
-  // watchdog force-closes the SHARED browser (cache reset) so all pending
-  // page promises reject at once.
-  const deadline = setTimeout(() => { void killProbeBrowser(); }, PROBE_DEADLINE_MS);
+  let context: import('playwright-core').BrowserContext | null = null;
+  const deadline = setTimeout(() => { void context?.close().catch(() => undefined); }, PROBE_DEADLINE_MS);
   deadline.unref?.();
 
-  const browser = await getReusableBrowser();
+  context = await acquireEphemeralContext({ viewport });
 
   const result: GameProbeResult = {
     url: url.toString(),
@@ -170,7 +162,7 @@ export async function runGameProbe(
 
   let page: import('playwright-core').Page | null = null;
   try {
-    page = await browser.newPage({ viewport });
+    page = await context.newPage();
     await page.addInitScript(FPS_INIT_SCRIPT);
 
     page.on('console', (msg) => {
@@ -200,9 +192,7 @@ export async function runGameProbe(
 
     await page.goto(url.toString(), { waitUntil: 'commit', timeout: LOAD_TIMEOUT_MS });
     await page.waitForLoadState('domcontentloaded', { timeout: LOAD_TIMEOUT_MS }).catch(() => undefined);
-    try {
-      await page.waitForLoadState('networkidle', { timeout: 2_000 });
-    } catch {  }
+    await page.waitForTimeout(150);
 
     const actionTasks: Array<Promise<void>> = [];
     for (const action of actions.slice(0, 20)) {
@@ -217,10 +207,6 @@ export async function runGameProbe(
       })());
     }
     await Promise.all(actionTasks);
-    // SAMPLING WINDOW — screenshots are spread ACROSS it (first shot fires
-    // immediately, the rest every interval), then the window is topped up to
-    // its full durationMs. The old code slept the full duration first and
-    // THEN stacked another count × interval of sleeps for the shots.
     const dir = screenshotCount > 0 ? probeDataDir() : null;
     if (screenshotCount > 0 && !dir) {
       result.notes.push('no workspace bound — screenshots not persisted (probe data lives in <workspace>/.moriko-dat/probe)');
@@ -273,6 +259,7 @@ export async function runGameProbe(
   } finally {
     clearTimeout(deadline);
     await page?.close().catch(() => undefined);
+    await context?.close().catch(() => undefined);
   }
 
   return result;

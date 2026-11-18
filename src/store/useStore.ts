@@ -5,6 +5,7 @@ import type {
   AgentPermissionRequest,
   AskAnswer,
   AskUserRequest,
+  OperatorGateRequest,
   AgentWorkspaceInfo,
   Accent,
   ChatSettings,
@@ -32,7 +33,7 @@ import type {
 } from '../types';
 import { transitionAppearance } from '../lib/appearance';
 import { clearLegacyConversations, readLegacyConversations, storage, uid } from '../lib/storage';
-import { abortCompaction, reasoningFootprint, stripReasoning } from '../lib/compaction';
+import { abortCompaction, stripReasoning } from '../lib/compaction';
 import { lookupModelMeta } from '../lib/modelMeta';
 import { resolveForProvider, type ResolvedModelCapability } from '../lib/modelCapability';
 import { setWebAccessRemote } from '../lib/api';
@@ -41,14 +42,16 @@ import {
   beaconSyncConversations,
   fetchConversationDetail,
   fetchConversationSummaries,
+  patchConversationConfig,
   syncConversations,
+  type ConversationConfigPatchPayload,
 } from '../lib/api';
 
 export const DEFAULT_SETTINGS: ChatSettings = {
   systemInstruction: '',
   thinkingLevel: 'medium',
   temperature: 1,
-  /** `null` = Max: no client cap, the provider applies its own ceiling. */
+  
   maxOutputTokens: null,
   topP: 0.95,
   structuredOutputs: false,
@@ -56,9 +59,9 @@ export const DEFAULT_SETTINGS: ChatSettings = {
   agentMode: false,
   agentWorkflow: '',
   terminalMode: 'auto',
-  confirmDeletes: false,
+  confirmDeletes: true,
   fetchWeb: false,
-  /** Web access kill-switch — OFF by default (opt-in per conversation). */
+  
   webAccess: false,
   maxContextTokens: null,
   autoCompact: true,
@@ -77,29 +80,25 @@ interface AppState {
   providersError: string | null;
   providerId: string;
   model: string;
-  /** Image Studio's own provider/model choice, independent from the chat one. */
+  
   imageProviderId: string;
   imageModel: string;
-  /** Output-size test controls, forwarded to the provider as-is. */
+  
   imageSizeMode: ImageSizeMode;
   imageAspectRatio: string;
   imagePixelWidth: string;
   imagePixelHeight: string;
-  /** Persisted, user-ordered Gallery collection of image URLs. */
+  
   galleryImages: string[];
 
-  /** All generation sessions, newest activity first (server-persisted). */
+  
   imageSessions: ImageSession[];
-  /** The session the user is generating into; null until one is picked/created. */
+  
   activeImageSessionId: string | null;
-  /** Server retention window for temporary images; null until fetched. */
+  
   imageRetentionDays: number | null;
 
-  /**
-   * The submit/poll lifecycle lives HERE, not in the component: navigating
-   * away from Image Studio used to unmount the poller and silently abandon
-   * in-flight generations. `sessionId` pins where the result will land.
-   */
+  
   imageGen: {
     phase: 'idle' | 'submitting' | 'generating';
     error: string | null;
@@ -115,20 +114,15 @@ interface AppState {
     aspectRatio?: string;
     width?: number;
     height?: number;
-    /** Reference images (data URLs) — forwarded as-is; the endpoint's own
-        capacity (not any model tag) decides whether they can be sent. */
+    
     images?: string[];
   }) => Promise<void>;
   cancelImageGeneration: () => void;
   clearImageGenError: () => void;
 
-  /**
-   * Image Studio reference tray (data URLs), shared by the composer, the
-   * client-side editor and "use as reference" actions. In-memory only —
-   * images never touch browser storage (privacy rule).
-   */
+  
   imageReferences: string[];
-  /** Appends references; the caller enforces the per-model cap. */
+  
   addImageReferences: (entries: string[]) => void;
   removeImageReference: (index: number) => void;
   replaceImageReference: (index: number, entry: string) => void;
@@ -137,207 +131,114 @@ interface AppState {
   conversations: Conversation[];
   activeId: string | null;
 
-  /** Directories registered on the server for the agent tools. */
+  
   agentWorkspaces: AgentWorkspaceInfo[];
-  /** The workspace the harness tools operate on; null = none picked yet. */
+  
   activeAgentWorkspaceId: string | null;
-  /**
-   * Sandbox gate queue: the agent wants to operate OUTSIDE the workspace and
-   * needs the user's decision. The tool call on the server is paused until
-   * this is answered (auto-denied after 2 minutes).
-   */
+  
   pendingPermissions: AgentPermissionRequest[];
   pushPermissionRequest: (request: AgentPermissionRequest) => void;
   removePermissionRequest: (id: string) => void;
-  resolvePermissionRequest: (id: string, approve: boolean, remember: boolean) => Promise<void>;
+  resolvePermissionRequest: (id: string, approve: boolean, remember: boolean, reason?: string) => Promise<void>;
 
-  /**
-   * Ask-user queue: the agent asked the user 1..N questions via agent__ask_user
-   * and its tool call is PAUSED until this is answered (auto-skipped after the
-   * wait window). Mirrors the sandbox permission queue above.
-   */
+  
   pendingAskUser: AskUserRequest[];
   pushAskUserRequest: (request: AskUserRequest) => void;
   removeAskUserRequest: (id: string) => void;
-  /** C3: reconcile with the SERVER's pending list (visibility/reconnect sync). */
+  
   setPendingAskUser: (requests: AskUserRequest[]) => void;
   submitAskUserAnswers: (id: string, answers: AskAnswer[]) => Promise<void>;
 
-  /**
-   * Import a sanitized conversation (from an export file) into the list:
-   * id collisions get a fresh id, the import is selected, and everything
-   * persists like any other thread. Returns the id it landed under.
-   */
+  
+  pendingOperatorGates: OperatorGateRequest[];
+  pushOperatorGate: (request: OperatorGateRequest) => void;
+  removeOperatorGate: (id: string) => void;
+  setPendingOperatorGates: (requests: OperatorGateRequest[]) => void;
+  resolveOperatorGate: (id: string, verdict: 'accept' | 'reject', reason: string) => Promise<void>;
+
+  
   importConversation: (conversation: Conversation) => string;
 
   view: ViewId;
   sidebarCollapsed: boolean;
-  /**
-   * REASONING DISCLOSURE, per `turnId:segmentId`.
-   *
-   * Deliberately NOT component state: a reasoning strip lives inside a list
-   * that grows while it streams, and local `useState` was lost on every
-   * remount — the panel snapped shut while the user was reading it. Absent
-   * means "follow the policy" (open while the block streams, open after an
-   * aborted/errored run, closed once a healthy run settles); an explicit
-   * boolean is the user's own choice and outranks the policy forever.
-   */
+  
   reasoningOpen: Record<string, boolean>;
   setReasoningOpen: (key: string, open: boolean) => void;
-  /** Left rail width in px (drag-resizable, device-persisted). */
+  
   sidebarWidth: number;
-  /** Right configuration panel width in px (drag-resizable, device-persisted). */
+  
   settingsWidth: number;
   settingsOpen: boolean;
-  /** 6B: what lives in the right dock — the Configuration panel or the
-      docked project Tree. New exclusive panels slot in as a new mode. */
+  
   rightPanelMode: 'config' | 'tree' | 'addons' | 'diff';
-  /** DIFF PANEL: which turn's changes the panel is scoped to (null = all). */
+  
   diffPanelTurnId: string | null;
-  /**
-   * DIFF PANEL dock width — SEPARATE from settingsWidth on purpose: the split
-   * view needs a wider dock (default 760, drag-resizable), and closing the
-   * panel must return the dock to its normal width untouched (the spec:
-   * "split melebar otomatis khusus diff, saat panel ditutup semua kembali
-   * normal"). Transient — not device-persisted.
-   */
+  
   diffDockWidth: number;
   theme: ThemeMode;
-  /** Theme mechanism (design theme-mechanism): accent swatch, row density. */
+  
   accent: Accent;
   density: Density;
-  /** Ambient glow behind the app (design's .no-amb gate). */
+  
   ambient: boolean;
-  /** Tri-state like the design: null = follow prefers-reduced-motion. */
+  
   reduceMotion: boolean | null;
-  /** Panel-settings: gate chat deletion behind a confirm dialog. */
+  
   confirmDel: boolean;
-  /** Chat id waiting on that confirm dialog (null = none). */
+  
   pendingConfirmDelete: string | null;
-  /** App chrome zoom: everything except the chat context. 1 = default. */
+  
   fontScale: number;
-  /** Chat-context zoom: the thread and composer only. 1 = default. */
+  
   contextScale: number;
-  /** Workspace font style, applied on <html> as data-font (see index.css). */
+  
   fontFamily: FontFamily;
-  /** Per-model capability metadata (models.dev snapshot), loaded once. */
+  
   modelMeta: Record<string, ModelMeta>;
-  /** Which rail section is expanded in the sidebar. */
+  
   searchQuery: string;
-  /**
-   * HARNESS POP: the banner that pops below the session name for harness
-   * events (evasion reminders, escalations). One at a time — a newer event
-   * replaces the older one. Lifetime controls how long it holds before its
-   * pop-out animation runs.
-   *
-   * REMOVED (Fase A): merged into the catalog-backed Notice Center. Harness
-   * events now flow through showNotice like every other message — same spot
-   * under the session title, but opaque, stacked, deduped, with a history
-   * trail instead of a single self-replacing banner.
-   */
+  
   notices: NoticeEntry[];
-  /** Session trail of every notice shown — the pop never loses what it
-   *  replaced; the bell under the session title expands it. */
+  
   noticeHistory: NoticeEntry[];
   noticeHistoryExpanded: boolean;
-  /** Conversation ids with a generation in flight — parallel across chats. */
+  
   genRunning: Record<string, boolean>;
-  /**
-   * The conversation a COMPACTION is running for right now, or null — ONE at a
-   * time, everywhere. The "Compact now" button reads this for its busy
-   * indicator and every compaction entry point guards on it, so repeated
-   * clicks (or an auto trigger landing mid-compaction) can never stack a
-   * second summarization request on top of the first — a real thread once
-   * accumulated four checkpoint cards from one button. Transient, never
-   * persisted: a reload forgets it the way it forgets a live socket.
-   */
+  
   compactingId: string | null;
-  /**
-   * LIVE CONTEXT TELEMETRY per conversation — the SERVER GUARD's own numbers,
-   * streamed every tool round (`context_telemetry`). This is the figure the
-   * ContextChip shows while a run streams, so the number on screen and the
-   * number the guard acts on are literally the same value.
-   *
-   * Cleared when a run settles: after that the static estimate is the honest
-   * source again (the guard's figure described an in-flight request).
-   * Transient, never persisted.
-   */
+  
   liveContext: Record<string, LiveContextTelemetry>;
-  /**
-   * Runs the user STOPPED in this tab, until the server confirms they are
-   * gone. The sidebar badge is the union of `genRunning` and the registry's
-   * live list, and the registry deliberately keeps an aborted run inside its
-   * grace window — so without this the row kept spinning for a run the user
-   * had already ended. Suppressing it here (rather than only clearing
-   * `genRunning`) is what makes a Stop look like a Stop.
-   */
+  
   stoppedRuns: Record<string, true>;
   markRunStopped: (id: string) => void;
   clearRunStopped: (id: string) => void;
-  /**
-   * OPTIMISTIC STEER BUBBLES: steers the user SENT but the stream has not yet
-   * echoed back (the `steer` event fires only when the adapter drains the
-   * buffer between tool rounds — potentially minutes later). Rendered as
-   * pending bubbles so the user gets immediate visual confirmation; removed
-   * when the echo (same id) lands, or when the run ends without one.
-   */
+  
   pendingSteers: Record<string, Array<{ id: string; text: string; parts?: import('../types').TurnSteerPart[] }>>;
-  /** Queue an optimistic steer bubble for a conversation (id from the 202). */
+  
   addPendingSteer: (conversationId: string, id: string, text: string) => void;
-  /** DSH-style: optimistic bubble with the steer's full content parts. */
+  
   addPendingSteerParts: (conversationId: string, id: string, parts: import('../types').TurnSteerPart[]) => void;
-  /** Remove the matching optimistic bubble (echo landed or run ended). */
+  
   removePendingSteer: (conversationId: string, id: string) => void;
-  /** Clear ALL pending steers for a conversation (run finished/failed). */
+  
   clearPendingSteers: (conversationId: string) => void;
-  /**
-   * Conversation ids whose last AGENT run was interrupted (the process died
-   * mid-run). The job journal marked the record `crashed` at boot; the thread
-   * header shows a banner with a Resume action (see docs/ARCHITECTURE.md).
-   * Cleared when the user resumes or dismisses.
-   */
+  
   crashedRuns: Record<string, { runId: string; callCount: number }>;
-  /**
-   * Settings edited before any thread exists. They seed the next conversation
-   * so the Configuration panel is never inert on a fresh install.
-   */
+  
   pendingSettings: ChatSettings;
 
-  /**
-   * VISUAL v2 LIVE BUS — the newest addon-bus SSE frame (/api/addons/events).
-   * VisualCard reads this to re-bind cards whose id was touched by an
-   * edit-in-place render or a frontend-preview pick from ANOTHER browser.
-   * Single-slot (last event wins) — the card compares the payload's visualId.
-   */
+  
   addonEvent: import('../types/addonBus').AddonBusPayload | null;
-  /** Fused by the boot SSE subscriber — one set() per frame, cheap. */
+  
   pushAddonEvent: (event: import('../types/addonBus').AddonBusPayload) => void;
 
-  /**
-   * COMPOSER ROLE — the Grok "Slot" the user is sending from. `user` is the
-   * default plain chat. `operator` (Slot 2) appends an operator-context
-   * sidecar to the message (the model is told the speaker is the session
-   * operator — facts about harness state are not bluffs). `admin` (Slot 3)
-   * is a wire label only: sending as admin NEVER mutates the enforcement
-   * ladder — the stepper in Configuration owns that, and only the user
-   * moves it. This is a per-message selector, not a persisted setting.
-   */
+  
   composerRole: 'user' | 'operator' | 'admin';
-  /**
-   * TREE ATTACH (right-dock design): files picked from the project tree ride
-   * this transient queue into the composer's normal attachment pipeline
-   * (caps, upload, dataRefs). Never persisted — File handles die with the
-   * tab, exactly like the composer's own local attachment state.
-   */
+  
   composerQueuedFiles: File[];
 
   loadProviders: () => Promise<void>;
-  /**
-   * P3 LAZY METADATA: the 261 KB models.dev snapshot loads on FIRST NEED —
-   * the model picker opening, or the first send (context limits/reasoning
-   * hints). Single-flight: concurrent first-need callers share one download,
-   * and loadProviders no longer bundles it into boot.
-   */
+  
   ensureModelMeta: () => Promise<void>;
   setProvider: (providerId: string, model?: string) => void;
   setModel: (model: string) => void;
@@ -349,21 +250,21 @@ interface AppState {
     pixelHeight?: string;
   }) => void;
   loadGallery: () => Promise<void>;
-  /** Optimistic local append (agent__image results) — no server round-trip. */
+  
   pushGalleryUrls: (urls: string[]) => void;
   addToGallery: (urls: string[]) => Promise<void>;
   removeFromGallery: (url: string) => Promise<void>;
   moveGalleryImage: (url: string, direction: -1 | 1) => Promise<void>;
-  /** Gallery drag & drop: move the image at `from` to index `to` (design drop-handler). */
+  
   reorderGalleryImages: (from: number, to: number) => Promise<void>;
 
   loadImageSessions: () => Promise<void>;
   createImageSession: (label?: string) => Promise<string>;
   selectImageSession: (id: string | null) => void;
   deleteImageSession: (id: string) => Promise<void>;
-  /** Inline rename (sidebar context menu); optimistically relabels locally. */
+  
   renameImageSession: (id: string, label: string) => Promise<void>;
-  /** Records finished generations into a session (defaults to the active one). */
+  
   addItemsToSession: (
     items: Array<Omit<ImageSessionItem, 'savedAt'>>,
     targetSessionId?: string,
@@ -371,16 +272,16 @@ interface AppState {
   loadImageSettings: () => Promise<void>;
   setImageRetentionDays: (days: number) => Promise<void>;
   loadAgentWorkspaces: (sessionId?: string) => Promise<void>;
-  /** Registers a directory and makes it the active workspace. */
+  
   addAgentWorkspace: (path: string, label?: string, sessionId?: string) => Promise<AgentWorkspaceInfo>;
   removeAgentWorkspace: (id: string) => Promise<void>;
-  /** Activates a workspace for the given session (the active chat's id). */
+  
   setActiveAgentWorkspace: (id: string, sessionId?: string) => Promise<void>;
 
-  /** The panel's data — one workspace at a time (the session-bound one). */
+  
   treeView: TreeViewInfo | null;
   treeRules: TreeIgnoreRules | null;
-  /** Panel chrome: open/collapsed-pill/closed + device-persisted geometry. */
+  
   treePanelOpen: boolean;
   treePanelCollapsed: boolean;
   treePanelGeometry: { x: number; y: number; w: number; h: number } | null;
@@ -399,118 +300,69 @@ interface AppState {
     providerId?: string;
     model?: string;
     categoryId?: string;
-    /** Binds the new chat to this workspace immediately (the '+' picker). */
+    
     workspaceId?: string;
-    /** COUNCIL: stamp the new chat as a council container or a sub session of one. */
+    
     councilId?: string;
     councilRole?: 'main' | 'sub';
     councilAgentId?: string;
   }) => string;
   selectConversation: (id: string) => void;
   deleteConversation: (id: string) => void;
-  /** Internal: performs the actual deletion (deleteConversation may gate on confirmDel). */
+  
   executeDeleteConversation: (id: string) => void;
   confirmPendingDelete: () => void;
   cancelPendingDelete: () => void;
   renameConversation: (id: string, title: string) => void;
-  /** Stores (or clears) the conversation's compaction summary. */
+  
   setCompaction: (id: string, compaction: ConversationCompaction | undefined) => void;
-  /** Removes one turn; a user turn takes its assistant reply with it. */
+  
   deleteTurn: (conversationId: string, turnId: string) => void;
-  /**
-   * Drops a set of turns by id with the FULL deletion discipline (tombstones,
-   * rev bump, sync-baseline reset). deleteTurn is the single-turn convenience
-   * wrapper over this; multi-turn removals (regenerate's trim, ghost
-   * cleanups) must go through here too — a turn removal without the rev bump
-   * loses the server merge and RESURRECTS the dropped turns.
-   */
+  
   dropTurns: (conversationId: string, turnIds: string[]) => void;
-  /**
-   * Creates a new conversation duplicating the source thread's turns up to
-   * and including `turnId`, then selects it. A trailing error-only assistant
-   * turn is dropped — it carries nothing worth keeping in the branch.
-   */
+  
   branchFromTurn: (conversationId: string, turnId: string) => void;
   clearAllConversations: () => void;
-  replaceConversations: (conversations: Conversation[]) => void;  /**
-   * Load one conversation's BODY from the device.
-   *
-   * The list arrives as summary shells (see `Conversation.turnsLoaded`), so
-   * anything that needs real turns — rendering the thread, sending, the context
-   * meter — calls this first. A no-op when the body is already loaded, and
-   * de-duplicated while a load is in flight, so callers can be liberal about
-   * calling it.
-   */
+  replaceConversations: (conversations: Conversation[]) => void;  
   hydrateConversation: (id: string) => Promise<void>;
-  /**
-   * LIVE-FOLLOW: adopt a freshly fetched body for a conversation whose run is
-   * driven by ANOTHER tab (or whose stream this tab stopped consuming). The
-   * gate is keepLocalFullBody — identical-or-newer — so a body this tab
-   * legitimately edited in the meantime is never clobbered by an in-flight
-   * response, and a run this tab already streamed (attached) is never
-   * replaced mid-paint. No-op when the conversation vanished.
-   */
+  
   adoptFetchedBody: (fetched: Conversation) => void;
 
   appendTurn: (conversationId: string, turn: Turn) => void;
-  /** HARNESS-EVENT: insert/replace a kind:'harness-event' turn by id (dedupe
-   *  for bus replays; never retitles the conversation). */
+  
   upsertHarnessEvent: (conversationId: string, turn: Turn) => void;
   updateTurn: (conversationId: string, turnId: string, patch: Partial<Turn>) => void;
-  /**
-   * THE USER'S OWN PRUNER — the only thing that ever removes reasoning.
-   *
-   * The harness no longer drops reasoning on its own: not between tool rounds,
-   * not when a new user message arrives, not inside the compaction transcript
-   * (see compaction.ts). Reasoning therefore ACCUMULATES, and this action is
-   * the deliberate counterweight: an explicit act the user takes when the
-   * context is getting heavy, instead of an automatic trim nobody asked for.
-   *
-   * Strips both the legacy `reasoning` field and every reasoning segment across
-   * the whole conversation in ONE write. Returns how many turns carried
-   * reasoning (0 = nothing to trim).
-   */
+  
   trimReasoning: (conversationId: string) => number;
-  /** Shallow patch of a conversation (harness context, goals, …). */
+  
   patchConversation: (conversationId: string, patch: Partial<Conversation>) => void;
-  /** Replaces the goal list of one conversation (goals_state pushes / panel). */
+  
   setConversationGoals: (conversationId: string, goals: Goal[]) => void;
-  /** Replaces the standalone todo list of one conversation (todos_state pushes / panel). */
+  
   setConversationTodos: (conversationId: string, todos: Todo[]) => void;
-  /**
-   * Patch settings. Without `conversationId` the ACTIVE conversation is
-   * targeted; callers that know which session they are editing (the
-   * enforcement ladder) pass the id explicitly so a change can never land
-   * on a different chat. Enforcement/probation are NEVER staged into
-   * `pendingSettings` — a new chat must start clean.
-   */
+  
   updateSettings: (patch: Partial<ChatSettings>, conversationId?: string) => void;
 
   setView: (view: ViewId) => void;
   toggleSidebar: () => void;
-  /** Drag-resize setters — clamped in the drag handler, persisted on release. */
+  
   setSidebarWidth: (width: number) => void;
   setSettingsWidth: (width: number) => void;
-  /** Persists the current widths to the device (on drag release). */
+  
   commitSidebarWidth: () => void;
   commitSettingsWidth: () => void;
   commitDiffDockWidth: () => void;
   toggleSettings: () => void;
   setRightPanelMode: (mode: 'config' | 'tree' | 'addons' | 'diff') => void;
-  /**
-   * IMAGE STUDIO: one-shot request that the Configuration dock opens its
-   * image-model picker (set by the composer's "switch to edit model" chip;
-   * SettingsPanel consumes it and renders the picker modal).
-   */
+  
   imagePickerWanted: boolean;
   requestImagePicker: () => void;
   consumeImagePickerRequest: () => void;
-  /** Prompt pre-fill for the /image slash command — ImageStudio consumes it on
-   *  mount, so the draft survives the view switch without a new store slice. */
+  
   imageStudioPromptWanted: string | null;
   requestImageStudioPrompt: (prompt: string) => void;
   consumeImageStudioPromptRequest: () => void;
-  /** Opens the Diff Panel on the given turn (tab + dock + scope in one call). */
+  
   openDiffPanel: (turnId: string | null) => void;
   setDiffPanelTurnId: (turnId: string | null) => void;
   setDiffDockWidth: (width: number) => void;
@@ -518,9 +370,9 @@ interface AppState {
   setAccent: (accent: Accent) => void;
   setDensity: (density: Density) => void;
   setAmbient: (ambient: boolean) => void;
-  /** null = follow prefers-reduced-motion. */
+  
   setReduceMotion: (reduceMotion: boolean | null) => void;
-  /** Panel-settings: confirm-before-delete toggle. */
+  
   setConfirmDel: (confirmDel: boolean) => void;
   setFontScale: (scale: number) => void;
   setContextScale: (scale: number) => void;
@@ -529,8 +381,7 @@ interface AppState {
   setComposerRole: (role: 'user' | 'operator' | 'admin') => void;
   queueComposerFiles: (files: File[]) => void;
   clearComposerQueuedFiles: () => void;
-  /** THE ONLY door to the Notice Center. `id` must be a registered catalog
-   *  key — a raw string is a type error (Fase A #4.2 enforcement). */
+  
   showNotice: (
     id: MessageId,
     params?: Record<string, string | number>,
@@ -540,40 +391,15 @@ interface AppState {
   toggleNoticeHistory: () => void;
   clearNoticeHistory: () => void;
   setGenRunning: (id: string, running: boolean) => void;
-  /** Response timer: run start epoch per conversation (the live clock reads
-   *  Date.now() - genStartedAt[id]; no per-second state writes). */
+  
   genStartedAt: Record<string, number>;
-  /** Marks the start/end of a compaction — see `compactingId`. */
+  
   setCompacting: (id: string | null) => void;
-  /**
-   * Records the guard's latest telemetry for a conversation.
-   *
-   * NOTE: this is only ever called with `null` when the conversation's turns
-   * are edited by the user — a run ending does NOT erase the measurement (see
-   * `settleLiveContext`). The provider's last `promptTokens + completionTokens`
-   * is the real size of the conversation, not an estimate, so it stays on
-   * screen while the model is idle.
-   */
+  
   setLiveContext: (conversationId: string, telemetry: LiveContextTelemetry | null) => void;
-  /**
-   * RUN SETTLED — keep the provider's real measurement, drop only the
-   * in-flight part.
-   *
-   * `addedTokens` described tool output that had not been re-sent yet; once the
-   * run ends it is no longer pending, so it is zeroed and `liveContextTokens`
-   * becomes `promptTokens + completionTokens` — the actual size of the
-   * conversation as the provider last counted it.
-   *
-   * `tokens` overrides the figure outright, which is what compaction needs:
-   * the checkpoint replaced the covered turns, so the live number must collapse
-   * to the summarised size immediately instead of waiting for a round that may
-   * never come.
-   */
+  
   settleLiveContext: (conversationId: string, tokens?: number) => void;
-  /**
-   * Records (or clears) an interrupted agent run for a conversation — the
-   * thread header shows a Resume banner while one is set.
-   */
+  
   setCrashedRun: (
     id: string,
     run: { runId: string; callCount: number } | null,
@@ -584,13 +410,7 @@ interface AppState {
   activeAgentWorkspace: () => AgentWorkspaceInfo | undefined;
 }
 
-/**
- * ONE-TIME HEAL for records written by the frozen-progress bug: a tool segment
- * whose summary is a live progress line ("Waiting for the provider… Ns …") and
- * which never received its real tool_result. Clearing the fake summary lets
- * the card render as still-running instead of a frozen terminal state, and the
- * next detail fetch (or an agent retry) can finally pair the real result.
- */
+
 const FROZEN_PROGRESS_RE = /Waiting for the provider…\s*\d+s\s*\((?:PENDING|RUNNING|QUEUED)\)/;
 
 function healFrozenImageSegments(turns: Turn[]): Turn[] {
@@ -614,17 +434,7 @@ function healFrozenImageSegments(turns: Turn[]): Turn[] {
   return changed ? healed : turns;
 }
 
-/**
- * THE DUPLICATE-TURN GUARD — the reported "sampah/bekas turn" bug.
- *
- * A replay racing a body-adopt once appended the SAME run's turn twice (two
- * paint passes under different turns arrays), and a duplicate id in a
- * rendered list is React poison: the keyed diff mis-pairs children and the
- * commit LEAVES STALE DOM ROWS BEHIND ("children may be duplicated and/or
- * omitted") — the ghost turns that survived even a reload of the store.
- * Every door a turn can enter through runs through here: the LAST occurrence
- * wins (patches/upserts carry the newest paint), order is preserved.
- */
+
 function dedupeTurns(turns: Turn[]): Turn[] {
   turns = healFrozenImageSegments(turns).map(withSegmentIds);
   const seen = new Set<string>();
@@ -675,34 +485,17 @@ function makeConversation(options?: {
   };
 }
 
-/**
- * A conversation that exists only in memory: spawned by "New chat" but never
- * used (no turns, default title). Phantoms are excluded from persistence and
- * from every list, so pressing New Chat repeatedly never piles up entries.
- */
+
 export function isPhantomConversation(conversation: Conversation): boolean {
   return conversation.turns.length === 0 && conversation.title === 'New chat';
 }
 
-/**
- * COUNCIL (Council Agent addon): a sub session lives INSIDE a council container.
- * It is a real conversation (own turns/context) but must never appear as its own
- * row in the sidebar, the workspace groups or the history — the council's Main
- * Session is the single visible row, and switching between members happens
- * through the TopBar council switcher.
- */
+
 export function isSubSession(conversation: Conversation): boolean {
   return conversation.councilRole === 'sub' && Boolean(conversation.councilId);
 }
 
-/**
- * The NEWEST conversation id (by updatedAt, tie-break createdAt) — the
- * sidebar's own sort order. Used as the FALLBACK selection when the current
- * one vanished: the merged list is in server manifest order (oldest first),
- * so "head of list" meant "the oldest chat", which is how a New-Chat
- * phantom (not persisted — see isPhantomConversation) that was dropped by a
- * sync fold threw the user into the oldest session.
- */
+
 function newestConversationId(conversations: Conversation[]): string | null {
   let best: Conversation | null = null;
   for (const conversation of conversations) {
@@ -719,7 +512,12 @@ function newestConversationId(conversations: Conversation[]): string | null {
 }
 
 function persist(conversations: Conversation[]): void {
-  pendingConversations = conversations.filter((entry) => !isPhantomConversation(entry));
+  pendingConversations = conversations.filter(
+    (entry) =>
+      !isPhantomConversation(entry) ||
+      serverKnownIds.has(entry.id) ||
+      configuredConversationIds.has(entry.id),
+  );
   queueServerSync(pendingConversations);
 }
 
@@ -732,17 +530,7 @@ function flushPersist(): void {
   queueServerSync(snapshot);
 }
 
-/**
- * Apply a METADATA edit (title, settings, provider/model) to a conversation,
- * loading its body first when it is still a summary shell.
- *
- * A shell is deliberately never pushed by the sync — an upsert carrying
- * `turns: []` reads to the merge as "every turn was deleted" and WINS, which
- * would wipe the record on the device. So an edit applied to a shell would be
- * applied to a record that can never be sent: the sidebar shows the new title,
- * the device keeps the old one, and the rename silently vanishes on the next
- * load. Loading the body first is what makes the edit real.
- */
+
 function withLoadedBody(id: string, mutate: () => void): void {
   const entry = useStore.getState().conversations.find((conversation) => conversation.id === id);
   if (!entry || entry.turnsLoaded !== false) {
@@ -755,54 +543,121 @@ function withLoadedBody(id: string, mutate: () => void): void {
 }
 
 
-/** id → JSON of the last state acknowledged as on the server (diff base). */
+
 const syncedJson = new Map<string, string>();
 
-/**
- * SETTINGS-DURING-RUN persistence: a conversation that is LIVE (generating)
- * syncs incrementally — turn patches only — so a settings change made MID-RUN
- * (lower context limit, compact threshold) never reached the server and was
- * silently reset to defaults on the next reload. updateSettings flags the
- * conversation here; the next sync batch then ships the FULL record once,
- * and the flag clears when the server acknowledges it.
- */
+
 const settingsDirtyIds = new Set<string>();
+const configuredConversationIds = new Set<string>();
+const configSyncInFlight = new Map<string, Promise<void>>();
+const configEpoch = new Map<string, number>();
+
+function commitConfigToServer(
+  conversationId: string,
+  payload: ConversationConfigPatchPayload,
+): Promise<void> {
+  const nextEpoch = (configEpoch.get(conversationId) ?? 0) + 1;
+  configEpoch.set(conversationId, nextEpoch);
+  configuredConversationIds.add(conversationId);
+  const prev = configSyncInFlight.get(conversationId) ?? Promise.resolve();
+  const task = prev
+    .catch(() => undefined)
+    .then(async () => {
+      const snapshot = !serverKnownIds.has(conversationId)
+        ? useStore
+            .getState()
+            .conversations.find((entry) => entry.id === conversationId)
+        : undefined;
+      const summary = await patchConversationConfig(
+        conversationId,
+        snapshot && !payload.initialConversation
+          ? { ...payload, initialConversation: snapshot }
+          : payload,
+      );
+      if (!summary) return;
+      serverKnownIds.add(summary.id);
+      syncedTurnCount.set(summary.id, summary.turnCount);
+      if (configEpoch.get(conversationId) === nextEpoch) {
+        settingsDirtyIds.delete(conversationId);
+        const current = useStore
+          .getState()
+          .conversations.find((entry) => entry.id === conversationId);
+        if (current) {
+          syncedJson.set(conversationId, JSON.stringify(current));
+        }
+      }
+    })
+    .finally(() => {
+      if (configSyncInFlight.get(conversationId) === task) {
+        configSyncInFlight.delete(conversationId);
+      }
+    });
+  configSyncInFlight.set(conversationId, task);
+  return task;
+}
+
+export function awaitConfigSync(conversationId: string): Promise<void> {
+  return configSyncInFlight.get(conversationId) ?? Promise.resolve();
+}
+
+function mergeServerSettings(raw?: ChatSettings | null): ChatSettings {
+  if (!raw) {
+    return {
+      ...DEFAULT_SETTINGS,
+      enforcement: { ...DEFAULT_SETTINGS.enforcement },
+      probation: { ...DEFAULT_SETTINGS.probation },
+    };
+  }
+  return {
+    ...DEFAULT_SETTINGS,
+    ...raw,
+    enforcement: { ...DEFAULT_SETTINGS.enforcement, ...raw.enforcement },
+    probation: { ...DEFAULT_SETTINGS.probation, ...raw.probation },
+  };
+}
+
+function pickNewerLiveContext(
+  first: LiveContextTelemetry | undefined,
+  second: LiveContextTelemetry | undefined,
+): LiveContextTelemetry | undefined {
+  if (!first) return second;
+  if (!second) return first;
+  if (second.at !== first.at) return second.at > first.at ? second : first;
+  if (Boolean(second.buckets) !== Boolean(first.buckets)) {
+    return second.buckets ? second : first;
+  }
+  return second.liveContextTokens >= first.liveContextTokens ? second : first;
+}
+
+function mergeLiveContextFromConversations(
+  current: Record<string, LiveContextTelemetry>,
+  conversations: Conversation[],
+): Record<string, LiveContextTelemetry> {
+  let changed = false;
+  const next = { ...current };
+  for (const convo of conversations) {
+    const serverLive = convo.liveContext;
+    if (!serverLive) continue;
+    const merged = pickNewerLiveContext(next[convo.id], serverLive);
+    if (merged && merged !== next[convo.id]) {
+      next[convo.id] = merged;
+      changed = true;
+    }
+  }
+  return changed ? next : current;
+}
+
 let syncTimer: number | null = null;
 let syncInFlight: Promise<void> = Promise.resolve();
 let syncDirty = false;
-/** True once boot reconcile finished (queues before it are no-ops). */
+
 let syncReady = false;
 let lastSyncSnapshot: Conversation[] | null = null;
 
-/**
- * CONVERSATIONS THE USER EXPLICITLY DELETED, waiting to be acknowledged.
- *
- * This is the ONLY source of `removeIds`. The old rule was "anything the server
- * holds that I do not hold is a deletion", which turned a boot whose body
- * fetches failed into a server-side wipe: `serverKnownIds` was filled from the
- * summaries BEFORE the bodies were confirmed, `assembleMerged` dropped whatever
- * failed to load, and the next batch told the server to delete exactly those.
- * That is how an archive can shrink from ~123 chats to 2 with no error anywhere
- * (the manifest's `nextSeq` only ever climbs — it read 124 while 2 folders were
- * left on disk, with no backup to restore from).
- *
- * "I do not have it" is not evidence that it should not exist: that is the
- * normal state of a second browser, of a reload that raced the proxy, and of a
- * chat created elsewhere. Only the user's own delete lands here.
- */
+
 const pendingDeletions = new Set<string>();
 
-/**
- * TOMBSTONES for deleted turns. A running stream paints through a throttled
- * updateTurn (~50 ms) and a finalizer flush fires on abort — when the user
- * deletes a message MID-STREAM, one of those late writes used to land after
- * the deletion and resurrect the dead turn in place. deleteTurn now records
- * the deleted turn ids here; updateTurn refuses to write to a tombstoned id
- * (appendTurn-style resurrections are covered because the fold + rev guard
- * keep the deleted copy out of the shared store). TTL keeps the map bounded —
- * a write arriving later than this is a genuinely new turn with a recycled
- * id (uid() collision is impossible in practice, not worth guarding).
- */
+
 const TURN_TOMBSTONES = new Map<string, number>();
 const TURN_TOMBSTONE_TTL_MS = 10_000;
 
@@ -824,18 +679,11 @@ function isTurnTombstoned(turnId: string): boolean {
   return true;
 }
 
-/** Slightly wider than the local write: streaming needs no chat-server POST per token. */
+
 const SYNC_DEBOUNCE_MS = 1500;
-/** P3: the live-patch channel's STEADY-STATE cadence cap. */
+
 const SYNC_STEADY_CAP_MS = 5_000;
-/**
- * P3 SYNC CADENCE — consecutive cycles that carried a batch stretch the next
- * debounce (1.5s → 2.2s → 3.4s → 5s cap, ±20% jitter). A long streaming run
- * used to sync at a flat 1.5s forever (the audit's ~19× sync in 44s); the
- * patches still keep the server's record current for other tabs, just at an
- * honest pace. An idle cycle (nothing to send) resets the ladder so the user's
- * next action is snappy again.
- */
+
 let syncCycleStreak = 0;
 
 function nextSyncDelayMs(): number {
@@ -843,39 +691,18 @@ function nextSyncDelayMs(): number {
   return Math.round(expo * (0.8 + Math.random() * 0.4));
 }
 
-/**
- * Conversations THIS tab is actively streaming into. Their full-record upsert
- * is pure bandwidth; their trailing turn reaches the server as an INCREMENTAL
- * PATCH instead (see computeSyncBatch), and their local copy must survive the
- * post-sync fold (see foldServerSummaries).
- */
+
 function generatingConversationIds(): Set<string> {
   return new Set(Object.keys(useStore.getState().genRunning));
 }
 
-/**
- * Conversations the server has a RECORD for — the authoritative existence
- * set, refreshed from every sync response and at boot. A LIVE chat the
- * server has never seen is upserted IN FULL once (the patches then have a
- * record to land in); afterwards only its turns ride the wire.
- */
+
 const serverKnownIds = new Set<string>();
 
-/**
- * Per-conversation turn count the server's record last acknowledged. The
- * live-sync baseline: a generating chat patches every turn from this index
- * onward (the trailing turn always included — streaming MUTATES it in
- * place, so its patch rides every cycle).
- */
+
 const syncedTurnCount = new Map<string, number>();
 
-/**
- * P4 BOOT FOLD: yields to the main thread between boot phases, so the boot
- * reconcile (legacy migration → list walk → body fetches → merge) never
- * stacks into one unbroken long task. scheduler.yield() when the platform
- * provides it, a macrotask break otherwise — both let the browser paint and
- * process input between chunks instead of locking up for the whole boot.
- */
+
 function yieldToMain(): Promise<void> {
   if (typeof window === 'undefined') return Promise.resolve();
   const scheduler = (window as unknown as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
@@ -904,25 +731,8 @@ function runServerSync(): Promise<void> {
   return syncInFlight;
 }
 
-/**
- * Diff the snapshot against the acknowledged state; null when in sync.
- *
- * LIVE (generating) chats sync INCREMENTALLY: the server already holds the
- * record, so only the turns it has not acknowledged are pushed — the
- * trailing turn every cycle, since streaming mutates it in place. This keeps
- * the server's record CURRENT during a run (a reload anywhere, or a second
- * browser, reads the live partial straight from the store) without the
- * multi-megabyte full-record upload on every debounce that the old stream
- * SUPPRESSION avoided by simply skipping those chats and leaving the server
- * arbitrarily behind.
- */
-/**
- * TURN DELETIONS waiting to reach the server. dropTurns records the dropped
- * ids here; computeSyncBatch ships them as `turn: null` patches — INCLUDING
- * while the conversation is generating (the turn-patch-only sync path that
- * made a mid-run regenerate leave the old turn on the server, so a second
- * browser saw two assistant replies). Cleared once a sync acknowledges them.
- */
+
+
 const pendingTurnDeletions = new Map<string, Set<string>>();
 
 function rememberTurnDeletion(conversationId: string, turnIds: string[]): void {
@@ -945,7 +755,7 @@ function computeSyncBatch(snapshot: Conversation[]): {
   upsert: Conversation[];
   removeIds: string[];
   turnPatches: TurnPatch[];
-  /** The turn deletions this batch carries — clear them on ack. */
+  
   turnDeletions: Array<{ conversationId: string; turnId: string }>;
 } | null {
   const generating = generatingConversationIds();
@@ -1030,30 +840,14 @@ async function doServerSync(): Promise<void> {
   await foldServerSummaries(summaries, batch.upsert, snapshot);
 }
 
-/**
- * Fingerprint equality: the local record is KNOWN-identical to the server's
- * (monotonic rev + timestamp + turn count). Streaming grows a turn without
- * touching rev/updatedAt, which is why the count is part of the fingerprint —
- * it is the one signal that distinguishes a mid-stream local copy from the
- * last-accepted server record.
- */
+
 function localMatchesSummary(local: Conversation, summary: ConversationSummary): boolean {
   if ((local.rev ?? null) !== (summary.rev ?? null)) return false;
   if (local.updatedAt !== summary.updatedAt) return false;
   return local.turns.length === summary.turnCount;
 }
 
-/**
- * The local record is strictly NEWER than the server's. THE GATE IS THE
- * SERVER'S OWN MERGE ORDER, not a rev-first shortcut: timestamps decide
- * first, rev only breaks a tie — because rev is a per-client monotonic
- * counter: tab A's rev 500 (every streamed token bumps it, see updateTurn)
- * and tab B's rev 11 (one rename) are unrelated counters. Comparing them
- * cross-tab let the streaming tab's STALE title win over another tab's
- * explicit rename forever (the reported "sesi dinamai acak" bug). A rename
- * now bumps updatedAt, so the timestamp gate reads it as strictly newer and
- * every fold pulls it in.
- */
+
 function localIsNewer(local: Conversation, summary: ConversationSummary): boolean {
   if (local.updatedAt > summary.updatedAt) return true;
   if (local.updatedAt < summary.updatedAt) return false;
@@ -1065,24 +859,12 @@ function localIsNewer(local: Conversation, summary: ConversationSummary): boolea
   return false;
 }
 
-/**
- * Keep the local body when it is known-identical to the server's record or
- * strictly newer than it. Only a genuinely stale local copy (or a record this
- * browser never held) makes the body cross the wire.
- */
+
 function keepLocalBody(local: Conversation, summary: ConversationSummary): boolean {
   return localMatchesSummary(local, summary) || localIsNewer(local, summary);
 }
 
-/**
- * Identical-or-newer decision for the LIVE-FOLLOW path: a follow fetches a
- * FULL body (not a summary), so the comparison runs record-to-record with the
- * same gate the fold uses — timestamps first, rev at ties, turn count last.
- * The server's turn mirror and patch channel keep the device record current,
- * so a body the fetch brings back is the server's truth for a run this tab is
- * not consuming; the local copy only survives when it is the same state (or
- * a strictly newer edit this tab made in the meantime).
- */
+
 function keepLocalFullBody(local: Conversation, fetched: Conversation): boolean {
   if (local.updatedAt > fetched.updatedAt) return true;
   if (local.updatedAt < fetched.updatedAt) return false;
@@ -1093,11 +875,7 @@ function keepLocalFullBody(local: Conversation, fetched: Conversation): boolean 
   return JSON.stringify(local) === JSON.stringify(fetched);
 }
 
-/**
- * Assemble the merged list in the server's order, then the local-only rows.
- * The store's conversations array keeps its full-body shape — the views and
- * the wire builder are untouched.
- */
+
 function assembleMerged(
   summaries: ConversationSummary[],
   resolved: Map<string, Conversation>,
@@ -1112,15 +890,7 @@ function assembleMerged(
   ];
 }
 
-/**
- * Fold the server's post-merge SUMMARY list into the live store. A chat this
- * tab edited after the batch it just pushed keeps its LOCAL body (it resyncs
- * on the next persist); a record the server holds NEWER than the local copy
- * is fetched in full — only that one body crosses the wire, never the whole
- * list. A LIVE chat no longer needs a special case: the server's record is
- * kept current by the turn patches, and the local copy of the streaming tab
- * is still ahead on `rev`, so `keepLocalBody` keeps it without a fetch.
- */
+
 async function foldServerSummaries(
   summaries: ConversationSummary[],
   sent: Conversation[],
@@ -1135,13 +905,19 @@ async function foldServerSummaries(
     syncedTurnCount.set(summary.id, summary.turnCount);
     const localEntry = local.find((entry) => entry.id === summary.id);
     if (localEntry?.turnsLoaded === false) {
+      const keepLocal = settingsDirtyIds.has(summary.id) || configSyncInFlight.has(summary.id);
       resolved.set(summary.id, {
         ...localEntry,
         title: summary.title,
         updatedAt: summary.updatedAt,
         rev: summary.rev,
-        providerId: summary.providerId ?? localEntry.providerId,
-        model: summary.model ?? localEntry.model,
+        providerId: keepLocal ? localEntry.providerId : (summary.providerId ?? localEntry.providerId),
+        model: keepLocal ? localEntry.model : (summary.model ?? localEntry.model),
+        settings: !keepLocal && summary.settings ? mergeServerSettings(summary.settings) : localEntry.settings,
+        ...( !keepLocal && summary.compaction !== undefined
+          ? { compaction: summary.compaction }
+          : {}),
+        ...(summary.liveContext !== undefined ? { liveContext: summary.liveContext } : {}),
       });
       continue;
     }
@@ -1152,19 +928,45 @@ async function foldServerSummaries(
     const editedAfterSend =
       sentJson.has(summary.id) && JSON.stringify(localEntry) !== sentJson.get(summary.id);
     if (editedAfterSend || keepLocalBody(localEntry, summary)) {
-      resolved.set(summary.id, localEntry);
+      const mergedLive = pickNewerLiveContext(
+        localEntry.liveContext,
+        summary.liveContext as LiveContextTelemetry | undefined,
+      );
+      const entryWithLive =
+        mergedLive && mergedLive !== localEntry.liveContext
+          ? { ...localEntry, liveContext: mergedLive }
+          : localEntry;
+      resolved.set(summary.id, entryWithLive);
       if (!editedAfterSend && !live.has(summary.id) && localMatchesSummary(localEntry, summary)) {
-        syncedJson.set(summary.id, JSON.stringify(localEntry));
+        syncedJson.set(summary.id, JSON.stringify(entryWithLive));
       }
       continue;
     }
     toFetch.push(summary.id);
   }
   if (toFetch.length > 0) {
+    const summaryById = new Map(summaries.map((s) => [s.id, s]));
+    const localById = new Map(local.map((c) => [c.id, c]));
     const fetched = await Promise.all(toFetch.map((id) => fetchConversationDetail(id)));
-    for (const convo of fetched) {
-      if (!convo) continue;
-      const clean = { ...convo, turns: dedupeTurns(convo.turns) };
+    for (let idx = 0; idx < toFetch.length; idx += 1) {
+      const targetId = toFetch[idx];
+      const convo = fetched[idx];
+      const localEntry = localById.get(targetId);
+      const summary = summaryById.get(targetId);
+      if (!convo) {
+        if (localEntry) resolved.set(localEntry.id, localEntry);
+        continue;
+      }
+      const serverLive = pickNewerLiveContext(
+        convo.liveContext,
+        summary?.liveContext as LiveContextTelemetry | undefined,
+      );
+      const mergedLive = pickNewerLiveContext(localEntry?.liveContext, serverLive);
+      const clean: Conversation = {
+        ...convo,
+        turns: dedupeTurns(convo.turns),
+        ...(mergedLive !== undefined ? { liveContext: mergedLive } : {}),
+      };
       resolved.set(clean.id, clean);
       syncedJson.set(clean.id, JSON.stringify(clean));
     }
@@ -1181,14 +983,7 @@ async function foldServerSummaries(
   if (changed) useStore.getState().replaceConversations(merged);
 }
 
-/**
- * A list row for a chat whose body has not been downloaded.
- *
- * Enough for the sidebar, History, search and the sync bookkeeping — and not
- * enough to send or render, which is what `turnsLoaded: false` says. Settings
- * are the staged defaults: they are never sent from a shell (the sync skips
- * it) and hydration replaces them with the record's own.
- */
+
 function shellForSummary(summary: ConversationSummary): Conversation {
   return {
     id: summary.id,
@@ -1202,31 +997,18 @@ function shellForSummary(summary: ConversationSummary): Conversation {
     councilRole: summary.councilRole,
     councilAgentId: summary.councilAgentId,
     rev: summary.rev,
-    settings: {
-      ...DEFAULT_SETTINGS,
-      enforcement: { ...DEFAULT_SETTINGS.enforcement },
-      probation: { ...DEFAULT_SETTINGS.probation },
-    },
+    settings: mergeServerSettings(summary.settings),
+    ...(summary.compaction !== undefined ? { compaction: summary.compaction } : {}),
+    ...(summary.liveContext !== undefined ? { liveContext: summary.liveContext } : {}),
     turns: [],
     turnsLoaded: false,
   };
 }
 
-/** In-flight body loads, so two callers never fetch the same chat twice. */
+
 const hydrating = new Map<string, Promise<void>>();
 
-/**
- * Boot reconcile, started once from App via `bootConversationSync`.
- *
- * THE DEVICE IS THE STORE, so this is the whole list — and it is deliberately
- * CHEAP: the server's summaries become the rows, and bodies are fetched only
- * for the chats this tab needs NOW (the ones it is streaming into, and the one
- * the user had open). Everything else stays a shell until it is opened.
- *
- * That is not an optimisation, it is the only workable shape: two chats here
- * already weigh 2.3 MB, and the archive once held ~123 — a boot that fetched
- * every body would move ~150 MB before the first paint.
- */
+
 async function initConversationSync(): Promise<void> {
   if (syncReady || typeof window === 'undefined') return;
 
@@ -1296,39 +1078,33 @@ async function initConversationSync(): Promise<void> {
 }
 
 let markConversationsReady: () => void = () => undefined;
-/**
- * Resolves once the boot conversation sync has SETTLED (success, migration,
- * or proxy failure). Anything that must not act on a half-loaded conversation
- * list — like the reload-resume reconcile in useChatController — awaits this.
- */
+
 export const conversationsReady = new Promise<void>((resolve) => {
   markConversationsReady = resolve;
 });
 
 let markProvidersReady: () => void = () => undefined;
-/** Resolves when the boot provider list settles — see loadProviders. */
+
 export const providersReady = new Promise<void>((resolve) => {
   markProvidersReady = resolve;
 });
 
-/** The in-flight boot load — second callers await it instead of re-fetching. */
+
 let providersLoadInFlight: Promise<void> | null = null;
-/** The in-flight lazy metadata download — shared by every first-need caller. */
+
 let modelMetaInFlight: Promise<void> | null = null;
-/** P3 TREE SINGLE-OWNER: the in-flight tree load + its freshness stamp. */
+
 let treeLoadInFlight: { workspaceId: string; promise: Promise<void> } | null = null;
 let treeLoadedAt = 0;
-/** Minimum gap between tree fetches for the same workspace (single owner). */
+
 const TREE_LOAD_MIN_GAP_MS = 4_000;
 
-/** Kick off the one-time boot sync of the shared conversation store. */
+
 export function bootConversationSync(): Promise<void> {
   return initConversationSync().finally(() => markConversationsReady());
 }
 
-/** Re-pulls the shared list — after a trash RESTORE the server holds a chat
- *  this browser has never seen. New ids merge as summary shells (hydration
- *  fetches the body on demand); rows this browser already has are untouched. */
+
 export async function refreshConversationList(): Promise<void> {
   if (typeof window === 'undefined') return;
   try {
@@ -1371,7 +1147,7 @@ const savedImageStudio = storage.loadImageStudioModel();
 
 let genTick: number | null = null;
 let genPoll: number | null = null;
-/** Bumped to invalidate any running poll loop (Stop, or a newer generation). */
+
 let genToken = 0;
 
 function stopGenTimers(): void {
@@ -1412,6 +1188,7 @@ export const useStore = create<AppState>((set, get) => ({
   activeAgentWorkspaceId: null,
   pendingPermissions: [],
   pendingAskUser: [],
+  pendingOperatorGates: [],
 
   view: storage.loadView(),
   sidebarCollapsed: storage.loadSidebarCollapsed(),
@@ -1452,6 +1229,7 @@ export const useStore = create<AppState>((set, get) => ({
   crashedRuns: {},
   pendingSettings: {
     ...DEFAULT_SETTINGS,
+    ...(storage.loadPendingSettings() ?? {}),
     enforcement: { ...DEFAULT_SETTINGS.enforcement },
     probation: { ...DEFAULT_SETTINGS.probation },
   },
@@ -1480,7 +1258,10 @@ export const useStore = create<AppState>((set, get) => ({
         const { imageProviderId, imageModel } = get();
         const imageValid = providers.some((entry) => entry.id === imageProviderId);
 
-        set({ providers, providerId, model, providersLoading: false, modelMeta: {} });
+        set({ providers, providerId, model, providersLoading: false });
+        if (Object.keys(get().modelMeta).length === 0) {
+          void get().ensureModelMeta();
+        }
         if (!imageValid && (imageProviderId || imageModel)) {
           get().setImageStudioModel('', '');
         }
@@ -1526,15 +1307,15 @@ export const useStore = create<AppState>((set, get) => ({
     storage.saveModel(nextModel);
     const conversation = get().activeConversation();
     if (conversation) {
-      withLoadedBody(conversation.id, () => {
-        const next = get().conversations.map((entry) =>
-          entry.id === conversation.id
-            ? { ...entry, providerId, model: nextModel }
-            : entry,
-        );
-        set({ conversations: next });
-        persist(next);
-      });
+      const next = get().conversations.map((entry) =>
+        entry.id === conversation.id
+          ? { ...entry, providerId, model: nextModel, rev: (entry.rev ?? 0) + 1 }
+          : entry,
+      );
+      settingsDirtyIds.add(conversation.id);
+      set({ conversations: next });
+      persist(next);
+      void commitConfigToServer(conversation.id, { providerId, model: nextModel });
     }
   },
 
@@ -1576,8 +1357,7 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  /** Optimistic local append — the browser that generated sees the new image
-   *  instantly, without waiting for the SSE bus round-trip. */
+  
   pushGalleryUrls: (urls) => {
     if (urls.length === 0) return;
     const current = get().galleryImages;
@@ -1985,7 +1765,7 @@ export const useStore = create<AppState>((set, get) => ({
       return;
     }
 
-    /** Deep-clones the path to `relPath`'s parent, applying `mutate`. */
+    
     const next = structuredClone(view);
     const parts = delta.relPath.split('/').filter(Boolean);
     const parentParts = parts.slice(0, -1);
@@ -2096,10 +1876,10 @@ export const useStore = create<AppState>((set, get) => ({
     set({ pendingPermissions: get().pendingPermissions.filter((entry) => entry.id !== id) });
   },
 
-  resolvePermissionRequest: async (id, approve, remember) => {
+  resolvePermissionRequest: async (id, approve, remember, reason) => {
     const { decideAgentPermission } = await import('../lib/api');
     try {
-      await decideAgentPermission(id, approve, remember);
+      await decideAgentPermission(id, approve, remember, reason);
     } catch (error) {
       get().showNotice('permission.decideFailed', undefined, {
         detail: error instanceof Error ? error.message : undefined,
@@ -2135,18 +1915,47 @@ export const useStore = create<AppState>((set, get) => ({
     get().removeAskUserRequest(id);
   },
 
+  pushOperatorGate: (request) => {
+    if (!request.id) return;
+    if (get().pendingOperatorGates.some((entry) => entry.id === request.id)) return;
+    set({ pendingOperatorGates: [...get().pendingOperatorGates, request] });
+  },
+
+  removeOperatorGate: (id) => {
+    set({ pendingOperatorGates: get().pendingOperatorGates.filter((entry) => entry.id !== id) });
+  },
+
+  setPendingOperatorGates: (requests) => {
+    set({ pendingOperatorGates: requests });
+  },
+
+  resolveOperatorGate: async (id, verdict, reason) => {
+    const { decideOperatorGate } = await import('../lib/api');
+    try {
+      await decideOperatorGate(id, verdict, reason);
+    } catch (error) {
+      get().showNotice('gate.decideFailed', undefined, {
+        detail: error instanceof Error ? error.message : undefined,
+      });
+      return;
+    }
+    get().removeOperatorGate(id);
+  },
+
   setModel: (model) => {
     set({ model });
     storage.saveModel(model);
     const conversation = get().activeConversation();
     if (conversation) {
-      withLoadedBody(conversation.id, () => {
-        const next = get().conversations.map((entry) =>
-          entry.id === conversation.id ? { ...entry, model } : entry,
-        );
-        set({ conversations: next });
-        persist(next);
-      });
+      const next = get().conversations.map((entry) =>
+        entry.id === conversation.id
+          ? { ...entry, model, rev: (entry.rev ?? 0) + 1 }
+          : entry,
+      );
+      settingsDirtyIds.add(conversation.id);
+      set({ conversations: next });
+      persist(next);
+      void commitConfigToServer(conversation.id, { model });
     }
   },
 
@@ -2204,7 +2013,6 @@ export const useStore = create<AppState>((set, get) => ({
     get().executeDeleteConversation(id);
   },
   executeDeleteConversation: (id) => {
-    // A compaction running for the deleted conversation dies with it.
     if (get().compactingId === id) {
       abortCompaction(id);
       set({ compactingId: null });
@@ -2218,7 +2026,13 @@ export const useStore = create<AppState>((set, get) => ({
         )
       : [];
     const dropped = councilSubs.map((conversation) => conversation.id);
-    for (const subId of dropped) pendingDeletions.add(subId);
+    for (const subId of dropped) {
+      pendingDeletions.add(subId);
+      configuredConversationIds.delete(subId);
+      settingsDirtyIds.delete(subId);
+    }
+    configuredConversationIds.delete(id);
+    settingsDirtyIds.delete(id);
     const next = get().conversations.filter((conversation) => !pendingDeletions.has(conversation.id));
     const currentActiveId = get().activeId ?? '';
     const activeId = (currentActiveId === id || dropped.includes(currentActiveId))
@@ -2260,8 +2074,10 @@ export const useStore = create<AppState>((set, get) => ({
         ? { ...conversation, compaction, rev: (conversation.rev ?? 0) + 1 }
         : conversation,
     );
+    settingsDirtyIds.add(id);
     set({ conversations: next });
     persist(next);
+    void commitConfigToServer(id, { compaction: compaction ?? null });
   },
 
   deleteTurn: (conversationId, turnId) => {
@@ -2289,9 +2105,6 @@ export const useStore = create<AppState>((set, get) => ({
     const conversation = get().conversations.find((entry) => entry.id === conversationId);
     if (!conversation) return;
     const drop = new Set(turnIds);
-    // DELETING THE LIVE COMPACTION CARD — cut its summarizer stream and drop
-    // the lock instantly; the card must never commit a checkpoint over its
-    // own grave.
     const droppingLiveCompaction =
       get().compactingId === conversationId &&
       conversation.turns.some((turn) => drop.has(turn.id) && turn.kind === 'compaction');
@@ -2315,10 +2128,10 @@ export const useStore = create<AppState>((set, get) => ({
     // regenerate bug). syncedJson is cleared so the FIRST non-generating
     syncedTurnCount.set(conversationId, turns.length);
     syncedJson.delete(conversationId);
-    // The user removed turns, so the provider's last measured size no longer
-    // describes this conversation — this is the ONLY place a run's measurement
-    // is discarded (a run merely ENDING keeps it; see settleLiveContext).
     get().setLiveContext(conversationId, null);
+    if (serverKnownIds.has(conversationId)) {
+      void patchConversationConfig(conversationId, { liveContext: null });
+    }
   },
 
   branchFromTurn: (conversationId, turnId) => {
@@ -2371,7 +2184,12 @@ export const useStore = create<AppState>((set, get) => ({
       current && conversations.some((entry) => entry.id === current)
         ? current
         : newestConversationId(conversations);
-    set({ conversations, activeId });
+    const nextLive = mergeLiveContextFromConversations(get().liveContext, conversations);
+    set({
+      conversations,
+      activeId,
+      ...(nextLive !== get().liveContext ? { liveContext: nextLive } : {}),
+    });
     persist(conversations);
     storage.saveActiveId(activeId);
   },
@@ -2388,12 +2206,32 @@ export const useStore = create<AppState>((set, get) => ({
       if (!fullRaw || !current) return;
       if (current.turnsLoaded !== false) return;
       // never enter the render path (the stale-DOM ghosts bug).
-      const full = { ...fullRaw, turns: dedupeTurns(fullRaw.turns) };
+      const preserveLocalConfig = settingsDirtyIds.has(id) || configSyncInFlight.has(id);
+      const mergedLive = pickNewerLiveContext(current.liveContext, fullRaw.liveContext);
+      const full: Conversation = {
+        ...fullRaw,
+        turns: dedupeTurns(fullRaw.turns),
+        ...(mergedLive ? { liveContext: mergedLive } : {}),
+        ...(preserveLocalConfig
+          ? {
+              settings: current.settings,
+              providerId: current.providerId,
+              model: current.model,
+              ...(current.compaction !== undefined ? { compaction: current.compaction } : {}),
+            }
+          : {}),
+      };
       const next = get().conversations.map((conversation) =>
         conversation.id === id ? full : conversation,
       );
-      set({ conversations: next });
-      syncedJson.set(id, JSON.stringify(full));
+      const nextLive = mergeLiveContextFromConversations(get().liveContext, [full]);
+      set({
+        conversations: next,
+        ...(nextLive !== get().liveContext ? { liveContext: nextLive } : {}),
+      });
+      if (!preserveLocalConfig) {
+        syncedJson.set(id, JSON.stringify(full));
+      }
       syncedTurnCount.set(id, full.turns.length);
       lastSyncSnapshot = next;
     })()
@@ -2407,15 +2245,37 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   adoptFetchedBody: (fetchedRaw) => {
-    const fetched = { ...fetchedRaw, turns: dedupeTurns(fetchedRaw.turns) };
-    const current = get().conversations.find((conversation) => conversation.id === fetched.id);
+    const fetchedClean = { ...fetchedRaw, turns: dedupeTurns(fetchedRaw.turns) };
+    const current = get().conversations.find((conversation) => conversation.id === fetchedClean.id);
     if (!current) return;
-    if (keepLocalFullBody(current, fetched)) return;
+    if (keepLocalFullBody(current, fetchedClean)) return;
+    const preserveLocalConfig =
+      settingsDirtyIds.has(fetchedClean.id) || configSyncInFlight.has(fetchedClean.id);
+    const mergedLive = pickNewerLiveContext(current.liveContext, fetchedClean.liveContext);
+    const fetched: Conversation = preserveLocalConfig
+      ? {
+          ...fetchedClean,
+          settings: current.settings,
+          providerId: current.providerId,
+          model: current.model,
+          ...(mergedLive ? { liveContext: mergedLive } : {}),
+          ...(current.compaction !== undefined ? { compaction: current.compaction } : {}),
+        }
+      : {
+          ...fetchedClean,
+          ...(mergedLive ? { liveContext: mergedLive } : {}),
+        };
     const next = get().conversations.map((conversation) =>
       conversation.id === fetched.id ? fetched : conversation,
     );
-    set({ conversations: next });
-    syncedJson.set(fetched.id, JSON.stringify(fetched));
+    const nextLive = mergeLiveContextFromConversations(get().liveContext, [fetched]);
+    set({
+      conversations: next,
+      ...(nextLive !== get().liveContext ? { liveContext: nextLive } : {}),
+    });
+    if (!preserveLocalConfig) {
+      syncedJson.set(fetched.id, JSON.stringify(fetched));
+    }
     syncedTurnCount.set(fetched.id, fetched.turns.length);
     lastSyncSnapshot = next;
   },
@@ -2499,49 +2359,48 @@ export const useStore = create<AppState>((set, get) => ({
   trimReasoning: (conversationId) => {
     const conversation = get().conversations.find((entry) => entry.id === conversationId);
     if (!conversation) return 0;
-    // Measured BEFORE the strip: the reasoning tokens that leave the wire.
-    const removedTokens = reasoningFootprint(conversation).tokens;
     const { turns, trimmed } = stripReasoning(conversation.turns);
     if (trimmed === 0) return 0;
+    const existingLive = get().liveContext[conversationId] ?? conversation.liveContext;
+    const adjustedLive: LiveContextTelemetry | undefined =
+      existingLive && existingLive.buckets && existingLive.buckets.reasoningTokens > 0
+        ? (() => {
+            const removed = existingLive.buckets!.reasoningTokens;
+            const nextTotal = Math.max(0, existingLive.liveContextTokens - removed);
+            return {
+              ...existingLive,
+              liveContextTokens: nextTotal,
+              ratio: existingLive.contextLimit ? Math.min(1, nextTotal / existingLive.contextLimit) : existingLive.ratio,
+              buckets: {
+                ...existingLive.buckets!,
+                reasoningTokens: 0,
+                totalTokens: nextTotal,
+              },
+              at: Date.now(),
+            };
+          })()
+        : existingLive;
     const next = get().conversations.map((entry) =>
-      entry.id === conversationId ? { ...entry, rev: (entry.rev ?? 0) + 1, turns } : entry,
-    );
-    set({ conversations: next });
-    persist(next);
-    /**
-     * The provider's last measurement stays authoritative — it is simply
-     * reduced by what was just removed. Dropping the telemetry here would snap
-     * the chip back to the local estimate, which is the number the user already
-     * knows is wrong. `promptTokens` shrinks too: reasoning rode inside the
-     * prompt, so both figures describe the same subtraction.
-     */
-    const live = get().liveContext[conversationId];
-    if (live && removedTokens > 0) {
-      const nextTokens = Math.max(0, live.liveContextTokens - removedTokens);
-      // The trim is the USER's sanctioned reduction: the Reasoning bucket
-      // shrinks by exactly what left the wire, so the rows and the total
-      // describe the same subtraction.
-      const buckets = live.buckets
+      entry.id === conversationId
         ? {
-            ...live.buckets,
-            reasoningTokens: Math.max(0, live.buckets.reasoningTokens - removedTokens),
-            totalTokens: Math.max(
-              0,
-              live.buckets.totalTokens - removedTokens,
-            ),
+            ...entry,
+            rev: (entry.rev ?? 0) + 1,
+            turns,
+            ...(adjustedLive ? { liveContext: adjustedLive } : {}),
           }
-        : undefined;
-      get().setLiveContext(conversationId, {
-        ...live,
-        promptTokens: Math.max(0, live.promptTokens - removedTokens),
-        liveContextTokens: nextTokens,
-        buckets,
-        ratio: live.contextLimit ? nextTokens / live.contextLimit : null,
-        // The offset belongs to the snapshot, not the content: the estimate
-        // shrinks by the trimmed reasoning, so the frozen gap stays valid.
-        gap: live.gap ?? 0,
-        at: Date.now(),
-      });
+        : entry,
+    );
+    const nextLiveMap =
+      adjustedLive && adjustedLive !== existingLive
+        ? { ...get().liveContext, [conversationId]: adjustedLive }
+        : get().liveContext;
+    set({
+      conversations: next,
+      ...(nextLiveMap !== get().liveContext ? { liveContext: nextLiveMap } : {}),
+    });
+    persist(next);
+    if (adjustedLive && adjustedLive !== existingLive && serverKnownIds.has(conversationId)) {
+      void patchConversationConfig(conversationId, { liveContext: adjustedLive });
     }
     return trimmed;
   },
@@ -2579,32 +2438,40 @@ export const useStore = create<AppState>((set, get) => ({
     delete staged.probation;
     delete staged.lockdown;
 
+    const nextPending: ChatSettings = {
+      ...get().pendingSettings,
+      ...staged,
+    };
+    storage.savePendingSettings(nextPending);
+
     if (!conversation) {
-      set({ pendingSettings: { ...get().pendingSettings, ...staged } });
+      set({ pendingSettings: nextPending });
+      if ('webAccess' in patch) {
+        void setWebAccessRemote(patch.webAccess === true, conversationId ?? get().activeId ?? undefined);
+      }
       return;
     }
 
-    if (conversation.turnsLoaded === false) {
-      void useStore.getState().hydrateConversation(conversation.id).then(() => {
-        useStore.getState().updateSettings(patch, conversation.id);
-      });
-      return;
-    }
-
+    const nextSettings: ChatSettings = { ...conversation.settings, ...patch };
     const next = get().conversations.map((entry) =>
       entry.id === conversation.id
-        ? { ...entry, settings: { ...entry.settings, ...patch }, rev: (entry.rev ?? 0) + 1 }
+        ? { ...entry, settings: nextSettings, rev: (entry.rev ?? 0) + 1 }
         : entry,
     );
     settingsDirtyIds.add(conversation.id);
     set({
       conversations: next,
-      pendingSettings: { ...get().pendingSettings, ...staged },
+      pendingSettings: nextPending,
     });
     persist(next);
+    void commitConfigToServer(conversation.id, {
+      settings: nextSettings,
+      providerId: conversation.providerId,
+      model: conversation.model,
+    });
 
     if ('webAccess' in patch) {
-      void setWebAccessRemote(patch.webAccess === true);
+      void setWebAccessRemote(patch.webAccess === true, conversation.id);
     }
   },
 
@@ -2621,8 +2488,7 @@ export const useStore = create<AppState>((set, get) => ({
     set((state) => ({ reasoningOpen: { ...state.reasoningOpen, [key]: open } })),
   setSidebarWidth: (width) => set({ sidebarWidth: width }),
   setSettingsWidth: (width) => set({ settingsWidth: width }),
-  /** Drag-release persistence: the store set is cheap per-move; the DEVICE
-   *  write happens once, here. */
+  
   commitSidebarWidth: () => storage.saveSidebarWidth(get().sidebarWidth),
   commitSettingsWidth: () => storage.saveSettingsWidth(get().settingsWidth),
   commitDiffDockWidth: () => storage.saveDiffDockWidth(get().diffDockWidth),
@@ -2747,53 +2613,59 @@ export const useStore = create<AppState>((set, get) => ({
   setCompacting: (id) => set({ compactingId: id }),
   setLiveContext: (conversationId, telemetry) =>
     set((state) => {
-      const next = { ...state.liveContext };
-      if (telemetry) next[conversationId] = telemetry;
-      else delete next[conversationId];
-      return { liveContext: next };
-    }),
-  settleLiveContext: (conversationId, tokens) =>
-    set((state) => {
-      const current = state.liveContext[conversationId];
-      if (!current) return {};
-      const settled =
-        typeof tokens === 'number'
-          ? tokens
-          : Math.max(0, current.promptTokens + current.completionTokens);
-      // SCALE the stored buckets proportionally so the five rows and the
-      // settled total stay one figure. Compaction (the `tokens` override) is
-      // the ONLY sanctioned reduction; a plain settle keeps the buckets as-is.
-      let buckets = current.buckets;
-      const bucketTotal = buckets?.totalTokens ?? 0;
-      if (typeof tokens === 'number' && bucketTotal > settled && buckets) {
-        const scale = settled / bucketTotal;
-        buckets = {
-          systemTokens: Math.round(buckets.systemTokens * scale),
-          toolsTokens: Math.round(buckets.toolsTokens * scale),
-          inputTokens: Math.round(buckets.inputTokens * scale),
-          outputTokens: Math.round(buckets.outputTokens * scale),
-          reasoningTokens: Math.round(buckets.reasoningTokens * scale),
-          totalTokens: settled,
-        };
+      const conv = state.conversations.find((entry) => entry.id === conversationId);
+      const currentLive = state.liveContext[conversationId] ?? conv?.liveContext;
+      const nextLiveMap = { ...state.liveContext };
+      let resolved: LiveContextTelemetry | undefined;
+      if (telemetry) {
+        resolved = pickNewerLiveContext(currentLive, telemetry) ?? telemetry;
+        nextLiveMap[conversationId] = resolved;
+      } else {
+        delete nextLiveMap[conversationId];
       }
+      const nextConversations = state.conversations.map((entry) => {
+        if (entry.id !== conversationId) return entry;
+        if (resolved) return { ...entry, liveContext: resolved };
+        const rest = { ...entry };
+        delete rest.liveContext;
+        return rest;
+      });
+      return { liveContext: nextLiveMap, conversations: nextConversations };
+    }),
+  settleLiveContext: (conversationId, tokens) => {
+    let settledConversations: Conversation[] | null = null;
+    set((state) => {
+      const conv = state.conversations.find((entry) => entry.id === conversationId);
+      const current = state.liveContext[conversationId] ?? conv?.liveContext;
+      if (!current) return {};
+      const fallbackTotal =
+        current.promptTokens + current.completionTokens > 0
+          ? current.promptTokens + current.completionTokens
+          : (current.buckets?.totalTokens ?? 0) > 0
+            ? current.buckets!.totalTokens
+            : current.liveContextTokens;
+      const settled =
+        typeof tokens === 'number' ? Math.max(0, tokens) : Math.max(0, fallbackTotal);
+      const nextTelemetry: LiveContextTelemetry = {
+        ...current,
+        addedTokens: 0,
+        liveContextTokens: settled,
+        ratio: current.contextLimit ? Math.min(1, settled / current.contextLimit) : current.ratio,
+        at: Date.now(),
+      };
+      settledConversations = state.conversations.map((entry) =>
+        entry.id === conversationId ? { ...entry, liveContext: nextTelemetry } : entry,
+      );
       return {
         liveContext: {
           ...state.liveContext,
-          [conversationId]: {
-            ...current,
-            addedTokens: 0,
-            // A tokens OVERRIDE means compaction recalibrated the figure — the
-            // frozen billing gap described a wire that no longer exists, so it
-            // resets to zero instead of inflating the settled total.
-            gap: typeof tokens === 'number' ? 0 : current.gap,
-            buckets,
-            liveContextTokens: settled,
-            ratio: current.contextLimit ? settled / current.contextLimit : null,
-            at: Date.now(),
-          },
+          [conversationId]: nextTelemetry,
         },
+        conversations: settledConversations,
       };
-    }),
+    });
+    if (settledConversations) persist(settledConversations);
+  },
   setGenRunning: (id, running) => {
     const next = { ...useStore.getState().genRunning };
     if (running) {
@@ -2873,20 +2745,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 }));
 
-/**
- * THE ONE WAY A CALLER ASKS WHAT A MODEL CAN DO — bound to this store.
- *
- * Every consumer (composer, context chip, compaction triggers, settings panel)
- * calls this so no two of them can disagree about a model's context window or
- * input modalities. It is a plain read over the already-loaded provider list
- * and metadata map: no I/O, no cache to invalidate, and therefore no stale
- * capability snapshot after the user saves the Providers table.
- *
- * `providerId` falls back to the ACTIVE provider when omitted, which is the
- * right answer for the composer and for anything reading the live conversation.
- * Defined AFTER `useStore` on purpose — the store must exist before this is
- * ever called.
- */
+
 export function resolveCapability(
   providerId: string | undefined,
   modelId: string | undefined,
@@ -2906,12 +2765,7 @@ export function resolveCapability(
 }
 
 
-/**
- * Settings for the composer.
- *
- * Falls back to the staged defaults when no conversation exists yet, so the
- * right-hand panel is never empty on a fresh install.
- */
+
 export function useEffectiveSettings(): ChatSettings {
   const conversation = useStore((state) => state.conversations.find((c) => c.id === state.activeId));
   const pending = useStore((state) => state.pendingSettings);

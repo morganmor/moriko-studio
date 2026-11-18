@@ -1,14 +1,4 @@
-/**
- * SplitDiff — dual-mode diff renderer for the Diff Panel.
- *
- * MODE "split"  : side-by-side (before | after) — the original Moriko renderer.
- * MODE "inline" : GitHub-style inline diff (design-1): full-width lines with
- *   +/- prefix, green/red background, monospace.  One line per change, no
- *   column pairing.
- *
- * Colors ride theme tokens (success/danger) so dark, light and mocha all
- * stay readable — no hardcoded hex here.
- */
+
 import { useMemo, useState } from 'react';
 
 import { parseUnifiedDiff, toSplitRows, type ParsedDiffFile } from '../lib/diffParse';
@@ -22,13 +12,13 @@ export function SplitDiff({
   onlyPath,
   mode: modeProp,
 }: {
-  /** Raw unified diff (multi-file ok) — parsed internally. */
+  
   diff?: string;
-  /** Pre-parsed files (when the caller already parsed). */
+  
   files?: ParsedDiffFile[];
-  /** Render only this file when the diff carries several. */
+  
   onlyPath?: string;
-  /** Controlled mode. When omitted, an internal toggle is used. */
+  
   mode?: DiffMode;
 }) {
   const [internalMode, setInternalMode] = useState<DiffMode>(modeProp ?? 'split');
@@ -88,7 +78,7 @@ export function SplitDiff({
   );
 }
 
-/** GitHub-style inline diff (design-1 inspired). */
+
 function InlineDiffView({ files }: { files: ParsedDiffFile[] }) {
   return (
     <>
@@ -127,7 +117,7 @@ function InlineDiffView({ files }: { files: ParsedDiffFile[] }) {
   );
 }
 
-/** Side-by-side split view (original). */
+
 function SplitDiffView({ files, wrap }: { files: ParsedDiffFile[]; wrap: boolean }) {
   return (
     <>

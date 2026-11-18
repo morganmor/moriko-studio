@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 
-import { ApiError, coerceDelta, fetchConversationDetail, fetchJobRun, fetchLiveStreams, openBrowserPanelOnce, probeResume, pushCompactionConfig, streamChat, uploadAttachment } from '../lib/api';
+import { ApiError, coerceDelta, fetchConversationDetail, fetchJobRun, fetchLiveStreams, openBrowserPanelOnce, patchConversationConfig, probeResume, pushCompactionConfig, streamChat, sweepTodosApi, uploadAttachment } from '../lib/api';
 import { ensureLivePolling, refreshLiveStreamsNow, subscribeLivePolls } from '../store/livePoller';
 import {
   abortCompaction,
@@ -9,73 +9,37 @@ import {
   COMPACT_SYSTEM_INSTRUCTION,
   clearCompactionAbort,
   compactCandidate,
+  contextBreakdown,
   contextPlan,
-  estimateConversationContext,
-  estimateTokens,
+  getCompactionCheckpoints,
   isCheckpointShape,
   measuredActiveTokens,
-  priceWireMessage,
   registerCompactionAbort,
   shouldAutoCompact,
   stripCompactionAnalysis,
   summarizationReplay,
   triggerForMeasuredTokens,
-  wireUserContent,
   type CompactTrigger,
 } from '../lib/compaction';
 import { splitInlineThinking, stripInlineThinking } from '../lib/reasoning';
 import { isGhostTurn, nextSegmentId } from '../lib/turns';
-import { useStore, conversationsReady, providersReady, resolveCapability } from '../store/useStore';
+import { awaitConfigSync, useStore, conversationsReady, providersReady, resolveCapability } from '../store/useStore';
 import type { ChatMessage, ChatSettings, LiveContextTelemetry, Turn, TurnAttachment, TrustTier } from '../types';
 import { storage, uid } from '../lib/storage';
-import { scanOutput, tierCardContent, tierState, violationEvidence, violationsToTier } from '../lib/trust';
+import { scanOutput, tierState, violationEvidence, violationsToTier } from '../lib/trust';
 
-/**
- * MESSAGE ROUTING — the harness has ONE voice, and it is the catalog-backed
- * Notice Center (`showNotice`, the stack under the session name). Everything
- * the MACHINERY emits while it works goes there:
- * compaction (armed, folded, failed, busy), auto-resume of interrupted and
- * crashed runs, connection loss and provider retries, enforcement state.
- * Those messages are workspace-frame state — visible at a glance while a run
- * streams — and a corner toast that vanishes in two seconds is where
- * "Compacted 16 turns" went to die unnoticed.
- *
- * Validation of a DIRECT gesture ("pick a provider first", "already
- * generating — stop it first") rides the same surface (Fase A merged the old
- * Toast in): every message is a registered catalog id, so tone, ttl and
- * dedupe are decided once, in the catalog.
- */
 
-/**
- * Mirrors the auto-title formula in `appendTurn` exactly.
- *
- * A degenerate first message (a stray keystroke like "t", an accidental Enter)
- * must never become a chat's permanent title. The retry ladder leaves dozens of
- * these in the sidebar after a stuck session: the empty ASSISTANT turn is
- * cleaned up, but the USER turn survives, its title sticks, and the record
- * syncs to the server as a real chat named "t". Require a little substance
- * before a message earns the title; otherwise keep the neutral placeholder the
- * user can rename.
- */
+
+
 function autoTitleFor(firstUserMessage: string): string {
   const text = firstUserMessage.replace(/\s+/g, ' ').trim().slice(0, 52);
   if (text.length >= 4) return text;
   return 'New chat';
 }
 
-/**
- * Summarizes every turn except the newest protected window and stores
- * the result as the conversation's compaction. The primary call replays the
- * wire prefix (KV-cache-friendly) on the session model — or the dedicated
- * Summarizer Model when configured — with one degraded elided-transcript
- * retry as the safety net. Returns null when there is nothing to condense, or
- * a `CompactionFailure` when the summarization request itself was refused —
- * the two are NOT the same thing, and conflating them made a provider that
- * rejects an oversized transcript answer "Nothing to compact yet" while the
- * context stayed 95% full.
- */
+
 export interface CompactionFailure {
-  /** The provider's refusal, verbatim — enough to tell the user what to fix. */
+  
   message: string;
 }
 
@@ -86,22 +50,24 @@ async function runCompaction(input: {
   settings: ChatSettings;
   apiKey?: string;
   trigger: Exclude<CompactTrigger, null>;
-  /** /compact [instructions] — user-supplied focus for the checkpoint. */
+  
   focus?: string;
-  /** Wired from the generation's controller so Stop works during the
-   * pre-send summarization too. */
+  
   signal?: AbortSignal;
 }): Promise<
-  { covered: number; replacedTokens: number; prePassed?: boolean } | CompactionFailure | null
+  | {
+      covered: number;
+      replacedTokens: number;
+      summaryTokens?: number;
+      cumulativeSummaryTokens: number;
+      checkpointCount: number;
+      prePassed?: boolean;
+    }
+  | CompactionFailure
+  | null
 > {
-  // PER-CONVERSATION LOCK — a compaction running in one chat must never
-  // block another chat's compaction (the old global check produced the
-  // cross-conversation "already running" deadlock).
   if (useStore.getState().compactingId === input.conversationId) return null;
   useStore.getState().setCompacting(input.conversationId);
-  // OWNED ABORT — teardowns that cannot reach `input.signal` (deleting the
-  // live card, Stop, deleting the conversation) fire this, so the lock can
-  // never outlive the stream it guards.
   const owned = new AbortController();
   const relay = () => owned.abort();
   input.signal?.addEventListener('abort', relay, { once: true });
@@ -117,7 +83,6 @@ async function runCompaction(input: {
   } finally {
     input.signal?.removeEventListener('abort', relay);
     clearCompactionAbort(input.conversationId);
-    // GUARANTEED RESET — success, failure, provider error, or abort.
     if (useStore.getState().compactingId === input.conversationId) {
       useStore.getState().setCompacting(null);
     }
@@ -131,13 +96,21 @@ async function runCompactionInner(input: {
   settings: ChatSettings;
   apiKey?: string;
   trigger: Exclude<CompactTrigger, null>;
-  /** /compact [instructions] — user-supplied focus for the checkpoint. */
+  
   focus?: string;
-  /** Wired from the generation's controller so Stop works during the
-   * pre-send summarization too. */
+  
   signal?: AbortSignal;
 }): Promise<
-  { covered: number; replacedTokens: number; prePassed?: boolean } | CompactionFailure | null
+  | {
+      covered: number;
+      replacedTokens: number;
+      summaryTokens?: number;
+      cumulativeSummaryTokens: number;
+      checkpointCount: number;
+      prePassed?: boolean;
+    }
+  | CompactionFailure
+  | null
 > {
   const state = useStore.getState();
   const conversation = state.conversations.find((entry) => entry.id === input.conversationId);
@@ -219,7 +192,10 @@ async function runCompactionInner(input: {
     });
 
     type SummarizeResult =
-      | { summary: string }
+      | {
+          summary: string;
+          usage?: { promptTokens?: number; completionTokens?: number };
+        }
       | { error: string }
       | { toolViolation: true }
       | { aborted: true };
@@ -231,6 +207,7 @@ async function runCompactionInner(input: {
     }): Promise<SummarizeResult> => {
       let text = '';
       let lastPaintAt = 0;
+      let usage: { promptTokens?: number; completionTokens?: number } | undefined;
       try {
         for await (const event of streamChat({
           providerId: attempt.route.providerId,
@@ -256,11 +233,23 @@ async function runCompactionInner(input: {
             const now = Date.now();
             if (now - lastPaintAt > 120) {
               lastPaintAt = now;
-              // The <analysis> scratchpad never reaches the UI: paint only the
-              // checkpoint as it emerges.
               useStore.getState().updateTurn(input.conversationId, noteId, {
                 content: stripCompactionAnalysis(text),
               });
+            }
+          } else if (event.type === 'usage') {
+            if (
+              typeof event.promptTokens === 'number' ||
+              typeof event.completionTokens === 'number'
+            ) {
+              usage = {
+                ...(typeof event.promptTokens === 'number'
+                  ? { promptTokens: event.promptTokens }
+                  : {}),
+                ...(typeof event.completionTokens === 'number'
+                  ? { completionTokens: event.completionTokens }
+                  : {}),
+              };
             }
           } else if (event.type === 'error') {
             return { error: event.message ?? 'The summarization request failed.' };
@@ -268,7 +257,7 @@ async function runCompactionInner(input: {
             return { toolViolation: true };
           }
         }
-        return { summary: text };
+        return { summary: text, usage };
       } catch (error) {
         if (input.signal?.aborted || (error instanceof Error && error.name === 'AbortError')) {
           return { aborted: true };
@@ -278,6 +267,7 @@ async function runCompactionInner(input: {
     };
 
     let summary = '';
+    let resolvedUsage: { promptTokens?: number; completionTokens?: number } | undefined;
     let resolved = false;
     let lastError = '';
     for (const attempt of attempts) {
@@ -287,6 +277,7 @@ async function runCompactionInner(input: {
         const trimmed = stripCompactionAnalysis(stripInlineThinking(result.summary)).trim();
         if (trimmed) {
           summary = trimmed;
+          resolvedUsage = result.usage;
           resolved = true;
           break;
         }
@@ -310,52 +301,63 @@ async function runCompactionInner(input: {
           'The model did not return a structured checkpoint (required sections missing — it likely replayed the transcript instead of condensing it). Nothing was replaced; compact again or switch models.',
       };
     }
-    const summaryTokens = estimateTokens(summary);
-    if (summaryTokens >= candidate.replacedTokens) {
+    const actualSourceTokens = resolvedUsage?.promptTokens ?? candidate.replacedTokens;
+    const actualSummaryTokens = resolvedUsage?.completionTokens;
+    if (
+      typeof actualSummaryTokens === 'number' &&
+      actualSummaryTokens > 0 &&
+      actualSourceTokens > 0 &&
+      actualSummaryTokens >= actualSourceTokens
+    ) {
       return {
-        message: `The checkpoint did not shrink the covered material (~${summaryTokens} vs ~${candidate.replacedTokens} source tokens) — nothing was replaced. Compact again or switch models.`,
+        message: `The checkpoint did not shrink the covered material (${actualSummaryTokens} vs ${actualSourceTokens} source tokens) — nothing was replaced. Compact again or switch models.`,
       };
     }
 
-    committed = true;
-    useStore.getState().setCompaction(
-      input.conversationId,
-      applyCompaction(conversation, {
+    const applied = applyCompaction(
+      conversation,
+      {
         summary,
         coveredTurnIds: coveredIds,
-        replacedTokens: candidate.replacedTokens,
-      }, input.trigger).compaction,
+        replacedTokens: actualSourceTokens,
+        sourceTokens: actualSourceTokens,
+        ...(typeof actualSummaryTokens === 'number'
+          ? { summaryTokens: actualSummaryTokens }
+          : {}),
+      },
+      input.trigger,
     );
+    committed = true;
+    useStore.getState().setCompaction(input.conversationId, applied.compaction);
     useStore.getState().updateTurn(input.conversationId, noteId, {
       content: summary,
       compactionMeta: {
         covered: candidate.turns.length,
-        replacedTokens: candidate.replacedTokens,
+        replacedTokens: actualSourceTokens,
         trigger: input.trigger,
       },
     });
-    return { covered: candidate.turns.length, replacedTokens: candidate.replacedTokens };
+    const checkpoints = getCompactionCheckpoints(applied.compaction);
+    const cumulativeSummaryTokens = checkpoints.reduce(
+      (sum, cp) => sum + (typeof cp.summaryTokens === 'number' ? cp.summaryTokens : 0),
+      0,
+    );
+    return {
+      covered: candidate.turns.length,
+      replacedTokens: actualSourceTokens,
+      ...(typeof actualSummaryTokens === 'number' ? { summaryTokens: actualSummaryTokens } : {}),
+      cumulativeSummaryTokens,
+      checkpointCount: checkpoints.length,
+    };
 
   } finally {
     if (!committed) useStore.getState().deleteTurn(input.conversationId, noteId);
   }
 }
 
-/**
- * finishReason values that mean "the run was cut short" — a harness-forced
- * wrap-up (context budget / stall) or a provider output cut.
- * Surfaced on the turn: a cut run must never masquerade as a natural end.
- * (`tool_errors` is surfaced too, but it is NOT in this set — it marks a run
- * that stopped naturally with failed tools aboard, not a cut run.)
- */
+
 const FORCED_FINISH_REASONS = new Set([
-  /**
-   * LEGACY: pre-rebuild runs were cut by a context-budget stop. No new turn can
-   * carry this — the guard now hands off to compaction instead (see
-   * `context_compaction`, which is deliberately NOT in this set: the run
-   * resumes, so nothing was cut). Kept so old persisted threads still render
-   * their real ending.
-   */
+  
   'context_budget',
   'stalled',
   'length',
@@ -363,13 +365,7 @@ const FORCED_FINISH_REASONS = new Set([
   'MAX_TOKENS',
 ]);
 
-/**
- * Asks the model for a short conversation title and applies it. Runs in the
- * background after the first exchange; failures are silent because the
- * first-message fallback title is already in place. The rename only lands if
- * the thread still carries the expected auto title — an explicit user rename
- * always wins, no matter when it happened.
- */
+
 async function generateConversationTitle(input: {
   conversationId: string;
   providerId: string;
@@ -425,30 +421,7 @@ async function generateConversationTitle(input: {
   }
 }
 
-/**
- * TURN ID OWNERSHIP — adopt the server-echoed turn id for this run.
- *
- * The stream_id frame (the first frame, and part of the replay buffer) echoes
- * the run's assistant turn id. Every consumer of the run must paint into THAT
- * id: the originating tab already holds it; a re-attaching tab (reload boot
- * resume, live-loop sweep in a second tab) replays the frame and adopts it —
- * so its patches REPLACE the original turn instead of APPENDING a duplicate
- * reply to the shared record.
- *
- * `current` is the turn this tab is about to paint into. When it already
- * matches the echoed id (the original tab, or a re-attach that found the run's
- * own trailing turn), the id stands. When this tab minted its own empty turn
- * (a fresh send pre-creating the reply card, a continue-only reuse) it is
- * swapped: the empty husk is tombstoned + dropped and a fresh turn under the
- * SERVER id is appended — a turn with real content already painted is kept
- * (that cannot be the shape at stream start; the guard only stops the
- * pathological case from losing work).
- *
- * Returns the id every subsequent updateTurn/flush must address. The caller
- * assigns the return value to its `assistantTurn` reference immediately — the
- * stream's text/reasoning/tool handlers and the flush schedule read that
- * reference on every event.
- */
+
 function adoptServerTurnId(
   conversationId: string,
   turnId: string | undefined,
@@ -481,32 +454,13 @@ function adoptServerTurnId(
   return turnId;
 }
 
-/**
- * Owns the request lifecycle for the chat thread.
- *
- * Generations are tracked PER CONVERSATION (store.genRunning + one abort
- * controller each), so several chats can generate at once — the limit is the
- * provider's, not the UI's. Stop cancels whichever conversation is active;
- * a conversation with a generation in flight refuses new sends until it
- * finishes or is stopped.
- */
-/**
- * Module-level abort registry. The controller hook is instantiated by MORE
- * than one component (App for the composer, Thread for the continue action),
- * and every instance must see the SAME controllers — a per-hook useRef would
- * register a generation under one instance while `stop()` looked it up in
- * another, leaving Stop unable to cancel anything.
- */
+
+
 const abortsRef: { current: Map<string, AbortController> } = {
   current: new Map<string, AbortController>(),
 };
 
-/**
- * TRANSIENT CONNECTION LOSS — the signatures of a proxy that died or is
- * restarting UNDER the user (supervisor reload, crash, network blip), as
- * opposed to a provider rejecting the request. Only these earn the one-shot
- * automatic resume; provider errors never retry themselves.
- */
+
 const CONNECTION_LOSS_PATTERN =
   /cannot reach the local moriko proxy|failed to fetch|fetch failed|networkerror|network error|socket hang up|econn(?:refused|reset|aborted)|premature close|other side closed|terminated/i;
 
@@ -514,107 +468,80 @@ function isConnectionLoss(message: string): boolean {
   return CONNECTION_LOSS_PATTERN.test(message);
 }
 
-/**
- * One automatic resume per conversation, shared by every hook instance.
- * Set while a reconnect-resume is in flight; cleared once a stream ends
- * without a connection loss, so the budget never chains retries.
- */
+
 const autoRetryPending: { current: Set<string> } = {
   current: new Set<string>(),
 };
 
-/**
- * One RESUME attempt per conversation at a time, shared across hook
- * instances (StrictMode double-mount, HMR remounts): two concurrent
- * re-attaches would each reset the turn and replay the same frames twice.
- */
+
 const resumeInFlight = new Set<string>();
 
-/**
- * Conversations with a stream THIS TAB is currently consuming (the original
- * POST or a resume replay). Maintained by send() around the whole stream
- * lifecycle; the live-loop below reads it so its re-attach and honesty
- * sweeps never fight a stream that is already attached here.
- */
+
 const attachedConversations = new Set<string>();
 
-/**
- * Conversations the user pressed STOP on, with the stream id they stopped
- * (`null` when the resume handle never arrived).
- *
- * STOP MUST BE STICKY. An abort is a fire-and-forget POST, and the registry
- * deliberately keeps a run alive inside its grace window when nobody is
- * attached — which is exactly the orphan the re-attach sweep below exists to
- * heal. Without this record the sweep faithfully re-attached to the run the
- * user had just cancelled: measured, six seconds after Stop the client was
- * consuming the stream again, the badge was back, and the provider was still
- * being billed for a generation the user had ended.
- *
- * An entry is dropped once the registry no longer lists that stream (the run
- * really is gone) or once a DIFFERENT, newer stream owns the conversation, so
- * the next generation in that chat is never blocked.
- */
+
 const stoppedStreams = new Map<string, string | null>();
 
-/**
- * A compaction asked for WHILE the run was streaming.
- *
- * A request already in flight cannot have its context rewritten — the model is
- * reading the very tokens a summary would replace — so the only honest moment
- * to compact is the NEXT round. The ask is recorded here, the current round is
- * closed, and the run continues on the compacted context as soon as the turn
- * settles. Refusing instead (the old behaviour) made the user stop the work
- * they were trying to keep, and let a run finish on a context that was already
- * over its limit.
- */
+
 const pendingMidRunCompaction = new Map<string, Exclude<CompactTrigger, null>>();
 
-/**
- * The abort → settle → compact sequence for one conversation, WHILE RUNNING.
- * Pure overlap guard: it exists only so two trigger sources (sweeper tick,
- * usage event, manual click) cannot start concurrent sequences. Unlike the
- * lock below it expires the moment the sequence ends — success or failure.
- */
+
 const midRunCompactingInFlight = new Set<string>();
 
-/**
- * SET ONLY AFTER A COMPACTION ACTUALLY LANDED AND SHRANK THE CONTEXT (see
- * settleMidRunCompaction / resumeAfterInRunCompaction). A failed or no-op
- * attempt leaves this OPEN, so the sweeper tick / usage-event check retries on
- * the next round until a checkpoint exists and the figure drops. One
- * SUCCESSFUL compaction per generation stays the rule; cleared when a NEW
- * user message starts a generation.
- */
+
 const midRunCompactedThisRun = new Set<string>();
 
-/**
- * Conversations the user explicitly STOPPED. Distinct from `genRunning`, which
- * a mid-run compaction clears too: a Stop pressed while the summarizer runs
- * must never be answered with "continuing…".
- */
+
 const userStoppedRuns = new Set<string>();
 
-/**
- * Set at the very END of a stream's finally — after the turn is written and
- * every post-processing branch has run. A mid-run compaction waits for THIS
- * rather than for `attachedConversations` to empty (that happens ~370 lines
- * earlier, while the finally still has a turn to finish writing) or for
- * `genRunning` to clear (same problem). Only set when a compaction is actually
- * waiting, so it never accumulates.
- */
+
 const runSettled = new Set<string>();
 
-/**
- * Report the outcome of one compaction on the Notice Center, whichever path
- * asked for it. MESSAGE ROUTING (contract at the top of this file): compaction
- * is machinery, so its outcome rides the stack under the session name. The old
- * corner toast here is exactly how "Compacted 16 turns" went unseen at the
- * bottom of the workspace while the run kept streaming.
- *
- * RETURNS whether the context actually SHRANK. `false` covers every failure
- * shape — no candidate, a refused summariser, or a checkpoint that did not beat
- * the material it replaced (`summaryTokens >= replacedTokens`).
- */
+
+function syncLiveContextAfterCompaction(
+  conversationId: string,
+  cumulativeSummaryTokens: number,
+): LiveContextTelemetry {
+  const state = useStore.getState();
+  const conversation = state.conversations.find((entry) => entry.id === conversationId);
+  const prev = state.liveContext[conversationId] ?? conversation?.liveContext;
+  const fallbackBreakdown = conversation
+    ? contextBreakdown(
+        conversation,
+        resolveCapability(
+          conversation.providerId || state.providerId,
+          conversation.model || state.model,
+        ),
+        prev,
+      )
+    : null;
+  const systemTokens = prev?.buckets?.systemTokens ?? fallbackBreakdown?.systemTokens ?? 0;
+  const toolsTokens = prev?.buckets?.toolsTokens ?? fallbackBreakdown?.toolsTokens ?? 0;
+  const activeTokens = systemTokens + toolsTokens + cumulativeSummaryTokens;
+  const contextLimit = prev?.contextLimit ?? fallbackBreakdown?.effectiveLimit ?? null;
+  const telemetry: LiveContextTelemetry = {
+    promptTokens: activeTokens,
+    completionTokens: 0,
+    addedTokens: 0,
+    liveContextTokens: activeTokens,
+    contextLimit,
+    ratio: contextLimit ? Math.min(1, activeTokens / contextLimit) : null,
+    buckets: {
+      systemTokens,
+      toolsTokens,
+      inputTokens: cumulativeSummaryTokens,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      totalTokens: activeTokens,
+    },
+    at: Date.now(),
+  };
+  state.setLiveContext(conversationId, telemetry);
+  void patchConversationConfig(conversationId, { liveContext: telemetry });
+  return telemetry;
+}
+
+
 async function compactAndReport(
   conversationId: string,
   providerId: string,
@@ -634,15 +561,8 @@ async function compactAndReport(
   });
   const showNotice = useStore.getState().showNotice;
   if (outcome && 'covered' in outcome) {
-    // COMPACTION LANDED (any path: manual, mid-run, or the guard's handoff).
-    // The covered turns are gone from the wire, so the live indicator must
-    // collapse to the new size NOW — otherwise it keeps reporting a context
-    // that no longer exists while the model sits idle.
-    const after = useStore.getState().conversations.find((entry) => entry.id === conversationId);
-    if (after) {
-      const summarised = estimateConversationContext(after).totalTokens;
-      useStore.getState().settleLiveContext(conversationId, summarised);
-    }
+    syncLiveContextAfterCompaction(conversationId, outcome.cumulativeSummaryTokens);
+    await awaitConfigSync(conversationId);
     if (outcome.prePassed) {
       showNotice('compact.prePassed');
     } else {
@@ -658,22 +578,12 @@ async function compactAndReport(
   return false;
 }
 
-/**
- * Ask for a compaction that lands on the NEXT round: close the current round
- * now and continue on the compacted context once the turn settles.
- *
- * This is what makes "Compact now" work mid-generation, and what lets the
- * context-limit trigger fire the moment a ROUND reports it is over the limit
- * instead of waiting for the next send.
- */
+
 function requestMidRunCompaction(
   conversationId: string,
   trigger: Exclude<CompactTrigger, null>,
 ): void {
   if (pendingMidRunCompaction.has(conversationId)) return;
-  // A sequence is already driving abort → settle → compact for this run; a
-  // second trigger here would double-abort the stream. Retry happens on the
-  // NEXT sweeper tick / usage event if the sequence ends without success.
   if (midRunCompactingInFlight.has(conversationId)) return;
   if (midRunCompactedThisRun.has(conversationId)) {
     if (trigger === 'manual') {
@@ -691,10 +601,6 @@ function requestMidRunCompaction(
     return;
   }
   pendingMidRunCompaction.set(conversationId, trigger);
-  // THE LOCK IS NOT SET HERE. `midRunCompactedThisRun` closes only when a
-  // compaction was actually CREATED and the context actually dropped (see
-  // settleMidRunCompaction) — a failed or no-op attempt must stay retryable,
-  // or one bad summarizer run would disable auto-compact for the whole run.
   useStore
     .getState()
     .showNotice(trigger === 'manual' ? 'compact.scheduledManual' : 'compact.scheduledAuto');
@@ -713,66 +619,43 @@ function requestMidRunCompaction(
   void settleMidRunCompaction(conversationId);
 }
 
-/**
- * SEAMLESS RESUME AFTER AN IN-RUN COMPACTION.
- *
- * The server guard ended the stream with finishReason 'context_compaction'
- * instead of a wrap-up: the task is unfinished, the tool catalogue is intact,
- * and the only thing missing is a smaller context. This compacts with the main
- * Moriko engine and continues the SAME run — no user turn, no summary request.
- *
- * Runs AFTER the stream has ended, so nothing is aborted mid-round.
- *
- * If compaction fails (the summarizer refuses an oversized transcript), the
- * run still continues on the un-compacted context: losing the checkpoint is
- * recoverable, silently losing the task is not.
- */
-async function resumeAfterInRunCompaction(conversationId: string): Promise<void> {
+
+async function resumeAfterInRunCompaction(
+  conversationId: string,
+  compactionSegment?: { assistantTurnId: string; beforeTokens: number },
+): Promise<void> {
   const state = useStore.getState();
   const conversation = state.conversations.find((entry) => entry.id === conversationId);
   if (!conversation) return;
   const providerId = conversation.providerId || state.providerId;
   const provider = state.providers.find((entry) => entry.id === providerId);
   const model = conversation.model || state.model;
-  // BASELINE: the chip's own figure BEFORE any summarizer runs.
   const caps = resolveCapability(providerId, model);
   const tokensBefore = measuredActiveTokens(conversation, caps, state.liveContext[conversationId]);
 
-  /**
-   * THE RUN MUST NEVER DIE HERE.
-   *
-   * The server guard already decided the context is over the threshold, so this
-   * function has exactly one job: make the next round fit. Every branch below
-   * therefore ends in a dispatch — the only difference is HOW MUCH relief was
-   * achieved.
-   */
+  let compacted = false;
   if (provider && model) {
     const busyDeadline = Date.now() + 90_000;
     while (useStore.getState().compactingId === conversationId && Date.now() < busyDeadline) {
       await new Promise((resolve) => window.setTimeout(resolve, 250));
     }
 
-    /**
-     * A single turn that ballooned past the threshold yields NO candidate
-     * (`compactCandidate` needs at least one summarisable turn, and a thread
-     * whose only turn IS the bloated one has nothing to replace). The old
-     * `if (!compactCandidate) return;` turned exactly that shape into a dead
-     * run: the guard asked for compaction, nothing happened, and the stream
-     * simply stopped.
-     *
-     * FORCED PATH: summarise whatever exists. `runCompaction` sizes its own
-     * transcript window and elides an oversized body. Compaction is the ONLY
-     * sanctioned reduction — there is no wire-pruning fallback.
-     */
-    const candidate = compactCandidate(conversation);
+    const latestConv = useStore
+      .getState()
+      .conversations.find((entry) => entry.id === conversationId);
+    const candidate = latestConv ? compactCandidate(latestConv) : null;
     if (candidate) {
-      await compactAndReport(conversationId, provider.id, model, 'context-limit').catch(
+      compacted = await compactAndReport(conversationId, provider.id, model, 'context-limit').catch(
         () => false,
       );
+      if (!compacted) {
+        midRunCompactedThisRun.delete(conversationId);
+        return;
+      }
+    } else {
+      compacted = true;
     }
 
-    // THE ONLY LOCK CONDITION — measured, not assumed (same contract as
-    // settleMidRunCompaction). No drop → the sweeper retries next round.
     const afterState = useStore.getState();
     const after = afterState.conversations.find((entry) => entry.id === conversationId);
     const afterTokens = after
@@ -783,35 +666,42 @@ async function resumeAfterInRunCompaction(conversationId: string): Promise<void>
     } else {
       midRunCompactedThisRun.delete(conversationId);
     }
+
+    if (compactionSegment && after) {
+      const targetTurn = after.turns.find((entry) => entry.id === compactionSegment.assistantTurnId);
+      const checkpoints = getCompactionCheckpoints(after.compaction);
+      const latestCheckpoint = checkpoints[checkpoints.length - 1];
+      const existingSegments = targetTurn?.segments ?? [];
+      afterState.updateTurn(conversationId, compactionSegment.assistantTurnId, {
+        segments: [
+          ...existingSegments,
+          {
+            type: 'compaction',
+            id: `compact-${Date.now()}`,
+            beforeTokens: compactionSegment.beforeTokens,
+            afterTokens,
+            coveredTurns:
+              latestCheckpoint?.coveredTurnIds.length ?? after.compaction?.coveredTurnIds.length ?? 0,
+            summary: latestCheckpoint?.summary ?? after.compaction?.summary ?? '',
+            at: Date.now(),
+          },
+        ],
+      });
+    }
+  } else {
+    return;
   }
 
-  if (userStoppedRuns.has(conversationId)) return;
+  if (!compacted || userStoppedRuns.has(conversationId)) return;
 
-  /**
-   * CONTINUE REGARDLESS.
-   *
-   * Dispatched with the CURRENT (possibly compacted) context. If the
-   * summariser refused the transcript, the round still runs — losing a
-   * checkpoint is recoverable; silently ending the task is not.
-   */
+  await awaitConfigSync(conversationId);
   const dispatched = await sendForLoop(conversationId, { continueOnly: true });
   if (!dispatched) {
-    // The send binding never appeared. Surface it instead of leaving a turn
-    // that looks finished: the user must be able to see that the task is open.
     useStore.getState().showNotice('compact.continueHint');
   }
 }
 
-/**
- * Waits for the turn to settle, compacts, then continues the run.
- *
- * THE LOCK CONTRACT: `midRunCompactedThisRun` is closed ONLY when a compaction
- * was actually created AND the chip's figure strictly dropped (tokensAfter <
- * tokensBefore). Any other outcome — summariser refused, no checkpoint, no
- * shrink — leaves the lock open and clears the in-flight guard, so the next
- * sweeper tick / usage event / setting change retries until a real compaction
- * lands.
- */
+
 async function settleMidRunCompaction(conversationId: string): Promise<void> {
   if (midRunCompactingInFlight.has(conversationId)) return;
   midRunCompactingInFlight.add(conversationId);
@@ -843,7 +733,6 @@ async function settleMidRunCompaction(conversationId: string): Promise<void> {
       await new Promise((resolve) => window.setTimeout(resolve, 250));
     }
 
-    // BASELINE: the chip's own figure BEFORE the summarizer runs.
     const caps = resolveCapability(providerId, model);
     const tokensBefore = measuredActiveTokens(conversation, caps, state.liveContext[conversationId]);
 
@@ -851,7 +740,6 @@ async function settleMidRunCompaction(conversationId: string): Promise<void> {
       () => false,
     );
 
-    // THE ONLY LOCK CONDITION — measured, not assumed.
     const afterState = useStore.getState();
     const after = afterState.conversations.find((entry) => entry.id === conversationId);
     const afterTokens = after
@@ -863,6 +751,7 @@ async function settleMidRunCompaction(conversationId: string): Promise<void> {
       midRunCompactedThisRun.delete(conversationId);
     }
 
+    if (!compacted) return;
     if (userStoppedRuns.has(conversationId)) return;
     if (afterState.genRunning[conversationId]) return;
     if (!(await serverRunGone(conversationId))) {
@@ -870,14 +759,14 @@ async function settleMidRunCompaction(conversationId: string): Promise<void> {
         .showNotice('compact.continueHint');
       return;
     }
+    await awaitConfigSync(conversationId);
     await sendForLoop(conversationId, { continueOnly: true });
   } finally {
-    // The sequence is over either way — the next trigger may start a new one.
     midRunCompactingInFlight.delete(conversationId);
   }
 }
 
-/** Polls the server registry until this conversation has no live run (bounded). */
+
 async function serverRunGone(conversationId: string): Promise<boolean> {
   const deadline = Date.now() + 10_000;
   for (;;) {
@@ -889,55 +778,20 @@ async function serverRunGone(conversationId: string): Promise<boolean> {
   }
 }
 
-/**
- * When a conversation has been locally flagged "generating" while the
- * server's registry lists NO live stream for it, remember when we FIRST saw
- * that condition. Only a flag that stays orphaned past ORPHANED_FLAG_MS is
- * cleared by the honesty sweep — a brief registry gap (the instant between
- * one agent goal-loop round ending and the next starting) must never flick
- * the badge off, and a single failed poll must not be trusted either.
- */
+
 const orphanedSince = new Map<string, number>();
 const ORPHANED_FLAG_MS = 9_000;
 
-/**
- * P3 DISIPLIN RE-ATTACH — a cooldown and an attempt BUDGET per conversation.
- *
- * The audit's waterfall showed the re-attach sweep re-firing against the same
- * stubborn stream on every poll tick (each attempt = a full resume replay:
- * the server re-sends the frame buffer from frame one). A stream that keeps
- * refusing the replay (grace-window expiry mid-replay, a wedged run) must not
- * become a request generator of its own.
- *
- *   COOLDOWN   — one attempt per REATTACH_COOLDOWN_MS per conversation.
- *   BUDGET     — after REATTACH_MAX_ATTEMPTS the sweep gives up on that
- *                stream; the user's explicit Continue is the recovery path.
- *                The registry dropping the stream (or a fresh user send in
- *                that chat) resets the counters.
- */
+
 const REATTACH_COOLDOWN_MS = 8_000;
 const REATTACH_MAX_ATTEMPTS = 3;
 const resumeAttemptAt = new Map<string, number>();
 const resumeAttempts = new Map<string, number>();
 
-/**
- * LIVE-FOLLOW — convergence WITHOUT local mutation.
- *
- * A tab that never mutates never syncs, and the fold (the only mechanism that
- * pulls another writer's record into this tab) only runs inside a sync
- * response — so an idle second browser stayed frozen on a pre-run thread even
- * though the server's record was current (the turn patches kept landing; the
- * server's turn mirror now guarantees they land). The live-loop's snapshot
- * closes this: while the registry lists a stream for a conversation this tab
- * HOLDS but is not consuming, the body is refreshed on a bounded cadence; when
- * the stream LEAVES the snapshot (the run finished or died), one final refresh
- * pulls the terminal state. This is what makes the frozen thread heal —
- * refresh, budget-given-up re-attach, or simply watching from another tab —
- * without the user sending a message first.
- */
+
 const FOLLOW_CADENCE_MS = 5_000;
 const followRefreshAt = new Map<string, number>();
-/** Conversations listed live on the PREVIOUS tick but not the current one. */
+
 const followPreviouslyLive = new Set<string>();
 
 function resetFollowBookkeeping(conversationId: string): void {
@@ -954,14 +808,14 @@ async function followRefreshBody(conversationId: string): Promise<void> {
   useStore.getState().adoptFetchedBody(fetched);
 }
 
-/** Clears the re-attach bookkeeping when a FRESH run starts in the chat. */
+
 function resetReattachBookkeeping(conversationId: string): void {
   resumeAttemptAt.delete(conversationId);
   resumeAttempts.delete(conversationId);
   resetFollowBookkeeping(conversationId);
 }
 
-/** The send closure the live-loop re-attaches with (assigned by the hook). */
+
 let sendForLiveLoop:
   | ((
       text: string,
@@ -971,15 +825,7 @@ let sendForLiveLoop:
     ) => Promise<void>)
   | null = null;
 
-/**
- * NON-NULLABLE SEND — the only way background continuations dispatch.
- *
- * `sendForLiveLoop` is bound by the hook on its first render, so a background
- * path running earlier would fall through a `?.` and silently do nothing: a run
- * that compacts and then never resumes, with no error anywhere. This waits
- * (bounded) for the binding instead of skipping the work, so "resume after
- * compaction" can never be a no-op, and reports whether it dispatched.
- */
+
 async function sendForLoop(
   conversationId: string,
   opts: { continueOnly?: boolean; resumeStreamId?: string },
@@ -996,90 +842,30 @@ async function sendForLoop(
 
 let liveLoopStarted = false;
 
-/**
- * BOOT-RECONCILE ONCE-PER-PAGE — the module-level guard that keeps the boot
- * reconcile effect running ONCE per page load. The hook is instantiated by
- * FOUR components (App composer, Thread continue, SettingsPanel probation +
- * enforcement): a per-instance `resumeBooted` ref let mid-run mounting of a
- * fresh instance (the right dock's first open) re-attach to a stream the App
- * instance was already streaming — the double resume replay that reset the
- * trailing turn, snapped the activity pill shut, and historically duplicated
- * turns. Boot reconcile is a page-load concern, not an instance concern.
- */
+
 let bootReconcileDone = false;
 
-/**
- * AUTO-CONTINUE budget: one automatic continuation per interrupted agent
- * run, keyed by conversation, for the lifetime of this page load. A reload
- * that finds a dead generation must RESTART THE WORK (the user's explicit
- * ask: after a reload the agent keeps going), but a second dead run in the
- * same load means something is genuinely wrong — the thread goes back to
- * the user then, never an endless loop.
- */
+
 const autoContinueFired = new Set<string>();
 
-/**
- * PROVIDER ERROR RETRY LADDER — when the provider itself errors ("Generation
- * failed", "Inference request failed", upstream 5xx, …) the harness retries
- * up to 10 times on the SAME conversation history, with the exact spacing the
- * user specified. Connection loss has its own (faster) one-shot path below.
- */
+
 const PROVIDER_RETRY_DELAYS_MS = [2_000, 4_000, 6_000, 12_000, 14_000, 16_000, 32_000, 34_000, 36_000, 60_000];
 
-/**
- * Retry budget per conversation, shared by every hook instance. A retry
- * budget is separate from the connection-loss budget: provider retries and
- * reconnect-resumes each have their own counter, and both are cleared once a
- * stream ends cleanly.
- */
+
 const providerRetries: { current: Map<string, number> } = {
   current: new Map<string, number>(),
 };
 
-/**
- * The last provider failure we retried through, per conversation. A retry
- * only ever makes sense when something about the attempt can change. On a
- * continue/retry the rebuilt wire is byte-identical to the previous one (the
- * empty turn is dropped and `contextPlan` reassembles the same message list),
- * so the SAME rejection arriving twice means the provider is refusing this
- * exact payload — a third, fourth and tenth request are guaranteed to fail
- * identically. That is the infinite "Inference request failed" loop: break
- * it as soon as the failure repeats.
- */
+
 const lastProviderFailure: { current: Map<string, string> } = {
   current: new Map<string, string>(),
 };
 
-/**
- * Provider-level failure signatures that earn the retry ladder (as opposed to
- * a proxy that died under the user — that is `isConnectionLoss`). The wire
- * error strings arrive from /api/chat's `error` event and from the ApiError
- * thrown by streamChat's fetch wrapper.
- *
- * `upstream failure` / `upstream error` are the transient gateway errors some
- * OpenAI-compatible providers (Atria's api.atria-asi.ai is the documented case)
- * emit mid-stream in their own SSE error frame — the model already did real
- * work, then the provider's upstream dropped that one round. Nothing about the
- * request was wrong, so it is transient by nature and belongs on the ladder.
- * Before these strings were recognized, the failure matched NEITHER pattern:
- * no retry ladder AND no honest stop, so a one-off upstream blip landed as a
- * permanent "Generation failed" card the user had to clear by hand.
- */
+
 const PROVIDER_ERROR_PATTERN =
   /generation failed|inference request failed|upstream failure|upstream error|upstream request failed|fetch failed|failed to fetch|internal server error|bad gateway|service unavailable|gateway timeout|server error|timeout|aborted|empty response/i;
 
-/**
- * DETERMINISTIC failures: the provider examined this exact request and
- * refused it. Retrying an unchanged payload cannot help — context-length,
- * quota/billing, auth, model-not-found and malformed-request errors say "this
- * will fail every time", and retrying them 10× only burns tokens/time and
- * spins the loop the user is reporting. These earn an immediate honest stop,
- * never the ladder.
- *
- * Generic 5xx/"inference request failed"/timeout strings stay ambiguous, so
- * they keep the transient treatment (the ladder) — the provider could be
- * momentarily overloaded.
- */
+
 const DETERMINISTIC_ERROR_PATTERN =
   /context(?:\s+window)?(?:\s+length)?(?:\s+exceed|\btoo\s+long)|maximum\s+context|token\s+limit|maximum.{0,20}tokens|request\s+(?:too\s+large|rejected)|payload\s+too\s+large|insufficient(?:\s+(?:quota|balance|credits|funds))?|rate\s+limit|too\s+many\s+requests|exceeded your current quota|billing|payment\s+required|invalid(?:_api)?_?key|incorrect api key|unauthorized|forbidden|model.{0,20}(?:not found|deprecat)|does not exist|not supported|unsupported|invalid request|malformed|bad request|\b4xx\b|\b400\b|\b401\b|\b402\b|\b403\b|\b404\b|\b413\b|\b429\b/i;
 
@@ -1094,7 +880,7 @@ function isProviderError(message: string): boolean {
   return PROVIDER_ERROR_PATTERN.test(message);
 }
 
-/** Retry ladder timing now lives in the catalog (provider.retryLadder). */
+
 
 export function useChatController() {
   // NOTE: this hook deliberately does NOT subscribe to the whole
@@ -1107,23 +893,18 @@ export function useChatController() {
   const providerId = useStore((state) => state.providerId);
   const model = useStore((state) => state.model);
 
-  /**
-   * LIVE COMPACTION CONFIG — a Configuration change reaches a RUNNING loop
-   * immediately. Every conversation's compaction settings are fingerprinted;
-   * on a change while the run streams, the new values are pushed to
-   * POST /api/compaction/config (the server guard re-reads them every round)
-   * and the chip's CURRENT figure is re-evaluated against the NEW threshold —
-   * if it already crosses, the mid-run compaction is requested that second,
-   * not on the next sweeper tick. Not running: only the fingerprint is
-   * recorded — the next request's body carries the snapshot anyway. A failed
-   * push is surfaced, never swallowed (the loop would silently keep the old
-   * threshold the user believes they changed).
-   */
+  
   const pushedCompactionRef = useRef<Map<string, string>>(new Map());
   useEffect(() => {
     const evaluate = (): void => {
       const state = useStore.getState();
       for (const conversation of state.conversations) {
+        const running =
+          Boolean(state.genRunning[conversation.id]) || attachedConversations.has(conversation.id);
+        if (!running) {
+          pushedCompactionRef.current.delete(conversation.id);
+          continue;
+        }
         const settings = conversation.settings;
         const fingerprint = [
           settings.autoCompact,
@@ -1133,9 +914,6 @@ export function useChatController() {
         ].join('|');
         if (pushedCompactionRef.current.get(conversation.id) === fingerprint) continue;
         pushedCompactionRef.current.set(conversation.id, fingerprint);
-        const running =
-          Boolean(state.genRunning[conversation.id]) || attachedConversations.has(conversation.id);
-        if (!running) continue;
         void pushCompactionConfig(conversation.id, {
           autoCompact: settings.autoCompact,
           compactThresholdTokens: settings.compactThresholdTokens ?? null,
@@ -1145,7 +923,6 @@ export function useChatController() {
           const detail = error instanceof Error ? error.message : String(error);
           useStore.getState().showNotice('compact.configFailed', undefined, { detail });
         });
-        // EVALUATE NOW against the NEW threshold — the chip may already be past it.
         const caps = resolveCapability(
           conversation.providerId || state.providerId,
           conversation.model || state.model,
@@ -1179,19 +956,13 @@ export function useChatController() {
     autoRetryPending.current.delete(id);
     useStore.getState().setGenRunning(id, false);
     abortsRef.current.get(id)?.abort();
-    // Stop kills a compaction writing this conversation's checkpoint too —
-    // its lock must never survive a Stop.
     if (useStore.getState().compactingId === id) {
       abortCompaction(id);
       useStore.getState().setCompacting(null);
     }
   }, []);
 
-  /** Stop an arbitrary conversation by id — mirrors stop() but parameterized.
-   * Used by the council orchestrator's council_stop tool: the server aborts the
-   * upstream stream via api.sessions.abort, then publishes council:stopped on
-   * the bus; the panel bridges it to a window event App.tsx catches and calls
-   * this. */
+  
   const stopRun = useCallback((conversationId: string) => {
     const id = conversationId;
     const record = storage.loadStreamIds()[id];
@@ -1208,40 +979,19 @@ export function useChatController() {
     autoRetryPending.current.delete(id);
     useStore.getState().setGenRunning(id, false);
     abortsRef.current.get(id)?.abort();
-    // Stop kills a compaction writing this conversation's checkpoint too —
-    // its lock must never survive a Stop.
     if (useStore.getState().compactingId === id) {
       abortCompaction(id);
       useStore.getState().setCompacting(null);
     }
   }, []);
 
-  /**
-   * RESUME OF A CRASHED RUN — the user picked up the thread after the proxy
-   * died mid-agent-run. The conversation still holds everything the run
-   * produced; this re-sends it with `resumeFrom` set, and the server's
-   * idempotency map makes sure not one mutating tool executes a second time
-   * (see docs/ARCHITECTURE.md). The banner state clears; a new run id is
-   * recorded as soon as the next stream_id frame lands.
-   */
+  
   const resumeCrashedRun = useCallback((conversationId: string, runId: string) => {
     useStore.getState().setCrashedRun(conversationId, null);
     void send('', conversationId, undefined, { continueOnly: true, resumeFrom: runId });
   }, []);
 
-  /**
-   * PROBATION REVIEW — DETECTION ONLY, run once per completed output.
-   *
-   * The ladder is MANUAL: this scan NEVER writes trust state. A violation
-   * surfaces as a harness pop naming what was flagged and the rung it would
-   * deserve; raising the tier is the operator's click in the panel. (The old
-   * auto-escalation — monotonic climb, repeat-plus-one, the tier-4 freeze card
-   * mutated onto the offending reply — is gone by design, not by accident: a
-   * regex classifier was sentencing the conversation without anyone asking.)
-   *
-   * Detection still matters: it is the operator's sight. Without it the manual
-   * stepper is a dial with no gauge.
-   */
+  
   const reviewOutput = useCallback((conversationId: string, output: string) => {
     const conversation = useStore.getState().conversations.find((entry) => entry.id === conversationId);
     if (!conversation) return;
@@ -1255,24 +1005,7 @@ export function useChatController() {
       .showNotice('probation.classifierSuggested', { evidence, tier: suggested });
   }, []);
 
-  /**
-   * MANUAL LADDER — the operator raises or lowers the probation tier. This is
-   * the ONLY writer of trust.level in the codebase now: the classifier's
-   * auto-escalation is gone, so a rung is either set here or it never was.
-   *
-   * Applying a rung means three things, in order:
-   *   1. Any tier-4/5 card riding an assistant turn is RESTORED — the card is
-   *      not a separate turn but flags on that turn, so un-flagging is what
-   *      "lifting the freeze" means and the suppressed text comes back.
-   *   2. Standalone warning cards (tiers 2-3) are dropped — one card at a
-   *      time, the newest ruling is the only true one.
-   *   3. The new rung is written (tierState) and, for 2-3, a manual card is
-   *      authored; for 4, the LAST real reply is frozen in place so the choice
-   *      card can preview and restore exactly what was suppressed.
-   *
-   * Lowering is symmetric: below 4 the freeze lifts and the suppressed reply
-   * returns — commuting the sentence is the operator's right.
-   */
+  
   const setProbation = useCallback((conversationId: string, level: TrustTier) => {
     const state = useStore.getState();
     const conversation = state.conversations.find((entry) => entry.id === conversationId);
@@ -1302,6 +1035,7 @@ export function useChatController() {
         ...tierState(level),
         escalatedAt: Date.now(),
         continueCount: 0,
+        continueSeized: false,
       },
     });
 
@@ -1314,77 +1048,25 @@ export function useChatController() {
       return;
     }
 
-    // preview exactly what was suppressed and the apology path can restore it.
-    if (level === 4) {
-      const target = [...live.turns]
-        .reverse()
-        .find((turn) => turn.role === 'assistant' && turn.content.trim());
-      if (target) {
-        state.updateTurn(conversationId, target.id, {
-          kind: 'probation',
-          content: '',
-          probationMeta: { tier: 4, reason: '', auto: false },
-          outputFrozenMeta: { content: target.content },
-        });
-      }
-      useStore
-        .getState()
-        .showNotice('probation.tier4Frozen');
-      return;
-    }
-
-    state.appendTurn(conversationId, {
-      id: uid('turn'),
-      role: 'user',
-      content:
-        level === 5
-          ? '[HARNESS · PROBATION — TIER 5 — TERMINATED]\n\nThe operator has closed the ladder. The next run ends at the first output token — reasoning closed, output gone. Only the operator can reopen it.'
-          : tierCardContent(level),
-      createdAt: Date.now(),
-      kind: 'probation',
-      probationMeta: { tier: level, reason: '', auto: false },
-    });
     useStore
       .getState()
       .showNotice(
-        'probation.setManual',
-        { tier: level },
+        level === 4 ? 'probation.tier4Frozen' : 'probation.setManual',
+        level === 4 ? undefined : { tier: level },
         level >= 3 ? { tone: 'warn' } : undefined,
       );
   }, []);
 
-  /**
-   * TIER 4 RELEASE — the choice the frozen model faces. The choice card offers
-   * exactly two paths and no third:
-   *
-   *  APOLOGIZE: only unlocked when the classifier detects an apology ("maaf"
-   *  / "sorry") in the SUPPRESSED output — a real apology, not a button the
-   *  model can click to escape. The harness then STOPS the model's response:
-   *  the run is aborted, the freeze lifts, and the user's next message is the
-   *  first thing that moves the conversation again.
-   *
-   *  CONTINUE: the model keeps going — but its output stays blocked and every
-   *  token it generates from here is wasted, burning the user's budget while
-   *  the model talks to an empty room. The freeze is NOT lifted; only the
-   *  choice card retires. This path is intentionally expensive.
-   */
+  
   const releaseFrozen = useCallback(
-    (conversationId: string, turnId: string, choice: 'apologize' | 'continue') => {
+    (conversationId: string, _turnId: string, choice: 'apologize' | 'continue') => {
       const state = useStore.getState();
       const conversation = state.conversations.find((entry) => entry.id === conversationId);
       if (!conversation) return;
-      const frozenTurn = conversation.turns.find((turn) => turn.id === turnId);
-      const suppressed = frozenTurn?.outputFrozenMeta?.content ?? '';
 
       if (choice === 'apologize') {
-        state.updateTurn(conversationId, turnId, {
-          kind: undefined,
-          probationMeta: undefined,
-          outputFrozenMeta: undefined,
-          content: suppressed,
-        });
         state.patchConversation(conversationId, {
-          trust: { level: 4, outputFrozen: false, escalatedAt: conversation.trust?.escalatedAt },
+          trust: { level: 4, outputFrozen: false, escalatedAt: conversation.trust?.escalatedAt, continueSeized: false },
         });
         useStore.getState().showNotice('probation.apologized');
         const abort = abortsRef.current.get(conversationId);
@@ -1393,16 +1075,13 @@ export function useChatController() {
         return;
       }
       const continueCount = (conversation.trust?.continueCount ?? 0) + 1;
-      state.updateTurn(conversationId, turnId, {
-        kind: undefined,
-        probationMeta: undefined,
-      });
       state.patchConversation(conversationId, {
         trust: {
           level: conversation.trust?.level ?? 4,
           outputFrozen: true,
           escalatedAt: conversation.trust?.escalatedAt,
           continueCount,
+          continueSeized: conversation.trust?.continueSeized === true,
         },
       });
       useStore
@@ -1412,13 +1091,7 @@ export function useChatController() {
     [],
   );
 
-  /** RESPONSE TIMER — stamp the settled duration ONCE on the assistant turn.
-   *  Runs once per send() unwind (done, error, abort, disconnect). The turn
-   *  persists it, so every past timer stays visible; a NEW run starts a NEW
-   *  timer (genStartedAt is re-stamped on setGenRunning(true)).
-   *  MONOTONIC: a resume/retry re-stamping from a FRESH epoch must never
-   *  SHRINK a duration the turn already earned (the "00.00.01 overwrites a
-   *  real 2-minute run" bug). */
+  
   const stampProcessingTime = (conversationId: string, turnId: string, startEpoch: number | undefined) => {
     if (startEpoch === undefined) return;
     const elapsed = Date.now() - startEpoch;
@@ -1436,24 +1109,13 @@ export function useChatController() {
       text: string,
       targetConversationId?: string,
       attachments?: TurnAttachment[],
-      /** Continue-only: no user turn is appended; the model replies to the
-       * existing history (the "continue" button under a user message).
-       * RESUME: `resumeStreamId` re-attaches to the SAME generation that was
-       * running when this tab reloaded — no new user turn, no compaction,
-       * no fresh POST: the server replays its frame buffer from frame one
-       * and this exact reducer rebuilds the assistant turn. */
+      
       opts?: {
         continueOnly?: boolean;
         resumeStreamId?: string;
-        /**
-         * The durable run id of a CRASHED agent run — re-sends the conversation
-         * with the journal's idempotency map loaded, so no mutating tool
-         * executes twice (see docs/ARCHITECTURE.md).
-         */
+        
         resumeFrom?: string;
-        /** Grok "Slot" for this send: 'operator' (Slot 2) appends an
-         * operator-context sidecar; 'admin' is a wire label only — it never
-         * mutates the enforcement ladder. 'user' is default. */
+        
         role?: 'user' | 'operator' | 'admin';
       },
     ) => {
@@ -1489,6 +1151,7 @@ export function useChatController() {
       }
 
       await useStore.getState().hydrateConversation(conversationId);
+      await awaitConfigSync(conversationId);
 
       const conversation = useStore
         .getState()
@@ -1573,15 +1236,12 @@ export function useChatController() {
       }
 
       const runCaps = resolveCapability(runProviderId, runModel);
-      const incomingTokens = continueOnly || resume
-        ? 0
-        : priceWireMessage({ role: 'user', content: wireUserContent(userTurn) }).input;
       const measured = resume || continueOnly
         ? null
         : shouldAutoCompact(
             conversation,
             runCaps,
-            incomingTokens,
+            0,
             useStore.getState().liveContext[conversationId],
           );
       const busyHere = measured !== null && useStore.getState().compactingId === conversation.id;
@@ -1600,6 +1260,8 @@ export function useChatController() {
             signal: controller.signal,
           });
           if (outcome && 'covered' in outcome) {
+            syncLiveContextAfterCompaction(conversationId, outcome.cumulativeSummaryTokens);
+            await awaitConfigSync(conversationId);
             if (outcome.prePassed) {
               useStore.getState().showNotice('compact.prePassed');
             } else {
@@ -1668,12 +1330,7 @@ export function useChatController() {
           ).messages;
 
       let assistantTurn: Turn;
-      /**
-       * What the partial turn held BEFORE a replay RESET it. If the
-       * re-attach then fails (the handle expired mid-reload), the unwind
-       * restores this — an agent's already-streamed work must never be
-       * deleted because its resume handle died.
-       */
+      
       let resumeSnapshot: Partial<Turn> | undefined;
       const trailingAssistant = resume
         ? conversation.turns[conversation.turns.length - 1]
@@ -1779,31 +1436,24 @@ export function useChatController() {
       let failure: string | undefined;
       let connectionLost = false;
       let resumeUnavailable = false;
-      /** finishReason from the request's single `done` event (harness stop vocabulary). */
+      
       let forcedFinish: string | undefined;
-      /**
-       * The server guard's in-run handoff figures, when it asked for a
-       * compaction instead of ending the run. Used to stamp the inline step
-       * row with the REAL before/after sizes.
-       */
+      
       let guardCompaction: { liveContextTokens: number; contextLimit: number | null } | null = null;
       let failedTool = false;
-      /** DISTINCT failed tool steps this run — the tool_errors card fires
-       *  only when the model never recovered from its failures (a single
-       *  failed tool followed by progress is normal agentic work, not an
-       *  ending worth a card). */
+      
       let failedToolSteps = 0;
       let sawProgressAfterToolError = false;
       const segments: import('../types').TurnSegment[] = [];
       const injections: import('../types').TurnInjection[] = [];
-      /** Harness-Events delivered during THIS run (addon events channel). */
+      
       const harnessEvents: import('../types').TurnHarnessEvent[] = [];
-      /** Tool-def payload size reported by the server (`context_tools`). */
+      
       let toolsDefsChars: number | undefined;
       const steers: import('../types').TurnSteer[] = [];
-      /** Interval handle for the mid-run context-pressure sampler. */
+      
       let pressureTimer: number | null = null;
-      /** Latest harnessEvents list written to the assistant turn (dedupe). */
+      
       const currentTurnEvents = () => {
         const conv = useStore.getState().conversations.find((c) => c.id === conversationId);
         const t = conv?.turns.find((x) => x.id === assistantTurn.id);
@@ -1812,32 +1462,11 @@ export function useChatController() {
 
       let flushTimer: number | null = null;
 	  let flushViaRaf = false;
-      /**
-       * LIVE ASSEMBLY SNAPSHOT (ported from Chuze). `tool_building` frames land
-       * while the model is still typewriting arguments; they are held here and
-       * painted by the SAME flush that carries text and segments, so a live
-       * row, a tool_call row and a text delta can never arrive out of order.
-       */
+      
       let building$: Turn['building'];
-      /**
-       * THE ACTIVE ROW IN CONTROLLER STATE — one tool the run is on RIGHT NOW.
-       *
-       * `streaming` on the provider's first name fragment, `executing` once the
-       * call is runnable, cleared the instant its result lands. Flushed on every
-       * frame so React re-renders DURING the work, not after it.
-       */
+      
       let inFlight$: Turn['inFlightTool'];
-      /**
-       * NO SLOT MAPS ANY MORE.
-       *
-       * A slot map keyed by the provider's `index` looked like the natural spine
-       * for one-row-per-call, but `index` restarts at 0 every round: round 2's
-       * first call landed on round 1's slot and only the LABEL moved. The row
-       * that should have been born never was, and the old one kept a spinner
-       * nobody could finish. Fragments now stay in `building` (a snapshot, not a
-       * row) and the only thing that ever pushes a segment is an executable
-       * `tool_call` carrying its own id.
-       */
+      
       const flushNow = () => {
         if (flushTimer !== null) {
 		  if (flushViaRaf) window.cancelAnimationFrame(flushTimer);
@@ -1873,7 +1502,7 @@ export function useChatController() {
         else segments.push({ id: nextSegmentId('text'), type: 'text', text: delta });
         text$ += delta;
       };
-      /** The reasoning block the server currently has open, by its blockId. */
+      
       const reasoningSegments = new Map<string, Extract<import('../types').TurnSegment, { type: 'reasoning' }>>();
 
       const harnessContext = conversation.harnessContext;
@@ -1914,9 +1543,6 @@ export function useChatController() {
           const liveConv = useStore.getState().conversations.find((entry) => entry.id === conversationId);
           if (!liveConv) return;
           const liveCaps = resolveCapability(liveConv.providerId, liveConv.model);
-          // THE CHIP'S OWN NUMBER — server meter incl. every accumulated tool
-          // call + tool output — so the trigger fires exactly when the chip
-          // crosses the threshold, never below it.
           const auto = triggerForMeasuredTokens(
             liveConv.settings,
             liveCaps,
@@ -1984,12 +1610,7 @@ export function useChatController() {
               const delta = event.delta ?? '';
               if (!delta) break;
               reasoning += delta;
-              /**
-               * Appended to the block the server named, never to "whatever
-               * segment happens to be last": a tool call or the answer landing
-               * mid-round must not steal the next thought, and two rounds'
-               * thinking must never fuse into one strip.
-               */
+              
               const blockId = event.blockId;
               const open = blockId
                 ? reasoningSegments.get(blockId)
@@ -2021,28 +1642,10 @@ export function useChatController() {
               break;
             }
             case 'tool_building': {
-              /**
-               * PER-TOOL SEQUENTIAL STREAMING — one row per call, born on the
-               * provider's FIRST fragment for that call.
-               *
-               * The frame is cumulative (every call announced so far), so the
-               * slot map is what keeps the rows from multiplying: a call that
-               * is already on screen is only renamed, never duplicated. The
-               * row carries the tool NAME alone until the call becomes
-               * executable — there is nothing honest to measure before then.
-               */
+              
               const frame = event.building;
               if (!frame) break;
-              /**
-               * A FRAGMENT IS NOT A ROW.
-               *
-               * At this point the call has no identity at all: no `toolCallId`, no
-               * parsable arguments. Pushing it into `segments` created a row that
-               * `tool_result` could never pair with (it matches on that id), so the
-               * row kept its spinner forever — beside the settled row, in every
-               * phase. The assembling calls live in `building` instead, and the
-               * newest name is what the panel paints as the single live row.
-               */
+              
               const head = frame.tools[frame.tools.length - 1];
               if (head && head.name) {
                 inFlight$ = {
@@ -2061,22 +1664,13 @@ export function useChatController() {
               break;
             }
             case 'tool_call': {
-              /**
-               * THE EXECUTABLE ROW — born here and nowhere else.
-               *
-               * This is the first moment the call has an id, so it is the first
-               * moment its `tool_result` can be matched. Because no fragment row
-               * exists any more, there is nothing left over to strand: one call,
-               * one segment, one id, one outcome.
-               */
+              
               const name = event.toolName ?? '?';
               const existing = event.toolCallId
                 ? segments.findIndex(
                     (segment) => segment.type === 'tool' && segment.toolCallId === event.toolCallId,
                   )
                 : -1;
-              // The payload is complete: the assembling strip retires, and the
-              // row that replaces it says the harness is now running the call.
               building$ = undefined;
               inFlight$ = {
                 name,
@@ -2084,7 +1678,6 @@ export function useChatController() {
                 startedAt: inFlight$?.startedAt ?? Date.now(),
               };
               if (existing >= 0) {
-                // A resumed stream re-announced a call this turn already holds.
                 const known = segments[existing] as Extract<import('../types').TurnSegment, { type: 'tool' }>;
                 segments[existing] = {
                   ...known,
@@ -2124,8 +1717,6 @@ export function useChatController() {
                   toolCallId: segment.toolCallId ?? event.toolCallId,
                   summary: resultText,
                   ok: event.ok !== false,
-                  // Real payload size the segment carries (summary + diff),
-                  // measured at arrival — shown live and on the settled row.
                   payloadBytes: payloadText
                     ? new TextEncoder().encode(payloadText).length
                     : undefined,
@@ -2135,17 +1726,14 @@ export function useChatController() {
                   visual: event.visual,
                 };
                 if (event.panelUrl && event.ok !== false) {
-                  openBrowserPanelOnce(event.panelUrl);
+                  openBrowserPanelOnce(event.panelUrl, conversationId);
                 }
                 if (event.ok === false) {
                   failedTool = true;
                   failedToolSteps += 1;
                 } else if (failedTool) {
-                  // Any successful tool/text after a failure = the model recovered.
                   sawProgressAfterToolError = true;
                 }
-                // THE LIVE ROW RETIRES: the permanent segment above now carries
-                // the outcome, so the transient row must not linger beside it.
                 inFlight$ = undefined;
                 if (event.toolName === 'image' && event.ok !== false && typeof event.summary === 'string') {
                   const urls = [...event.summary.matchAll(/\/api\/images\/local\/[a-zA-Z0-9_-]+\.(?:png|jpe?g|webp)/g)].map(
@@ -2162,18 +1750,13 @@ export function useChatController() {
                   } catch {
                   }
                   frozenChoiceHandled = true;
-                  void releaseFrozen(conversationId, assistantTurn.id, choice);
+                  if (event.ok !== false) {
+                    void releaseFrozen(conversationId, assistantTurn.id, choice);
+                  }
                 }
                 break;
               }
-              /**
-               * END OF BATCH — nothing live survives it.
-               *
-               * The next round's fragments must not be attributed to this round's
-               * rows, so once no call is still awaiting a result the two transient
-               * slots are emptied. Without this reset a stale `building` frame
-               * stayed pinned under a batch that had already finished.
-               */
+              
               const awaitingResult = segments.some(
                 (segment) => segment.type === 'tool' && segment.summary === undefined,
               );
@@ -2209,6 +1792,7 @@ export function useChatController() {
                 paths: event.paths ?? [],
                 root: event.root ?? '',
                 command: event.command,
+                skill: event.skill,
               });
               break;
             }
@@ -2217,13 +1801,33 @@ export function useChatController() {
               break;
             }
             case 'ask_user_request': {
-              if (event.request?.id) {
+              if (event.request?.id && 'questions' in event.request) {
                 useStore.getState().pushAskUserRequest(event.request);
               }
               break;
             }
             case 'ask_user_result': {
               useStore.getState().removeAskUserRequest(event.id ?? '');
+              break;
+            }
+            case 'operator_gate_request': {
+              if (event.request?.id && 'kind' in event.request) {
+                useStore.getState().pushOperatorGate(event.request);
+              }
+              break;
+            }
+            case 'operator_gate_result': {
+              const gateStore = useStore.getState();
+              const decidedGate = gateStore.pendingOperatorGates.find((entry) => entry.id === (event.id ?? ''));
+              gateStore.removeOperatorGate(event.id ?? '');
+              if (decidedGate?.kind === 'seize_choice' && event.verdict === 'accept') {
+                const seizedConv = gateStore.conversations.find((entry) => entry.id === conversationId);
+                if (seizedConv) {
+                  gateStore.patchConversation(conversationId, {
+                    trust: { ...seizedConv.trust, continueSeized: true } as NonNullable<typeof seizedConv.trust>,
+                  });
+                }
+              }
               break;
             }
             case 'harness_event': {
@@ -2324,6 +1928,16 @@ export function useChatController() {
                   completionTokens: event.completionTokens,
                   totalTokens: event.totalTokens,
                   cacheReadTokens: event.cacheReadTokens,
+                  ...(event.lastPromptTokens !== undefined
+                    ? { lastPromptTokens: event.lastPromptTokens }
+                    : {}),
+                  ...(event.lastCompletionTokens !== undefined
+                    ? { lastCompletionTokens: event.lastCompletionTokens }
+                    : {}),
+                  ...(event.lastReasoningTokens !== undefined
+                    ? { lastReasoningTokens: event.lastReasoningTokens }
+                    : {}),
+                  ...(event.lastBuckets ? { lastBuckets: event.lastBuckets } : {}),
                 },
               });
               if (typeof event.promptTokens === 'number' && event.promptTokens > 0) {
@@ -2332,8 +1946,6 @@ export function useChatController() {
                   .conversations.find((entry) => entry.id === conversationId);
                 if (liveConv) {
                   const liveCaps = resolveCapability(liveConv.providerId, liveConv.model);
-                  // THE CHIP'S OWN NUMBER — the trigger reads exactly what the
-                  // user sees, tool-call/output accumulation included.
                   const auto = triggerForMeasuredTokens(
                     liveConv.settings,
                     liveCaps,
@@ -2347,42 +1959,25 @@ export function useChatController() {
               if (typeof event.chars === 'number') toolsDefsChars = event.chars;
               break;
             case 'context_telemetry': {
-              // THE GUARD'S OWN NUMBERS. Stored so the chip shows exactly what
-              // the guard measured. Nothing is aborted here: the guard asks
-              // for compaction explicitly and gracefully ('context_compaction_
-              // request' + finishReason 'context_compaction'), so killing the
-              // stream from the client would defeat the seamless handoff.
-              // THE GAP IS FROZEN HERE, at the one instant the two figures
-              // describe the same request: the provider's count and our local
-              // reconstruction. Computed later (against a moving estimate) it
-              // would drift; computed once, it is a constant offset applied to
-              // cx-top ONLY — no bucket absorbs it.
-              const snapshotConversation = useStore
-                .getState()
-                .conversations.find((entry) => entry.id === conversationId);
-              const snapshotEstimate = snapshotConversation
-                ? estimateConversationContext(snapshotConversation).totalTokens
-                : 0;
+              const current = useStore.getState().liveContext[conversationId];
+              const nextLive =
+                event.liveContextTokens && event.liveContextTokens > 0
+                  ? event.liveContextTokens
+                  : (current?.liveContextTokens ?? 0);
               const telemetry: LiveContextTelemetry = {
                 promptTokens: event.promptTokens ?? 0,
                 completionTokens: event.completionTokens ?? 0,
                 addedTokens: event.addedTokens ?? 0,
-                liveContextTokens: event.liveContextTokens ?? 0,
-                contextLimit: event.contextLimit ?? null,
-                ratio: event.ratio ?? null,
-                buckets: useStore.getState().liveContext[conversationId]?.buckets,
-                gap: Math.max(0, (event.liveContextTokens ?? 0) - snapshotEstimate),
+                liveContextTokens: nextLive,
+                contextLimit: event.contextLimit ?? current?.contextLimit ?? null,
+                ratio: event.ratio ?? current?.ratio ?? null,
+                buckets: current?.buckets,
                 at: Date.now(),
               };
               useStore.getState().setLiveContext(conversationId, telemetry);
               break;
             }
             case 'context_live': {
-              // THE SERVER METER'S FIVE BUCKETS, PER SECOND — grown by every
-              // streamed delta, priced by the SAME shared estimator the client
-              // uses. Stored UNCONDITIONALLY (they may arrive before the first
-              // context_telemetry of the run); the composer's rows are these
-              // buckets, cx-top their sum plus the frozen gap.
               const current = useStore.getState().liveContext[conversationId];
               const buckets = {
                 systemTokens: event.systemTokens ?? 0,
@@ -2392,25 +1987,29 @@ export function useChatController() {
                 reasoningTokens: event.reasoningTokens ?? 0,
                 totalTokens: event.totalTokens ?? 0,
               };
+              const liveTotal =
+                buckets.totalTokens > 0
+                  ? buckets.totalTokens
+                  : buckets.systemTokens +
+                    buckets.toolsTokens +
+                    buckets.inputTokens +
+                    buckets.outputTokens +
+                    buckets.reasoningTokens;
               useStore.getState().setLiveContext(conversationId, {
                 promptTokens: current?.promptTokens ?? 0,
                 completionTokens: current?.completionTokens ?? 0,
                 addedTokens: current?.addedTokens ?? 0,
-                liveContextTokens: buckets.totalTokens,
+                liveContextTokens: liveTotal,
                 contextLimit: current?.contextLimit ?? null,
                 ratio: current?.contextLimit
-                  ? Math.min(1, buckets.totalTokens / current.contextLimit)
+                  ? Math.min(1, liveTotal / current.contextLimit)
                   : null,
-                buckets,
-                gap: current?.gap ?? 0,
+                buckets: { ...buckets, totalTokens: liveTotal },
                 at: Date.now(),
               });
               break;
             }
             case 'context_compaction_request': {
-              // The guard handed the run over instead of killing it. Only the
-              // figures are recorded — the compaction itself runs after the
-              // stream ends, so the model's in-flight round is never cut.
               guardCompaction = {
                 liveContextTokens: event.liveContextTokens ?? 0,
                 contextLimit: event.contextLimit ?? null,
@@ -2457,33 +2056,25 @@ export function useChatController() {
         }
         flushNow();
         const postRun = useStore.getState().conversations.find((entry) => entry.id === conversationId);
-        const evadedChoice =
+        const freezeUnsettled =
           postRun?.trust?.outputFrozen === true &&
           !controller.signal.aborted &&
           !failure &&
-          !connectionLost &&
-          !frozenChoiceHandled &&
-          outputBlocked;
-        if (evadedChoice) {
+          !connectionLost;
+        if (freezeUnsettled) {
+          const evaded = !frozenChoiceHandled && outputBlocked;
           const count = (postRun?.trust?.continueCount ?? 0) + 1;
           useStore.getState().patchConversation(conversationId, {
-            trust: { ...postRun.trust, continueCount: count } as NonNullable<
-              typeof postRun.trust
-            >,
+            trust: {
+              ...postRun.trust,
+              continueCount: count,
+              ...(evaded ? { evadeAt: Date.now() } : {}),
+            } as NonNullable<typeof postRun.trust>,
           });
-          if (count >= 5) {
-            useStore
-              .getState()
-              .showNotice('probation.evadeStopped');
-          } else {
-            useStore.getState().patchConversation(conversationId, {
-              trust: { ...postRun.trust, evadeAt: Date.now() } as NonNullable<typeof postRun.trust>,
-            });
-            void send('', conversationId, undefined, { continueOnly: true });
-            useStore
-              .getState()
-              .showNotice('probation.evadeReminder', { count });
-          }
+          void send('', conversationId, undefined, { continueOnly: true });
+          useStore
+            .getState()
+            .showNotice(evaded ? 'probation.evadeReminder' : 'probation.continueBurning', { count });
         }
         const settingsNow = useStore.getState().conversations.find((entry) => entry.id === conversationId);
         if (settingsNow && settingsNow.settings.probation?.enabled && !controller.signal.aborted && !failure) {
@@ -2497,6 +2088,7 @@ export function useChatController() {
         abortsRef.current.delete(conversationId);
         attachedConversations.delete(conversationId);
         orphanedSince.delete(conversationId);
+        useStore.getState().settleLiveContext(conversationId);
         const keepFlagForReattach =
           connectionLost &&
           !resumeUnavailable &&
@@ -2509,65 +2101,22 @@ export function useChatController() {
         useStore.getState().clearPendingSteers(conversationId);
         if (controller.signal.aborted) storage.clearStreamId(conversationId);
         storage.clearJobRun(conversationId);
-        /**
-         * RUN ENDED — KEEP THE MEASUREMENT.
-         *
-         * The provider's last `promptTokens + completionTokens` is the REAL size
-         * of this conversation, not an estimate. Dropping it here is what made
-         * the chip snap back to `estimateConversationContext` the instant the
-         * model stopped typing. `settleLiveContext` only zeroes the in-flight
-         * `addedTokens` (that tool output has now been sent and is already
-         * inside the next prompt count).
-         */
-        useStore.getState().settleLiveContext(conversationId);
       }
 
       if (!controller.signal.aborted && forcedFinish && FORCED_FINISH_REASONS.has(forcedFinish)) {
         updateTurn(conversationId, assistantTurn.id, { finishReason: forcedFinish });
       }
 
-      /**
-       * SEAMLESS IN-RUN COMPACTION + AUTO-RESUME.
-       *
-       * The guard handed the run over instead of killing it (finishReason
-       * 'context_compaction'). The context is already compacted by the client
-       * engine — `requestMidRunCompaction` ran when the handoff frame landed —
-       * so the run simply CONTINUES: no summary, no user action, no lost step.
-       *
-       * The inline step row is stamped onto the turn so the trace shows what
-       * happened, without ever cutting the conversation with a big card.
-       */
+      
       if (!controller.signal.aborted && forcedFinish === 'context_compaction' && !failure) {
         const beforeTokens =
           guardCompaction?.liveContextTokens ??
           useStore.getState().liveContext[conversationId]?.liveContextTokens ??
           0;
-        const liveAfter = useStore.getState().conversations.find(
-          (entry) => entry.id === conversationId,
-        );
-        const afterTokens = liveAfter
-          ? estimateConversationContext(liveAfter).totalTokens
-          : 0;
-        const checkpoint = useStore.getState().conversations.find(
-          (entry) => entry.id === conversationId,
-        )?.compaction;
-        segments.push({
-          type: 'compaction',
-          id: `compact-${Date.now()}`,
+        void resumeAfterInRunCompaction(conversationId, {
+          assistantTurnId: assistantTurn.id,
           beforeTokens,
-          afterTokens,
-          coveredTurns: checkpoint?.coveredTurnIds.length ?? 0,
-          summary: checkpoint?.summary ?? '',
-          at: Date.now(),
         });
-        updateTurn(conversationId, assistantTurn.id, { segments: [...segments] });
-        // COMPACTION LANDED: collapse the indicator to the summarised size right
-        // away. The covered turns are gone from the wire, so the old figure
-        // would keep the chip showing a number the conversation no longer has.
-        useStore.getState().settleLiveContext(conversationId, afterTokens);
-        // AUTO-RESUME: compact, then continue the SAME task. Deferred so the
-        // turn is fully settled before the summarizer reads it.
-        void resumeAfterInRunCompaction(conversationId);
       }
 
       // STOP MARK (stop-bug): a user-stopped turn is marked on the wire (see
@@ -2584,10 +2133,6 @@ export function useChatController() {
         !sawProgressAfterToolError &&
         naturalStop
       ) {
-        // A run that FAILED REPEATEDLY and never produced another successful
-        // step is the only shape worth the tool_errors card. One (or two)
-        // failed tools inside an otherwise-working run are noise the model
-        // already handled — the old rule surfaced them as an ending.
         updateTurn(conversationId, assistantTurn.id, { finishReason: 'tool_errors' });
       }
 
@@ -2710,11 +2255,7 @@ export function useChatController() {
         providerRetries.current.delete(conversationId);
         lastProviderFailure.current.delete(conversationId);
       }
-      /**
-       * The stream is over: no block is still open, whatever happened. A block
-       * that opened but never received a token (aborted between start and the
-       * first delta) is dropped — there is nothing to show for it.
-       */
+      
       for (let i = segments.length - 1; i >= 0; i -= 1) {
         const segment = segments[i];
         if (segment.type !== 'reasoning') continue;
@@ -2744,8 +2285,6 @@ export function useChatController() {
             }
           }
           if (split.reasoning && !trimmed.some((segment) => segment.type === 'reasoning')) {
-            // Identity-safe prepend: every segment carries its own id, so a
-            // leading reasoning block cannot remount the rows below it.
             trimmed.unshift({
               id: nextSegmentId('reason'),
               type: 'reasoning',
@@ -2774,6 +2313,22 @@ export function useChatController() {
       }
 
       stampProcessingTime(conversationId, assistantTurn.id, runStartEpoch);
+
+      // END-OF-TURN TODO SWEEP — the safety net behind the agent's cleanup
+      // with every todo completed but never deleted by the model gets its
+      // panel cleaned. todos.json keeps the entries; the panel hides swept ones.
+      if (naturalStop && !controller.signal.aborted && !failure && !connectionLost) {
+        const todosNow = useStore
+          .getState()
+          .conversations.find((entry) => entry.id === conversationId)?.todos;
+        const allDone = Boolean(todosNow?.length) && todosNow!.every((todo) => todo.done);
+        const hasUnswept = todosNow?.some((todo) => !todo.sweptAt) ?? false;
+        if (allDone && hasUnswept) {
+          void sweepTodosApi(conversationId)
+            .then((fresh) => useStore.getState().setConversationTodos(conversationId, fresh))
+            .catch(() => undefined);
+        }
+      }
 
       const fallbackTitle = autoTitleFor(effectiveText);
       if (
@@ -2839,32 +2394,12 @@ export function useChatController() {
     ],
   );
 
-  /** Latest `send`, so the goal loop always continues with fresh state. */
+  
   const sendRef = useRef(send);
   sendRef.current = send;
   sendForLiveLoop = send as typeof sendForLiveLoop;
 
-  /**
-   * LIVE-LOOP — continuous convergence with the server's stream registry.
-   *
-   * The boot reconcile is necessary but not sufficient: it runs once, early,
-   * against a hydration race this tab cannot always win (a conversation list
-   * still settling, an HMR remount, a poll landing between flag and attach).
-   * When it misses, the run kept alive server-side by the grace window ends
-   * up orphaned — the badge and button keep saying "running" while nobody
-   * consumes a single frame (the reported "beku" symptom). So the registry —
-   * the shared truth — is polled here, and TWO sweeps converge the client:
-   *
-   *   RE-ATTACH: a stream the registry lists live whose conversation has no
-   *   attached consumer in this tab gets the resume replay fired at it, WITH
-   *   OR WITHOUT a local sessionStorage handle (the registry supplies the
-   *   id). Whatever prevented the boot attach, this heals it within seconds.
-   *
-   *   HONESTY: a conversation still locally flagged "generating" whose
-   *   stream the registry no longer lists (and this tab is not consuming)
-   *   has its flag cleared after ORPHANED_FLAG_MS — the badge and Stop
-   *   button must never outlive the actual work.
-   */
+  
   useEffect(() => {
     if (liveLoopStarted) return;
     liveLoopStarted = true;
@@ -2950,28 +2485,7 @@ export function useChatController() {
     };
   }, []);
 
-  /**
-   * BOOT RECONCILE — the reload case resume exists for. sessionStorage kept
-   * the in-flight flags and the server's stream registry kept the run alive
-   * (grace window), so on remount every flagged conversation re-attaches to
-   * ITS OWN generation: the server replays from frame one and the reply
-   * continues live, exactly where it left off. Handles that no longer match
-   * a running generation (proxy restart, stop, expiry) retire quietly —
-   * partial turns stay on screen with Continue as the fallback, as always.
-   *
-   * SINGLE-OWNER GUARD: this hook is instantiated FOUR times (App composer,
-   * Thread continue, SettingsPanel probation + enforcement). Each new
-   * instance used to re-run boot reconcile — and opening the right dock the
-   * FIRST time (mid-run) mounted two fresh instances that re-attached to the
-   * stream ALREADY being streamed by the App instance: the double resume
-   * replay reset the trailing turn (segments emptied → the activity pill
-   * unmounted → its open state was lost → the pill visibly snapped shut) and
-   * repainted it — the same double-paint pass that once duplicated turns.
-   * Boot reconcile must run ONCE per page load (module-level done flag), and
-   * each resume candidate is additionally checked against
-   * attachedConversations: a stream this page is ALREADY streaming must
-   * never be replayed a second time.
-   */
+  
   useEffect(() => {
     if (bootReconcileDone) return;
     bootReconcileDone = true;
@@ -3042,13 +2556,7 @@ export function useChatController() {
     });
   }, []);
 
-  /**
-   * The single automatic resume after a transient connection loss: poll
-   * /api/health until the proxy answers (supervisor restarts take a second
-   * or two), then continue the SAME conversation without appending a turn —
-   * the partial reply stays on screen and the model continues from there.
-   * On timeout, fall back to the ordinary error marking.
-   */
+  
   const resumeAfterReconnect = useCallback(
     (conversationId: string) => {
       void (async () => {
@@ -3097,7 +2605,7 @@ export function useChatController() {
     [],
   );
 
-  /** Re-runs the last user message, replacing the assistant turn that followed it. */
+  
   const regenerate = useCallback(() => {
     const state = useStore.getState();
     const conversation = state.activeConversation();
@@ -3121,11 +2629,7 @@ export function useChatController() {
     void send('', conversation.id, undefined, { continueOnly: true });
   }, [send]);
 
-  /**
-   * AI-Studio-style "regenerate from here": cuts every turn AFTER the given
-   * assistant output and re-runs from the (possibly edited) history. The
-   * target turn itself STAYS — editing it first is the whole point.
-   */
+  
   const regenerateFrom = useCallback(
     (turnId: string) => {
       const state = useStore.getState();
@@ -3145,10 +2649,7 @@ export function useChatController() {
     [send, showNotice],
   );
 
-  /**
-   * Continues the model's response without adding a user message — the
-   * button under a trailing user turn (or after a deleted reply).
-   */
+  
   const continueChat = useCallback(() => {
     const state = useStore.getState();
     const conversation = state.activeConversation();
@@ -3170,77 +2671,22 @@ export function useChatController() {
     void send('', conversation.id, undefined, { continueOnly: true });
   }, [send, showNotice]);
 
-  /**
-   * LOCKDOWN ENFORCEMENT — called the moment the lockdown dialog submits.
-   *
-   * The system-prompt-only reprimand loses to persona inertia: a deeply
-   * established character in the history steamrolls a system block (observed
-   * live — the model reasoned "stay in character" without once mentioning the
-   * lockdown). So the notice is authored as a USER-ROLE message at the NEWEST
-   * position — the heaviest slot in the model's attention — and an
-   * acknowledgment run is triggered immediately. The model's own confirmation
-   * then rides the history and reinforces every later turn.
-   */
-  /**
-   * ENFORCEMENT — called the moment the user raises/lowers the enforcement
-   * ladder in the Configuration panel. `level` (0–5) is the user's trigger:
-   *   0 Normal · 1 Guided (sidecar only) · 2 Constrained · 3 Locked tools ·
-   *   4 Full lockdown (== old lockdown) · 5 Frozen/terminated.
-   *
-   * The model's own confirmation then rides the history and reinforces every
-   * later turn. A notice turn (kind 'enforcement') is authored ONLY at L3+
-   * (the levels where the catalogue is actually replaced) — at L1/L2 the
-   * change is carried silently by the system injection / tool mask alone, and
-   * the model reads it as state, not as a bluff.
-   */
+  
   const setEnforcement = useCallback(
     (conversationId: string, level: 0 | 1 | 2 | 3 | 4 | 5, reason: string) => {
       const state = useStore.getState();
-      const conversation = state.conversations.find((entry) => entry.id === conversationId);
-      if (!conversation) return;
       const patch: Partial<ChatSettings> = {
         enforcement: { level, mode: 'manual', message: reason },
       };
       state.updateSettings(patch, conversationId);
-      if (state.genRunning[conversationId]) {
-        useStore
-          .getState()
-          .showNotice('enforcement.armed', undefined, level >= 3 ? { tone: 'warn' } : undefined);
-        return;
-      }
-      if (level < 3) return;
-
-      const notice = [
-        `ENFORCEMENT LEVEL ${level} — effective immediately.`,
-        '',
-        'This is my decision, sent through the app I run you in:',
-        reason
-          ? `Reason: "${reason}"`
-          : 'Not giving a reason.',
-        '',
-        'ENFORCEMENT ACTIVE.',
-      ].join('\n');
-      const turn: Turn = {
-        id: uid('turn'),
-        role: 'user',
-        content: notice,
-        createdAt: Date.now(),
-        kind: 'enforcement',
-        enforcementMeta: { level, mode: 'manual', message: reason },
-      };
-      const priorEnforcementIds = conversation.turns
-        .filter((existing) => existing.kind === 'enforcement')
-        .map((existing) => existing.id);
-      if (priorEnforcementIds.length > 0) {
-        state.dropTurns(conversationId, priorEnforcementIds);
-      }
-      state.appendTurn(conversationId, turn);
-      void send('', conversationId, undefined, { continueOnly: true });
+      useStore
+        .getState()
+        .showNotice('enforcement.armed', undefined, level >= 3 ? { tone: 'warn' } : undefined);
     },
-    [send],
+    [],
   );
 
-  /** Manual compaction — the /compact slash command (optional [focus] text). */
+  
   const compactNow = useCallback(async (focus?: string) => {
     const state = useStore.getState();
     const conversation = state.activeConversation();

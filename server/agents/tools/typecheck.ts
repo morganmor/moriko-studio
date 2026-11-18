@@ -1,16 +1,10 @@
-/**
- * agent__typecheck — structured type-check wrapper.
- *
- * Runs the workspace typecheck command (default: pnpm typecheck) through the
- * native system shell and parses the tsc compiler output into structured
- * errors: file:line:col + TS code + message, grouped by file. The agent can
- * then read_file the exact error locations. Requires terminal mode enabled.
- */
+
 import { statSync } from 'node:fs';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, truncateOutput, requireWorkspace, resolveWithPermission } from './shared.js';
 import { runShellCommand } from '../exec.js';
 import { auditToolCall } from '../audit.js';
+import { approveCommand, isSneakyWebCommand, commandTouchesWebScripts, sneakyWebRefusal } from './terminal.js';
 
 interface TscError {
   file: string;
@@ -22,7 +16,7 @@ interface TscError {
 }
 
 const TSC_ERROR_RE = /^(.+?)\((\d+),(\d+)\): (error|warning) (TS\d+): (.+)$/;
-/** F1.4 — tsc --pretty format: `file:l:c - error TSxxxx: msg`. */
+
 const TSC_PRETTY_RE = /^(.+?):(\d+):(\d+) - (error|warning) (TS\d+): (.+)$/;
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
@@ -64,6 +58,18 @@ export async function typecheckTool(args: Record<string, unknown>, ctx: AgentToo
   }
 
   const command = str(args, 'command').trim() || 'pnpm typecheck';
+  if (
+    ctx.webAccess === false &&
+    (isSneakyWebCommand(command) || commandTouchesWebScripts(command, resolved.absolute))
+  ) {
+    return { ok: false, isError: true, errorCode: 'web_access_off', text: sneakyWebRefusal(command) };
+  }
+
+  const hasCustomCommand = str(args, 'command').trim() !== '' && str(args, 'command').trim() !== 'pnpm typecheck';
+  const approved = await approveCommand('typecheck', command, resolved.absolute, hasCustomCommand, ctx);
+  if (!approved) {
+    return { ok: false, isError: true, text: `The user did not approve running "${command}".` };
+  }
 
   const outcome = await runShellCommand(command, {
     cwd: resolved.absolute,

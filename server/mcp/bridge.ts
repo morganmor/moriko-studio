@@ -1,17 +1,4 @@
-/**
- * MCP Bridge — exposes Council + RSAT addon tools and read-only workspace
- * tools to EXTERNAL MCP clients (claude.ai custom connectors, Gemini web
- * custom apps) over Streamable HTTP.
- *
- * Actor binding: every addon tool call runs AS a council Main Session
- * (orchestrator) — external orchestrators command the same sub sessions.
- * Workspace tools are strictly READ-ONLY, jail-resolved to the bound
- * workspace root: external clients can look and read, never edit.
- *
- * The Main Session and Workspace are user-configurable (Settings → MCP →
- * MCP Bridge); "auto" falls back to the first stored main conversation and
- * the app-active workspace respectively.
- */
+
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -26,9 +13,11 @@ import {
 } from '../addons/registry.js';
 import { getActiveWorkspace, listWorkspaces } from '../agents/workspace.js';
 import { assertAllowedTarget, loadPlaywright } from '../agents/spatial-runtime.js';
+import { acquireEphemeralContext } from '../agents/browser/engine.js';
 import { listStoredConversationSummaries } from '../conversationStore.js';
 import { callAgentTool } from '../agents/tools/dispatcher.js';
 import { listAgentToolDefs } from '../agents/tools/catalogue.js';
+import { compilePattern, globToRegExp } from '../agents/tools/shared.js';
 import { bridgeHarnessToolDefs, isBridgeExposedTool } from './bridgePolicy.js';
 
 const TOKEN_FILE = path.join(morikoHome, 'mcp-bridge.json');
@@ -37,9 +26,9 @@ interface BridgeConfig {
   version: 1;
   token: string;
   createdAt: string;
-  /** Explicit Main Session (conversation id) chosen in Settings; '' = auto. */
+  
   sessionId?: string;
-  /** Explicit workspace id chosen in Settings; '' = auto (active workspace). */
+  
   workspaceId?: string;
 }
 
@@ -56,7 +45,6 @@ function loadConfig(): BridgeConfig {
       }
     }
   } catch {
-    // fall through and regenerate
   }
   const created: BridgeConfig = {
     version: 1,
@@ -73,12 +61,12 @@ function saveConfig(next: BridgeConfig): void {
   atomicWriteJson(TOKEN_FILE, next);
 }
 
-/** The bridge credential — persisted in morikoHome, generated on first use. */
+
 export function bridgeToken(): string {
   return loadConfig().token;
 }
 
-/** Patches user choices (Settings). Unknown fields are preserved. */
+
 export function patchBridgeConfig(patch: { sessionId?: string; workspaceId?: string }): void {
   const current = loadConfig();
   saveConfig({
@@ -90,15 +78,15 @@ export function patchBridgeConfig(patch: { sessionId?: string; workspaceId?: str
 
 export interface BridgeSettingsView {
   token: string;
-  /** '' = auto (first stored main conversation). */
+  
   sessionId: string;
-  /** '' = auto (app-active workspace). */
+  
   workspaceId: string;
-  /** Candidate Main Sessions (council mains first) for the Settings dropdown. */
+  
   sessions: Array<{ id: string; title: string; councilRole?: string }>;
-  /** Registered workspaces for the Settings dropdown. */
+  
   workspaces: Array<{ id: string; label: string; path: string }>;
-  /** Effective binding actually used by tool calls right now. */
+  
   effective: { sessionId: string | null; workspacePath: string | null };
 }
 
@@ -139,12 +127,7 @@ export function bridgeSettings(): BridgeSettingsView {
   };
 }
 
-/**
- * The session the bridge acts as: the user's chosen Main Session (Settings),
- * else the first stored council main conversation. Tools run with this
- * sessionId, so the orchestrator gate and RSAT actor resolution behave
- * exactly as in-chat.
- */
+
 export function resolveMainSessionId(): string | null {
   const config = loadConfig();
   const chosen = String(config.sessionId ?? '').trim();
@@ -161,10 +144,7 @@ export function resolveMainSessionId(): string | null {
   }
 }
 
-/**
- * The workspace root external clients may read: the user's chosen workspace
- * (Settings), else the app-active workspace. Read tools are jailed here.
- */
+
 export function resolveWorkspaceRoot(): string | null {
   const config = loadConfig();
   const chosenId = String(config.workspaceId ?? '').trim();
@@ -173,7 +153,6 @@ export function resolveWorkspaceRoot(): string | null {
       const found = listWorkspaces().find((w) => w.id === chosenId);
       if (found?.path) return found.path;
     } catch {
-      // fall through to active workspace
     }
   }
   try {
@@ -197,7 +176,7 @@ function textOut(text: string, isError = false): BridgeToolResult {
   return { content: [{ type: 'text', text }], isError };
 }
 
-/** Text + inline PNG — MCP image blocks let Claude/Gemini actually SEE the capture. */
+
 function imageOut(text: string, dataUrl: string): BridgeToolResult {
   const commaIdx = dataUrl.indexOf(',');
   const header = commaIdx >= 0 ? dataUrl.slice(0, commaIdx) : '';
@@ -206,12 +185,7 @@ function imageOut(text: string, dataUrl: string): BridgeToolResult {
   return { content: [{ type: 'text', text }, { type: 'image', data, mimeType: mime }], isError: false };
 }
 
-/**
- * ws_screenshot — headless-browser capture of a LOCAL dev server (the UI a
- * sub agent is building). Launch → navigate → wait → screenshot → close.
- * Targets are gated to localhost/private hosts (same rule as the spatial
- * runtime tier); public hosts are refused unless allow_public is passed.
- */
+
 async function wsScreenshot(args: Record<string, unknown>): Promise<BridgeToolResult> {
   const rawUrl = String(args?.url ?? '').trim();
   if (!rawUrl) {
@@ -237,20 +211,14 @@ async function wsScreenshot(args: Record<string, unknown>): Promise<BridgeToolRe
   const selector = typeof args?.selector === 'string' ? args.selector.trim() : '';
   const waitMs = Math.min(Math.max(Number(args?.wait_ms ?? 1200) || 1200, 0), 15_000);
 
-  let browser: import('playwright-core').Browser | null = null;
+  let context: import('playwright-core').BrowserContext | null = null;
+  let page: import('playwright-core').Page | null = null;
   try {
-    try {
-      browser = await pw.chromium.launch({ headless: true, channel: 'msedge' });
-    } catch {
-      browser = await pw.chromium.launch({ headless: true });
-    }
-    const page = await browser.newPage({ viewport });
+    context = await acquireEphemeralContext({ viewport });
+    page = await context.newPage();
     await page.goto(url.toString(), { waitUntil: 'commit', timeout: 20_000 });
-    try {
-      await page.waitForLoadState('domcontentloaded', { timeout: 20_000 });
-      await page.waitForLoadState('networkidle', { timeout: 4_000 });
-    } catch { /* best effort */ }
-    if (waitMs > 0) await page.waitForTimeout(waitMs);
+    await page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => undefined);
+    await page.waitForTimeout(waitMs > 0 ? waitMs : 150);
 
     const buffer = selector
       ? await page.locator(selector).screenshot({ type: 'png', timeout: 10_000 })
@@ -267,13 +235,11 @@ async function wsScreenshot(args: Record<string, unknown>): Promise<BridgeToolRe
       true,
     );
   } finally {
-    await browser?.close().catch(() => undefined);
+    await page?.close().catch(() => undefined);
+    await context?.close().catch(() => undefined);
   }
 }
 
-/* ------------------------------------------------------------------ */
-/* Read-only workspace tools                                           */
-/* ------------------------------------------------------------------ */
 
 const SKIP_DIRS = new Set([
   'node_modules', '.git', 'dist', 'build', '.next', 'out',
@@ -373,7 +339,6 @@ function wsRead(args: Record<string, unknown>): BridgeToolResult {
   const allLines = content.split('\n');
   const total = allLines.length;
 
-  // mode: "outline" — line-numbered symbol map (same engine as ws_outline).
   if (args?.mode === 'outline') {
     const lines = outlineLines(rel, content);
     return textOut(`${rel} — outline (${lines.length} anchors):\n${lines.join('\n') || '(no structural lines found)'}`);
@@ -383,14 +348,12 @@ function wsRead(args: Record<string, unknown>): BridgeToolResult {
   const render = (t: string): string =>
     showWs ? t.replace(/\t/g, '⟶').replace(/ +$/, (m) => '·'.repeat(m.length)) : t;
 
-  // line: N — read one full line by number.
   const one = Math.floor(Number(args?.line ?? 0) || 0);
   if (one >= 1) {
     if (one > total) return textOut(`line ${one} is beyond EOF (${total} lines).`, true);
     return textOut(`${rel}:${one}: ${render(allLines[one - 1])}`);
   }
 
-  // ranges: [[from,to],…] — disjoint regions, max 6, 2000 lines total.
   if (Array.isArray(args?.ranges)) {
     const list = (args.ranges as unknown[]).slice(0, 6);
     let budget = 2000;
@@ -421,7 +384,7 @@ function wsRead(args: Record<string, unknown>): BridgeToolResult {
   return textOut(`${header}\n${slice.map((l, i) => `${offset + i}| ${render(l)}`).join('\n')}`);
 }
 
-/** Line-numbered structural anchors of one file — shared by ws_outline and read mode "outline". */
+
 function outlineLines(rel: string, content: string): string[] {
   const lines: string[] = [];
   const isCode = ['.ts', '.tsx', '.js', '.jsx', '.mts', '.mjs', '.cts', '.cjs', '.css', '.py', '.go', '.rs'].includes(path.extname(rel).toLowerCase());
@@ -429,7 +392,6 @@ function outlineLines(rel: string, content: string): string[] {
     const trimmed = line.trim();
     if (!trimmed) return;
     if (isCode) {
-      // Declarations/exports + CSS selectors + comment banners with line numbers.
       if (
         /^(export (default |async |const |function |class |interface |type |enum )|(async )?function |class |def |fn |func |interface |type |enum |@media|@keyframes)/.test(trimmed) ||
         /^\.[a-zA-Z][\w-]*\s*[{,]/.test(trimmed) ||
@@ -438,14 +400,13 @@ function outlineLines(rel: string, content: string): string[] {
         lines.push(`${idx + 1}: ${trimmed.slice(0, 150)}`);
       }
     } else if (/^(#{1,6} |[-*] \[|\|)/.test(trimmed)) {
-      // Prose/markup: markdown headings + doc keys.
       lines.push(`${idx + 1}: ${trimmed.slice(0, 150)}`);
     }
   });
   return lines;
 }
 
-/** Resolve a subpath scope inside the workspace root (harness parity). */
+
 function scopeRoot(root: string, subpath: unknown): { dir: string; error?: string } {
   const rel = typeof subpath === 'string' ? subpath.trim().replace(/\\/g, '/').replace(/^\.\/?/, '').replace(/\/+$/, '') : '';
   if (!rel) return { dir: root };
@@ -462,11 +423,7 @@ interface GrepHit {
   after: string[];
 }
 
-/**
- * ws_grep — harness grep parity: pattern/patterns (OR), subpath scope,
- * glob/globs filename filter, case_sensitive, whole_lines, context lines,
- * sort path|density. Output: "path:line: text".
- */
+
 function wsGrep(args: Record<string, unknown>): BridgeToolResult {
   const got = activeRoot();
   if ('error' in got) return textOut(got.error, true);
@@ -475,19 +432,19 @@ function wsGrep(args: Record<string, unknown>): BridgeToolResult {
     Array.isArray(args?.patterns) && args.patterns.length
       ? (args.patterns as unknown[]).map((p) => String(p).trim()).filter(Boolean)
       : [String(args?.pattern ?? args?.query ?? '').trim()].filter(Boolean);
-  if (rawList.length === 0) return textOut('pattern is required (regex; falls back to literal when invalid).', true);
+  if (rawList.length === 0) return textOut('pattern is required — a regular expression, e.g. "export function \\\\w+".', true);
 
-  const flags = args?.case_sensitive === true ? '' : 'i';
+  const caseSensitive = args?.case_sensitive === true;
   const whole = args?.whole_lines === true;
-  const patterns: RegExp[] = rawList.map((raw) => {
-    let re: RegExp;
+  const patterns: RegExp[] = [];
+  for (const raw of rawList) {
     try {
-      re = new RegExp(raw, flags);
-    } catch {
-      re = new RegExp(raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags);
+      const re = compilePattern(raw, caseSensitive);
+      patterns.push(whole ? new RegExp(`^(?:${re.source})$`, re.flags) : re);
+    } catch (err) {
+      return textOut(`Invalid pattern /${raw}/: ${err instanceof Error ? err.message : 'compile failed'}.`, true);
     }
-    return whole ? new RegExp(`^(?:${re.source})$`, re.flags) : re;
-  });
+  }
 
   const scope = scopeRoot(got.root, args?.subpath);
   if (scope.error) return textOut(scope.error, true);
@@ -592,37 +549,6 @@ function wsGrep(args: Record<string, unknown>): BridgeToolResult {
   return textOut(`${hits.length} match(es) for ${rawList.map((p) => `/${p}/`).join(' | ')} in ${scopeLabel}:\n${body}`);
 }
 
-/**
- * Mini-glob → RegExp: ** crosses directories, * stays in one segment,
- * ? matches one char, {a,b} alternates. Everything else is escaped.
- */
-function globToRegExp(pattern: string): RegExp {
-  let re = '';
-  for (let i = 0; i < pattern.length; i++) {
-    const c = pattern[i];
-    if (c === '*') {
-      if (pattern[i + 1] === '*') {
-        re += '.*';
-        i++;
-        if (pattern[i + 1] === '/') i++; // **/ also swallows its slash
-      } else {
-        re += '[^/]*';
-      }
-    } else if (c === '?') {
-      re += '[^/]';
-    } else if (c === '{') {
-      re += '(?:';
-    } else if (c === '}') {
-      re += ')';
-    } else if (c === ',') {
-      re += '|';
-    } else {
-      re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-    }
-  }
-  return new RegExp(`^${re}$`, 'i');
-}
-
 function wsGlob(args: Record<string, unknown>): BridgeToolResult {
   const got = activeRoot();
   if ('error' in got) return textOut(got.error, true);
@@ -676,7 +602,7 @@ function wsGlob(args: Record<string, unknown>): BridgeToolResult {
       let mtime = 0;
       try {
         mtime = statSync(abs).mtimeMs;
-      } catch { /* keep 0 */ }
+      } catch {  }
       matches.push({ rel, mtime });
     }
   };
@@ -694,11 +620,7 @@ function wsGlob(args: Record<string, unknown>): BridgeToolResult {
   return textOut(`${matches.length} file(s) match ${patternList.map((p) => `"${p}"`).join(' | ')}:\n${body}`);
 }
 
-/**
- * ws_outline — symbol map of ONE file so external orchestrators can jump to
- * exact line numbers before calling ws_read_file. TS/JS: heading/def line scan;
- * other text files: headings + declarations.
- */
+
 function wsOutline(args: Record<string, unknown>): BridgeToolResult {
   const got = activeRoot();
   if ('error' in got) return textOut(got.error, true);
@@ -727,7 +649,7 @@ function bridgeInfo(): BridgeToolResult {
   let root = '(none)';
   try {
     root = resolveWorkspaceRoot() ?? root;
-  } catch { /* keep default */ }
+  } catch {  }
   const tools = bridgeToolDefs();
   const council = tools.filter((t) => t.name.startsWith('council_')).map((t) => t.name);
   const rsat = tools.filter((t) => t.name.startsWith('rsat_')).map((t) => t.name);
@@ -741,9 +663,6 @@ function bridgeInfo(): BridgeToolResult {
   ].join('\n'));
 }
 
-/* ------------------------------------------------------------------ */
-/* Tool catalogue + dispatch                                           */
-/* ------------------------------------------------------------------ */
 
 export interface BridgeToolDef {
   name: string;
@@ -759,10 +678,6 @@ export function bridgeToolDefs(): BridgeToolDef[] {
     inputSchema: d.inputSchema,
     annotations: { readOnlyHint: addonToolReadOnly(d.wireName) === true },
   }));
-  // HARNESS-NATIVE read + edit tools — projected straight from the harness
-  // catalogue (single source of truth) so schemas never drift. External calls
-  // execute through the REAL dispatcher with the bound Main Session context:
-  // read-before-edit receipts, vault snapshots, spatial gates all apply.
   tools.push(...bridgeHarnessToolDefs(listAgentToolDefs()));
   tools.push(
     {
@@ -878,7 +793,7 @@ export function bridgeToolDefs(): BridgeToolDef[] {
   return tools;
 }
 
-/** Executes one bridge tool call as the council Main Session orchestrator. */
+
 export async function callBridgeTool(
   name: string,
   args: Record<string, unknown>,
@@ -891,7 +806,7 @@ export async function callBridgeTool(
       case 'moriko_ws_outline': return wsOutline(args);
       case 'moriko_ws_read_file': return wsRead(args);
       case 'moriko_ws_grep':
-      case 'moriko_ws_search': // legacy alias — renamed to ws_grep
+      case 'moriko_ws_search':
         return wsGrep(args);
       case 'moriko_bridge_info': return bridgeInfo();
       default: break;
@@ -899,11 +814,6 @@ export async function callBridgeTool(
 
     const wire = name.startsWith('agent__') ? name : `agent__${name}`;
 
-    // HARNESS-NATIVE read + edit tools — run through the REAL dispatcher with
-    // a synthetic context bound to the Main Session, so every enforcement
-    // layer (read-before-edit receipts, vault, spatial gates, workspace jail)
-    // applies to external callers exactly as it does in-chat. Web access is
-    // forced OFF: the bridge never grants browser/fetch capabilities.
     if (isBridgeExposedTool(name)) {
       const sessionId = resolveMainSessionId();
       if (!sessionId) {
@@ -911,11 +821,7 @@ export async function callBridgeTool(
       }
       const result = await callAgentTool(wire, args ?? {}, {
         sessionId,
-        // Handlers resolve the workspace from the session itself
-        // (getActiveWorkspace(sessionId)) — no separate field needed.
         webAccess: false,
-        // Terminal mode off + delete confirmation on: external clients have
-        // no approval UI, so risky ops stay disabled regardless of settings.
         terminalMode: 'off',
         confirmDeletes: true,
       });

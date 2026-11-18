@@ -1,12 +1,4 @@
-/**
- * Addon v2 settings (A4) — schema-validated values with user/workspace scope.
- *
- * user scope:      ~/.moriko-studio/addon-data/<id>/settings.json
- * workspace scope: <workspace>/.moriko/addons/<id>/settings.json
- *
- * The Hub renders an automatic form from `contributes.settings`; changes fire
- * settings.onChange hooks and an SSE frame.
- */
+
 
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -55,7 +47,7 @@ function propFor(addonId: string, key: string): AddonSettingProperty | undefined
   return schemaCache.get(addonId)?.properties[key];
 }
 
-/** Validate a value against the schema property; returns error text or null. */
+
 export function validateSetting(addonId: string, key: string, value: unknown): string | null {
   const prop = propFor(addonId, key);
   if (!prop) return `Unknown setting "${key}" for addon "${addonId}"`;

@@ -1,7 +1,4 @@
-/**
- * F3.6 — agent__code_metrics: per-function complexity/length/nesting/params,
- * per-file LOC + exports, optional git-churn hotspot blend.
- */
+
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AgentToolContext, HarnessToolResult } from './shared.js';
@@ -10,6 +7,7 @@ import { functionMetrics, exportedNames } from '../ts-ast.js';
 import { walkFiles } from './list.js';
 import { globToRegExp } from './shared.js';
 import { defineTool } from './registry.js';
+import { approveCommand } from './terminal.js';
 
 const WARN_FN_LINES = 80;
 const WARN_CYCLO = 15;
@@ -30,20 +28,23 @@ async function codeMetricsTool(args: Record<string, unknown>, ctx: AgentToolCont
   }
 
   const churn = new Map<string, number>();
-  try {
-    const { runShellCommand } = await import('../exec.js');
-    const outcome = await runShellCommand('git log --since=90.days --name-only --pretty=format:', {
-      cwd: root,
-      timeoutMs: 15_000,
-    });
-    if (outcome.exitCode === 0) {
-      for (const line of outcome.stdout.split('\n')) {
-        const t = line.trim();
-        if (!t) continue;
-        churn.set(t, (churn.get(t) ?? 0) + 1);
+  if ((ctx.terminalMode ?? 'auto') !== 'off' && (await approveCommand('code_metrics', 'git log --since=90.days --name-only --pretty=format:', root, false, ctx))) {
+    try {
+      const { runShellCommand } = await import('../exec.js');
+      const outcome = await runShellCommand('git log --since=90.days --name-only --pretty=format:', {
+        cwd: root,
+        timeoutMs: 15_000,
+        signal: ctx.signal,
+      });
+      if (outcome.exitCode === 0) {
+        for (const line of outcome.stdout.split('\n')) {
+          const t = line.trim();
+          if (!t) continue;
+          churn.set(t, (churn.get(t) ?? 0) + 1);
+        }
       }
-    }
-  } catch {  }
+    } catch {  }
+  }
 
   interface Row {
     file: string;

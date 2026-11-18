@@ -1,10 +1,4 @@
-/**
- * EffortSlider — "thought field" reasoning slider ported 1:1 from the mimo
- * reference (attachment-016.html): dot-matrix canvas + fisheye lens thumb,
- * spring physics, phosphor trail, packet streams, sparks, ripples, boot scan
- * and the 5×7 dot-matrix effort-name morph. Controlled by `value` (index into
- * `labels`); commits go through `onChange`. `active` gates the rAF loop.
- */
+
 import { useEffect, useRef } from 'react';
 
 type RGB = [number, number, number, number];
@@ -51,7 +45,7 @@ function parseColor(str: string): RGB {
   return [0, 0, 0, 1];
 }
 
-/** 5×7 dot-matrix glyphs (from the reference; unknown letters advance as blanks). */
+
 const GLYPHS: Record<string, string[]> = {
   A: ['.###.', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'],
   D: ['####.', '#...#', '#...#', '#...#', '#...#', '#...#', '####.'],
@@ -160,7 +154,7 @@ export interface EffortSliderProps {
   hints: string[];
   value: number;
   onChange: (index: number) => void;
-  /** Gate the rAF loop; a static frame is drawn while false. */
+  
   active?: boolean;
   label?: string;
   className?: string;

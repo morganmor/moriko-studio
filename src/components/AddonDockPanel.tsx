@@ -1,17 +1,4 @@
-/**
- * AddonDockPanel — the right dock's addon WORKSPACE (replaces the old
- * AddonDockShortcut stub that just linked to the Hub page).
- *
- * Structure (per the agreed blueprint):
- *   • One picker dropdown at the top — lists ENABLED addons only. Choosing one
- *     opens its canvas directly (no nested same-name submenu).
- *   • Multi-page addons (e.g. RSA/T) render their pages as tabs INSIDE this
- *     panel; the left rail never floods again.
- *   • Single-page addons open their canvas directly.
- *
- * The Addon Hub (toggle on/off, reload, permissions) moved to the rfoot
- * button — see AddonHubModal in AddonHub.tsx.
- */
+
 
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -26,8 +13,8 @@ const LazyAddonViewHost = lazy(() =>
   import('./AddonViewHost').then((m) => ({ default: m.AddonViewHost })),
 );
 
-/** Which addon page is open in the dock — persisted per device. */
-export type AddonDockSelection = string; // "addonId" or "addonId/viewId"
+
+export type AddonDockSelection = string;
 
 export function AddonDockPanel() {
   const setView = useStore((state) => state.setView);
@@ -42,7 +29,6 @@ export function AddonDockPanel() {
   const anchorRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
-  // Load registry data (same endpoints as the old sidebar section).
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
@@ -54,7 +40,7 @@ export function AddonDockPanel() {
         if (cancelled) return;
         if (a?.addons) setAddons(a.addons as AddonClientEntry[]);
         if (v?.views) setViews(v.views as AddonViewClientEntry[]);
-      } catch { /* offline: empty state shows */ }
+      } catch {  }
     };
     void load();
     const onReload = () => void load();
@@ -65,12 +51,10 @@ export function AddonDockPanel() {
     };
   }, []);
 
-  // Only enabled, healthy addons appear in the picker.
   const usable = addons.filter(
     (addon) => addon.enabled && addon.status !== 'needs-consent' && !addon.loadError,
   );
 
-  // Drop stale selection when the chosen addon becomes disabled.
   useEffect(() => {
     if (!selection) return;
     const addonId = selection.includes('/') ? selection.split('/')[0] : selection;
@@ -80,7 +64,6 @@ export function AddonDockPanel() {
 
   const selectedAddon = selection ? addons.find((a) => a.id === selection.split('/')[0]) : null;
   const selectedViewId = selection?.includes('/') ? selection.split('/')[1] : null;
-  // Multi-page addon: which page is active (null = first page).
   const activePage =
     selectedAddon && selectedViewId
       ? views.find((v) => v.addonId === selectedAddon.id && v.id === selectedViewId) ?? null
@@ -89,7 +72,6 @@ export function AddonDockPanel() {
     ? views.filter((v) => v.addonId === selectedAddon.id && v.location === 'sidebar')
     : [];
 
-  // Dropdown positioning (same pattern as RightDockSlot).
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: PointerEvent) => {
@@ -128,7 +110,7 @@ export function AddonDockPanel() {
 
   return (
     <div className="dock-card" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {/* Top bar: single-slot switcher + the addon picker + close */}
+      {}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 12px', borderBottom: '1px solid var(--line)' }}>
         <RightDockSlot mode={rightPanelMode} onChange={setRightPanelMode} />
         <div style={{ position: 'relative', flexShrink: 0, minWidth: 0, flex: 1 }}>
@@ -171,8 +153,6 @@ export function AddonDockPanel() {
                           role="menuitemradio"
                           aria-checked={selectedAddon?.id === addon.id}
                           onClick={() => {
-                            // One-page addons open the canvas directly; multi-page
-                            // addons open their first page (tabs render below).
                             setSelection(addonViews.length > 0 ? `${addon.id}/${addonViews[0].id}` : addon.id);
                             setOpen(false);
                           }}
@@ -193,7 +173,7 @@ export function AddonDockPanel() {
         <RightDockCloseButton />
       </div>
 
-      {/* Multi-page addon: page tabs INSIDE the panel, never in the left rail */}
+      {}
       {selectedAddon && selectedPages.length > 1 ? (
         <div role="tablist" aria-label={`${selectedAddon.name} pages`} style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '8px 12px 0' }}>
           {selectedPages.map((page) => {
@@ -214,7 +194,7 @@ export function AddonDockPanel() {
         </div>
       ) : null}
 
-      {/* The addon canvas itself — hosted by the same loader the full page uses */}
+      {}
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         {viewKey ? (
           <Suspense fallback={<LazyViewFallback label="Addon view" />}>

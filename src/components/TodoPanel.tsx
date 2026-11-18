@@ -28,14 +28,7 @@ const PRIORITIES: Array<{ value: Todo['priority']; label: string }> = [
   { value: 'low', label: 'Low' },
 ];
 
-/**
- * STANDALONE TODOS panel — todos that live WITHOUT a parent goal.
- *
- * The agent creates todos via the `todo_*` harness tools whenever it works on
- * user input (system prompt rule). This panel gives the user the same power:
- * quick-add with priority/notes, filter, toggle, edit, and delete.
- * Goals stay in the Goals panel — reserved for large-scale implementations.
- */
+
 export function TodoPanel({ open, onClose }: TodoPanelProps) {
   const conversation = useStore((state) => state.activeConversation());
   const setConversationTodos = useStore((state) => state.setConversationTodos);
@@ -55,7 +48,9 @@ export function TodoPanel({ open, onClose }: TodoPanelProps) {
   const rootRef = useRef<HTMLElement>(null);
 
   const sessionId = conversation?.id;
-  const todos = conversation?.todos ?? [];
+  // Swept todos (end-of-turn cleanup) stay in todos.json but leave the panel.
+  const allTodos = conversation?.todos ?? [];
+  const todos = allTodos.filter((todo) => !todo.sweptAt);
 
   useEffect(() => {
     if (!open || !sessionId) return;
@@ -106,7 +101,7 @@ export function TodoPanel({ open, onClose }: TodoPanelProps) {
         priority: draftPriority,
         notes: draftNotes.trim() || undefined,
       });
-      setConversationTodos(sessionId, [...todos, todo]);
+      setConversationTodos(sessionId, [...allTodos, todo]);
       setDraft('');
       setDraftNotes('');
       setDraftPriority('medium');
@@ -122,7 +117,7 @@ export function TodoPanel({ open, onClose }: TodoPanelProps) {
     if (!sessionId) return;
     try {
       const fresh = await patchTodoApi(sessionId, todo.id, { done });
-      setConversationTodos(sessionId, todos.map((entry) => (entry.id === fresh.id ? fresh : entry)));
+      setConversationTodos(sessionId, allTodos.map((entry) => (entry.id === fresh.id ? fresh : entry)));
     } catch (cause) {
       showNotice('todo.updateFailed', undefined, cause instanceof Error ? { detail: cause.message } : undefined);
     }
@@ -145,7 +140,7 @@ export function TodoPanel({ open, onClose }: TodoPanelProps) {
         priority: editPriority,
         notes: editNotes.trim() || undefined,
       });
-      setConversationTodos(sessionId, todos.map((entry) => (entry.id === fresh.id ? fresh : entry)));
+      setConversationTodos(sessionId, allTodos.map((entry) => (entry.id === fresh.id ? fresh : entry)));
       setEditingId(null);
     } catch (cause) {
       showNotice('todo.updateFailed', undefined, cause instanceof Error ? { detail: cause.message } : undefined);
@@ -161,7 +156,7 @@ export function TodoPanel({ open, onClose }: TodoPanelProps) {
     setConfirmDeleteId(null);
     try {
       await deleteTodoApi(sessionId, todoId);
-      setConversationTodos(sessionId, todos.filter((entry) => entry.id !== todoId));
+      setConversationTodos(sessionId, allTodos.filter((entry) => entry.id !== todoId));
     } catch (cause) {
       showNotice('todo.deleteFailed', undefined, cause instanceof Error ? { detail: cause.message } : undefined);
     }

@@ -6,22 +6,10 @@ import { existsSync, readFileSync } from 'node:fs';
 import { atomicWriteJson } from '../atomicWrite.js';
 import { figmaAuthFile } from '../paths.js';
 
-/**
- * Figma remote MCP OAuth 2.1 (RFC 8414 + draft resource-indicator discovery):
- *   1. GET /.well-known/oauth-protected-resource on the MCP host → 401 meta
- *      pointing at the authorization server.
- *   2. GET /.well-known/oauth-authorization-server on that origin → issuer,
- *      registration_endpoint, authorization_endpoint, token_endpoint.
- *   3. POST registration_endpoint (RFC 7591 DCR) → client_id.
- *   4. authorization_endpoint + PKCE (S256) in the user's browser → code.
- *   5. token_endpoint (code + verifier) → access_token, refresh_token.
- *
- * Tokens persist at ~/.moriko-studio/figma-auth.json (machine-level, like
- * mcp.json). The local loopback server is ephemeral — started per sign-in.
- */
+
 
 const FIGMA_MCP_URL = 'https://mcp.figma.com/mcp';
-/** Local Dev Mode MCP server exposed by the Figma desktop app (no OAuth). */
+
 export const FIGMA_DESKTOP_URL = 'http://127.0.0.1:3845/mcp';
 const REDIRECT_PORT = 14515;
 const SCOPES = ['file_read', 'file_dev_read', 'file_write'];
@@ -37,7 +25,7 @@ export interface FigmaTokens {
 interface FigmaAuthStore {
   version: 1;
   tokens?: FigmaTokens;
-  /** Persisted client registration so we don't re-register every sign-in. */
+  
   client?: { clientId: string; registrationAccessToken?: string };
 }
 
@@ -70,7 +58,7 @@ export function figmaAccessToken(): string | undefined {
   return load().tokens?.accessToken;
 }
 
-/** Drops stored tokens + registration (Settings "Disconnect"). */
+
 export function figmaAuthReset(): void {
   persist({ version: 1 });
 }
@@ -143,7 +131,6 @@ async function registerClient(registrationEndpoint: string): Promise<Registratio
     }),
   });
   if (!response.ok) {
-    // Figma allowlists DCR to its MCP Catalog (Cursor, Claude Code, VS Code…).
     if (response.status === 403) {
       throw new Error(
         'Figma rejected this client: the remote MCP endpoint is restricted to clients listed in the Figma MCP Catalog ' +
@@ -165,7 +152,7 @@ async function registerClient(registrationEndpoint: string): Promise<Registratio
   return registration;
 }
 
-/** Ephemeral loopback listener that captures the OAuth ?code= redirect. */
+
 function waitForCode(): Promise<{ code: string; port: number; close: () => Promise<void> }> {
   return new Promise((resolve, reject) => {
     const server: Server = createServer((req, res) => {
@@ -202,10 +189,7 @@ function base64Url(buffer: Buffer): string {
   return buffer.toString('base64url');
 }
 
-/**
- * Full sign-in flow: discovery → DCR → PKCE → browser consent → token
- * exchange (+ refresh token). Resolves once tokens are stored.
- */
+
 export async function figmaSignIn(): Promise<{ ok: true }> {
   const meta = await discoverAuth();
   const registration = meta.registrationEndpoint
@@ -268,7 +252,7 @@ export async function figmaSignIn(): Promise<{ ok: true }> {
   return { ok: true };
 }
 
-/** Authorization header for the Figma MCP server, refreshing when expired. */
+
 export async function figmaAuthorizationHeader(): Promise<Record<string, string>> {
   const store = load();
   const tokens = store.tokens;
@@ -303,7 +287,6 @@ export async function figmaAuthorizationHeader(): Promise<Record<string, string>
       persist({ ...store, tokens: fresh });
       return { Authorization: `Bearer ${fresh.accessToken}` };
     }
-    // Refresh failed → fall through and try the current token.
   }
   return { Authorization: `Bearer ${tokens.accessToken}` };
 }

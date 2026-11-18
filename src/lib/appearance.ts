@@ -1,38 +1,31 @@
 import type { Accent, Density, FontFamily, ThemeMode } from '../types';
 
-/**
- * Theme mechanism ported from design/moriko-design-1-theme-mechanism.html:
- * one idempotent applyAppearance() for every appearance knob, plus the View
- * Transition circular reveal used when the theme flips.
- *
- * State is PASSED IN (never imported from the store) so this module stays
- * dependency-free and cycle-free.
- */
+
 export interface AppearanceState {
   theme: ThemeMode;
   accent: Accent;
   density: Density;
   ambient: boolean;
   fontFamily: FontFamily;
-  /** Tri-state like the design: null = follow the OS, true/false = forced. */
+  
   reduceMotion: boolean | null;
 }
 
 const darkMq = () => window.matchMedia('(prefers-color-scheme: dark)');
 const motionMq = () => window.matchMedia('(prefers-reduced-motion: reduce)');
 
-/** Design's themeOf(): 'system' resolves through the OS preference. */
+
 export function resolveTheme(theme: ThemeMode): 'dark' | 'light' | 'mocha' {
   if (theme !== 'system') return theme;
   return darkMq().matches ? 'dark' : 'light';
 }
 
-/** Design's reduced(): an explicit choice wins, null follows prefers-reduced-motion. */
+
 export function isMotionReduced(reduceMotion: boolean | null): boolean {
   return reduceMotion === null ? motionMq().matches : reduceMotion;
 }
 
-/** Design's applyAppearance(): writes every appearance attribute onto <html>. */
+
 export function applyAppearance(state: AppearanceState): void {
   const root = document.documentElement;
   const resolved = resolveTheme(state.theme);
@@ -53,12 +46,7 @@ type DocWithTransition = Document & {
   startViewTransition?: (updateCallback: () => void) => ViewTransitionLike;
 };
 
-/**
- * Design's setTheme(): runs `update` + applyAppearance inside a View
- * Transition, then reveals the new theme as a circle expanding from the
- * pointer (520ms, cubic-bezier(.2,.8,.2,1)). Without View Transition support
- * — or when motion is reduced — falls back to an instant apply.
- */
+
 export function transitionAppearance(
   next: AppearanceState,
   update: () => void,

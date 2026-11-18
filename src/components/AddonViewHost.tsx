@@ -1,12 +1,4 @@
-/**
- * AddonViewHost (Addon v2, A6) — full-page host for `ViewId = addon:<id>/<view>`.
- *
- * Loads the addon's client module from the server-transpiled route
- * (GET /api/addons/:id/client/<view>.js — ONE React instance via the host
- * shim), mounts the exported component inside a themed error boundary +
- * skeleton. A dead/removed addon degrades to a themed "addon not found"
- * panel and bounces the user back to the Hub — never a blank screen.
- */
+
 
 import { Component, lazy, Suspense, useEffect, useState, type ComponentType } from 'react';
 
@@ -36,7 +28,7 @@ class AddonViewErrorBoundary extends Component<{ label: string; children: React.
 
 const viewCache = new Map<string, ComponentType>();
 
-/** `addon:rsat/board` → { addonId: 'rsat', view: 'board' }. */
+
 export function parseAddonView(view: string): { addonId: string; view: string } | null {
   const m = /^addon:([a-z0-9][a-z0-9-]*)\/([\w.-]+)$/.exec(view);
   return m ? { addonId: m[1], view: m[2] } : null;
@@ -59,7 +51,7 @@ function getLazyView(addonId: string, view: string): ComponentType<{ viewName?: 
   if (cached) return cached;
   const file = FALLBACK_VIEW[view] ?? view;
   const Lazy = lazy(() =>
-    import(/* @vite-ignore */ `/api/addons/${addonId}/client/${file}.js?v=${v}`)
+    import( `/api/addons/${addonId}/client/${file}.js?v=${v}`)
       .then((mod) => {
         const component = (mod.default ?? mod[view] ?? mod.RsatApp ?? mod.App) as ComponentType<{ viewName?: string }> | undefined;
         if (!component) throw new Error(`Module "${file}.js" has no default export.`);
@@ -67,7 +59,7 @@ function getLazyView(addonId: string, view: string): ComponentType<{ viewName?: 
       })
       .catch(async (error) => {
         if (file !== 'board') {
-          const mod = await import(/* @vite-ignore */ `/api/addons/${addonId}/client/board.js?v=${v}`);
+          const mod = await import( `/api/addons/${addonId}/client/board.js?v=${v}`);
           const component = (mod.default ?? mod.RsatApp) as ComponentType<{ viewName?: string }> | undefined;
           if (component) return { default: component };
         }

@@ -1,36 +1,4 @@
-/**
- * Config-driven adapter for "long-tail" providers whose APIs fit the
- * submit → poll pattern but use their own paths, field names, and status
- * vocabularies. Adding one requires zero code — just an `imageConfig` on the
- * provider record:
- *
- * ```json
- * {
- *   "imageAdapter": "declarative",
- *   "imageConfig": {
- *     "submit": {
- *       "path": "/gen/start",
- *       "body": { "model": "{model}", "text": "{prompt}", "ratio": "{aspect_ratio}" },
- *       "taskIdPath": "result.uid"
- *     },
- *     "poll": {
- *       "path": "/gen/check?id={taskId}",
- *       "statusPath": "state",
- *       "imagesPath": "frames[*].link",
- *       "successValue": "DONE_OK",
- *       "failedValue": "DONE_BAD",
- *       "errorPath": "why"
- *     }
- *   }
- * }
- * ```
- *
- * Placeholders: `{model}`, `{prompt}`, `{aspect_ratio}`, `{width}`, `{height}`,
- * `{size}` (as `WxH`), `{negative_prompt}` (always '' until the client sends
- * one), `{taskId}` in poll paths. Paths are dot-paths with bracket wildcards:
- * `frames[*].link`. Result entries may be http(s) URLs, `data:image/...`
- * URIs, or bare base64 — everything is normalized to local files.
- */
+
 
 import {
   ImageAdapterError,
@@ -44,42 +12,37 @@ import {
 import { formatRejection } from './errorReport.js';
 
 export interface DeclarativeImageConfig {
-  /** `bearer` (default) sends `Authorization: Bearer <key>`; `none` omits it. */
+  
   auth?: 'bearer' | 'none';
-  /** Expected number of images per request (documentational + UI hint). */
+  
   maxImages?: number;
   submit: {
     path: string;
     method?: string;
-    /** Request body template; `{placeholder}` tokens are substituted. */
+    
     body?: Record<string, unknown>;
     taskIdPath: string;
-    /** Header templates; `{placeholder}` tokens are substituted too. */
+    
     extraHeaders?: Record<string, string>;
   };
   poll: {
-    /** Path template; `{taskId}` is substituted. */
+    
     path: string;
     extraHeaders?: Record<string, string>;
-    /** Dot-path of the status field. Default: `status`. */
+    
     statusPath?: string;
-    /** Dot-path (wildcards allowed) of finished image URLs / base64. Required. */
+    
     imagesPath: string;
-    /** Dot-path of a human-readable failure reason. */
+    
     errorPath?: string;
-    /** Provider's terminal status values. Defaults: `SUCCEED` / `FAILED`. */
+    
     successValue?: string;
     failedValue?: string;
   };
   sizeParam?: ImageCapabilities['sizeParam'];
 }
 
-/**
- * Tokenizes a dot/bracket path: `frames[*].link` → ['frames', '*', 'link'],
- * `output.images[0].url` → ['output', 'images', '0', 'url']. A plain
- * `.split('.')` would NOT split around brackets — `frames[*]` would stay one
- * token and never match a real key.
- */
+
 function tokenizePath(path: string): string[] {
   const tokens: string[] = [];
   for (const match of path.matchAll(/([^[.\]]+)|\[\s*\*\s*\]|\[\s*(\d+)\s*\]/g)) {
@@ -90,7 +53,7 @@ function tokenizePath(path: string): string[] {
   return tokens;
 }
 
-/** Reads a dot/bracket path with optional `*` fan-out; undefined when absent. */
+
 function getByPath(value: unknown, path: string): unknown {
   const walk = (current: unknown, segments: string[]): unknown => {
     if (segments.length === 0) return current;
@@ -106,9 +69,7 @@ function getByPath(value: unknown, path: string): unknown {
   return walk(value, tokenizePath(path));
 }
 
-/** Substitutes `{placeholder}` tokens in every string of a JSON template.
- * Known placeholders that are unset render as '' (e.g. no aspect ratio
- * requested); unknown tokens are left untouched for the provider to judge. */
+
 function renderTemplate(value: unknown, vars: Record<string, string | number | undefined>): unknown {
   if (typeof value === 'string') {
     return value.replace(/\{(\w+)\}/g, (match, key: string) => {
@@ -129,8 +90,7 @@ function renderTemplate(value: unknown, vars: Record<string, string | number | u
   return value;
 }
 
-/** Classifies one result entry: http(s) URL → download; `data:image/...`
- * URI or a bare base64 payload → inline bytes. Anything else is skipped. */
+
 function toNormalizedImage(entry: unknown): NormalizedImage | undefined {
   if (typeof entry !== 'string') return undefined;
   const value = entry.trim();

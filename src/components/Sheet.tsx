@@ -1,7 +1,4 @@
-/**
- * Sheet — phone bottom sheet: drag handle, swipe-down to dismiss, backdrop tap
- * and Escape. Portaled to <body> so it escapes the composer's stacking context.
- */
+
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronLeft } from './icons';
@@ -15,8 +12,7 @@ export function Sheet({
 }: {
   open: boolean;
   onClose: () => void;
-  /** Optional: when wired, the header Back steps back one level instead of
-   *  closing the sheet (quick picker: Model/Reasoning → back → the quick list). */
+  
   onBack?: () => void;
   label: string;
   children: ReactNode;

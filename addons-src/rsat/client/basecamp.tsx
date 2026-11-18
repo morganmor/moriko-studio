@@ -1,9 +1,4 @@
-/**
- * RSA/T Base camp — port 1:1 dari design/split/rsat-panel-basecamp.html,
- * versi backend: data dari store (rpc state), Start/Pause via rpc,
- * create/edit PRD via rpc createPrd/updatePrd, export via rpc exportDoc
- * (file juga tersimpan di .moriko/rsat/exports/). Party dari presence server.
- */
+
 import { useState } from 'react';
 import { rpc, tr } from './shared.tsx';
 import { toast, useNow } from './toast.tsx';
@@ -29,12 +24,12 @@ function Seg({ pct, n, cls = '' }: { pct: number; n: number; cls?: string }) {
   );
 }
 
-/** Wajah holder: logo agent custom bila ada (AgentFace), selain itu sprite. */
+
 function Face({ by, ag }: { by: string; ag?: string | null }) {
   return <AgentFace by={by} ag={ag} />;
 }
 
-/** 5 hati proporsional sisa heartbeat claim (jendela = claimTtlSec server). */
+
 function Hearts({ beat }: { beat: number }) {
   const now = useNow();
   const r = 1 - (now - beat) / ttlMs();
@@ -230,7 +225,7 @@ function ScopeCard({ prd, lang }: { prd: Prd; lang: string }) {
   );
 }
 
-/** Arsitektur + modul + milestone + NFR + risiko (PRD skala arsitektur). */
+
 function ArchCard({ prd, list }: { prd: Prd; list: Ach[] }) {
   const modMeta = (id: string) => {
     const tagged = list.filter((a) => a.moduleId === id);
@@ -324,7 +319,7 @@ function ArchCard({ prd, list }: { prd: Prd; list: Ach[] }) {
   );
 }
 
-/** Roster agent yang dibuat user (registry) — identitas persisten per workspace. */
+
 function AgentsCard({ list }: { list: Ach[] }) {
   const agents = useAgents();
   return (

@@ -1,7 +1,4 @@
-/**
- * F3.4 — agent__format: run the PROJECT's own formatter (prettier / biome /
- * ruff format) when configured. MUTATION: vault snapshot per file before write.
- */
+
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { AgentToolContext, HarnessToolResult } from './shared.js';
@@ -10,6 +7,7 @@ import { runProcess } from '../exec.js';
 import { auditToolCall } from '../audit.js';
 import { snapshotFile } from '../vault.js';
 import { defineTool } from './registry.js';
+import { approveCommand } from './terminal.js';
 
 type FormatterKind = 'prettier' | 'biome' | 'ruff' | 'none';
 
@@ -49,6 +47,11 @@ async function formatTool(args: Record<string, unknown>, ctx: AgentToolContext):
 
   const rawPaths = Array.isArray(args.paths) ? (args.paths as unknown[]).filter((p): p is string => typeof p === 'string') : [];
   const targets = rawPaths.length > 0 ? rawPaths : ['.'];
+
+  const approved = await approveCommand('format', `${kind} format ${targets.join(' ')}`, resolved.absolute, false, ctx);
+  if (!approved) {
+    return { ok: false, isError: true, text: `The user did not approve formatting (${kind} format ${targets.join(' ')}).` };
+  }
 
   for (const rel of targets) {
     if (rel === '.') continue;

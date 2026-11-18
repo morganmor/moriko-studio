@@ -1,18 +1,4 @@
-/**
- * agent__addon_manage — the plugin-manager tool (mirrors deepseek-harness's
- * `plugin_manager` tool and Claude Code's plugin commands).
- *
- * ADDON MANAGER (2026-10): builtin addons are authored in the repo's
- * `addons-src/` — the Addon Manager "workspace". For a builtin id the
- * read/write/install/edit actions operate on the SOURCE copy there (all the
- * normal agent file tools also accept `addons-src/...` paths for full-capability
- * editing); the runtime install under ~/.moriko-studio/addons is refreshed by
- * the Addon Hub's Disable/Reload (reseed, per A9-bis). Non-builtin (third-party)
- * addons keep working against the addon root as before.
- *
- * `remove` is USER-ONLY: the agent cannot delete an addon. It is answered with
- * a refusal pointing at the Addon Hub.
- */
+
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -20,33 +6,29 @@ import { listAddons, getAddon } from '../../addons/registry.js';
 import { reloadAddon, loadAllAddons, ADDONS_ROOT } from '../../addons/loader.js';
 import { invalidateSearchIndex } from '../search.js';
 import { publishBusEvent } from '../../addons/bus.js';
-import type { HarnessToolResult } from './shared.js';
+import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { addonsSrcRoot } from '../workspace.js';
+import { requestApproval } from '../permissions.js';
 
-/**
- * Drop the addons-src part of the search index after an addon_manage write —
- * the file path it lands on is the source root, so the next BM25 query picks
- * the change up without a manual index rebuild.
- */
+
 function invalidateAddonSourceIndex(dir: string): void {
   const srcRoot = addonsSrcRoot();
   if (!srcRoot || !dir.startsWith(srcRoot)) return;
   invalidateSearchIndex(srcRoot);
 }
 
-/** LIVE REGISTRY: browsers repaint Hub/sidebar/widgets on this SSE frame. */
+
 const publishRegistry = (payload: Record<string, unknown>): void => {
   void publishBusEvent('addons.registry', payload, 'moriko-host');
 };
 
-/** v2: mutation of one addon reloads ONLY that addon (A-06) — other addons'
- *  tools/hooks/stores are never touched. */
+
 const reloadOne = async (id: string): Promise<void> => {
   const ok = await reloadAddon(id);
   if (!ok) await loadAllAddons();
 };
 
-/** The builtin SOURCE folder for one addon id (null when not a builtin). */
+
 function addonsSrcDir(id: string): string | null {
   try {
     const dir = path.resolve(process.cwd(), 'addons-src', id);
@@ -59,25 +41,24 @@ function addonsSrcDir(id: string): string | null {
 export interface AddonManageArgs {
   action: 'list' | 'read' | 'write' | 'enable' | 'disable' | 'install' | 'edit' | 'remove' | 'reload';
   id?: string;
-  /** read/write: file path relative to the addon root (e.g. 'addon.json', 'client/index.tsx', 'lib/util.ts'). */
+  
   file?: string;
-  /** write: full new content of the file. */
+  
   content?: string;
-  /** install/edit: manifest fields. */
+  
   name?: string;
   description?: string;
   version?: string;
-  /** install/edit: register.ts source (the entry point with register(on, $)). */
+  
   registerCode?: string;
-  /** install/edit: widget client source (React component, .tsx). */
+  
   clientCode?: string;
 }
 
 const ok = (text: string): HarnessToolResult => ({ ok: true, isError: false, text });
 const err = (text: string): HarnessToolResult => ({ ok: false, isError: true, text });
 
-/** The folder an id's read/write/install/edit operates on. Builtin ids map
- *  to their addons-src/ source; everything else to the addon root. */
+
 function dirFor(id: string): string {
   return addonsSrcDir(id) ?? path.resolve(ADDONS_ROOT(), id);
 }
@@ -128,9 +109,30 @@ function editAddon(id: string, args: AddonManageArgs): string {
   return `Addon "${id}" updated.`;
 }
 
-export async function addonManageTool(args: AddonManageArgs): Promise<HarnessToolResult> {
+export async function addonManageTool(
+  args: AddonManageArgs,
+  ctx: AgentToolContext = {},
+): Promise<HarnessToolResult> {
   const action = args.action;
   try {
+    const MUTATING_ACTIONS = new Set(['write', 'enable', 'disable', 'install', 'edit', 'reload']);
+    if (MUTATING_ACTIONS.has(action)) {
+      const targetDir = args.id ? dirFor(args.id) : ADDONS_ROOT();
+      const targetPaths = args.file && args.id ? [path.resolve(targetDir, args.file)] : [targetDir];
+      const decision = await requestApproval(
+        {
+          tool: 'addon_manage',
+          paths: targetPaths,
+          root: ADDONS_ROOT(),
+          intent: action === 'reload' ? 'exec' : 'write',
+          command: `addon_manage ${action}${args.id ? ` "${args.id}"` : ''}${args.file ? ` (${args.file})` : ''}`,
+        },
+        ctx,
+      );
+      if (!decision.granted) {
+        return err(`User did not approve addon_manage ${action}.${decision.reason ? ` Reason: "${decision.reason}".` : ''}`);
+      }
+    }
     switch (action) {
       case 'list': {
         const addons = listAddons();

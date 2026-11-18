@@ -1,8 +1,4 @@
-/**
- * Moco Canvas — Studio Panel (P1).
- * Live engine view: the scene comes from the op engine (RPC), every gesture is
- * an op, and the readout is the same one the agent reads.
- */
+
 import { useState } from 'react';
 
 import type { CanvasOp } from './ops.ts';
@@ -87,7 +83,7 @@ export default function Canvas() {
     <div className="mcv">
       <style dangerouslySetInnerHTML={{ __html: MCV_CSS }} />
 
-      {/* 1. Studio Top Bar */}
+      {}
       <header className="mcv-topbar">
         <div className="mcv-brand">
           <button type="button" className="mcv-btn" onClick={() => navigate('playground')} aria-label="Back to chat">
@@ -142,7 +138,7 @@ export default function Canvas() {
         </div>
       )}
 
-      {/* 2. Main Studio Workspace */}
+      {}
       <div className="mcv-workspace">
         <div className="mcv-canvas-area">
           <div className="mcv-stage-viewport">

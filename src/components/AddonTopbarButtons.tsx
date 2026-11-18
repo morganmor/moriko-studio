@@ -1,13 +1,4 @@
-/**
- * AddonTopbarButtons — the TopBar's addon launch buttons, driven by a simple
- * editable whitelist (`~/.moriko-studio/topbar-addons.json`, served at
- * /api/addons/topbar-buttons; POST the same route to change it).
- *
- * Only ENABLED and healthy addons that appear in the list render — the list is
- * the anti-crowding gate, so installing an addon never auto-floods the topbar.
- * Each button masks the addon's own resources/icon.svg (the RSAT gem pattern)
- * and opens the addon's first sidebar view.
- */
+
 
 import { useEffect, useState } from 'react';
 
@@ -19,7 +10,7 @@ interface Entry {
   viewId: string;
 }
 
-/** One topbar button per whitelisted, enabled addon. */
+
 export function AddonTopbarButtons() {
   const setView = useStore((s) => s.setView);
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -49,7 +40,7 @@ export function AddonTopbarButtons() {
             return [{ id, label: addon.shortName ?? addon.name, viewId: view.id }];
           }),
         );
-      } catch { /* transient — retry on next reload event */ }
+      } catch {  }
     };
     void load();
     const onReload = () => void load();

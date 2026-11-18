@@ -1,9 +1,4 @@
-/**
- * agent__edit_lines — replace a line RANGE (1-based, inclusive) with newString.
- * The range MUST lie inside the window the model actually read on the current
- * revision — no blind line surgery. Same safety posture as edit_file via the
- * shared edit-core.
- */
+
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, bool, numField } from './shared.js';
 import { resolveWriteTarget, replaceLineRange, loadEditable } from './edit-core.js';

@@ -1,18 +1,4 @@
-/**
- * RSA/T store (R1) — persistence under `<workspace>/.moriko/rsat/`.
- *
- *   prd.rsprd.json   the document (atomic tmp+rename via the host's jailed
- *                    workspace write: vault snapshot + audit ride along)
- *   events.jsonl     append-only audit log (replay/debug)
- *   ledger/<id>.jsonl per-achievement file records
- *   exports/         user exports (R7)
- *   .gitignore       `*` — the user decided (Q7) git ignores .moriko/rsat
- *                    entirely; a local ignore needs no project file edits.
- *
- * Concurrency: one in-process write QUEUE per workspace — two agents writing
- * at the same moment serialize; a stale rev is REJECTED with a readable error
- * instead of silently clobbering (the losing caller re-reads and retries).
- */
+
 
 import { rmSync, existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
@@ -25,9 +11,9 @@ export const PRD_FILE = `${DIR}/prd.rsprd.json`;
 const EVENTS_FILE = `${DIR}/events.jsonl`;
 const GITIGNORE_FILE = `${DIR}/.gitignore`;
 
-/** workspace root → tail of the in-flight write chain. */
+
 const queues = new Map();
-/** workspace root → cached doc. */
+
 const cache = new Map();
 
 function enqueue(root, job) {
@@ -43,8 +29,7 @@ function nowIso() {
 
 export class StoreLockedError extends Error {}
 
-/** Minimal fs-backed workspace handle — used when the harness has no active
- *  workspace bound (RPC from the board UI with no session, or a bare path). */
+
 function fsWorkspaceHandle(rootPath) {
   const root = rootPath ? path.resolve(rootPath) : null;
   return {
@@ -67,9 +52,7 @@ function fsWorkspaceHandle(rootPath) {
   };
 }
 
-/** Resolve the workspace handle with a graceful chain:
- *  board picker binding → session workspace → global active → any live
- *  session's path → process.cwd(). Never returns a handle whose root() throws. */
+
 export function workspaceOf(api, sessionId) {
   try {
     const binding = api.store?.get?.('workspacePath');
@@ -98,7 +81,7 @@ export function rootOf(api, sessionId) {
   return workspaceOf(api, sessionId).root();
 }
 
-/** One-time folder init for a workspace (cheap, idempotent). */
+
 function ensureInit(ws) {
   if (!ws.exists('.moriko')) ws.write('.moriko/rsat/.gitignore', '*\n');
   else if (!ws.exists(DIR)) {
@@ -106,12 +89,12 @@ function ensureInit(ws) {
   }
 }
 
-/** Load the doc for a workspace (cached). Returns null when none exists. */
+
 export function loadDoc(api, sessionId) {
   return loadDocFrom(workspaceOf(api, sessionId));
 }
 
-/** loadDoc for an EXPLICIT workspace handle (reaper / registry paths). */
+
 export function loadDocFrom(ws) {
   const root = ws.root();
   if (!root) return null;
@@ -150,25 +133,19 @@ export function loadDocFrom(ws) {
   return doc;
 }
 
-/** Create a fresh doc (does not persist yet). */
+
 export function freshDoc(user) {
   return newPrdDoc(user);
 }
 
-/** Persist with rev check + event append. Serialized per workspace. */
+
 export async function saveDoc(api, sessionId, doc, event) {
   const ws = workspaceOf(api, sessionId);
   if (!ws.root()) throw new Error('No workspace for RSA/T yet — pick one in the board header.');
   return saveDocFrom(api, ws, doc, event);
 }
 
-/**
- * Persist for an EXPLICIT workspace handle. After the write lands, the event
- * is PUBLISHED to the bus — the single choke-point that makes the board live:
- * UI rpc actions AND agent tool calls (rsat_claim/rsat_complete/…) all pass
- * here, so every mutation fires an 'rsat.changed' SSE frame and the board
- * re-renders without being closed and reopened.
- */
+
 export async function saveDocFrom(api, ws, doc, event) {
   const root = ws.root();
   if (!root) throw new Error('No workspace for RSA/T yet — pick one in the board header.');
@@ -197,18 +174,18 @@ export async function saveDocFrom(api, ws, doc, event) {
   return saved;
 }
 
-/** Drop the cache (reload from disk next read). */
+
 export function invalidate(api, sessionId) {
   const root = rootOf(api, sessionId);
   if (root) cache.delete(root);
 }
 
-/** Append one line to events.jsonl (best-effort, never blocks the caller). */
+
 export async function appendEvent(api, sessionId, event) {
   return appendEventFrom(workspaceOf(api, sessionId), event);
 }
 
-/** appendEvent for an EXPLICIT workspace handle (agents registry, reaper). */
+
 export async function appendEventFrom(ws, event) {
   if (!ws.root()) return;
   const line = JSON.stringify({ at: nowIso(), ...event }) + '\n';
@@ -218,7 +195,7 @@ export async function appendEventFrom(ws, event) {
   } catch {  }
 }
 
-/** Read the last N events (oldest first). */
+
 export function readEvents(api, sessionId, limit = 200) {
   const ws = workspaceOf(api, sessionId);
   if (!ws.root() || !ws.exists(EVENTS_FILE)) return [];
@@ -233,7 +210,7 @@ function ledgerFile(achievementId) {
   return `${DIR}/ledger/${achievementId}.jsonl`;
 }
 
-/** Append one file record to the achievement ledger. */
+
 export async function appendLedger(api, sessionId, achievementId, record) {
   const ws = workspaceOf(api, sessionId);
   if (!ws.root()) return;
@@ -242,7 +219,7 @@ export async function appendLedger(api, sessionId, achievementId, record) {
   await ws.write(file, existing + JSON.stringify({ at: nowIso(), ...record }) + '\n');
 }
 
-/** Read the ledger for one achievement. */
+
 export function readLedger(api, sessionId, achievementId) {
   const ws = workspaceOf(api, sessionId);
   const file = ledgerFile(achievementId);
@@ -252,7 +229,7 @@ export function readLedger(api, sessionId, achievementId) {
   }).filter(Boolean);
 }
 
-/** All ledger entries, newest first, capped. */
+
 export function readAllLedgers(api, sessionId, limit = 500) {
   const ws = workspaceOf(api, sessionId);
   if (!ws.root()) return [];
@@ -282,9 +259,7 @@ export function writeImport(api, sessionId, content) {
   return migrate(parsed);
 }
 
-/** USER-only PRD teardown: archive a copy, then remove the live doc + ledgers.
- *  Direct fs — the workspace handle has no unlink, but every path stays inside
- *  the workspace root (resolved + checked) and the archive keeps a full copy. */
+
 export async function archiveAndDelete(api, sessionId, doc, actor) {
   const ws = workspaceOf(api, sessionId);
   const root = ws.root();

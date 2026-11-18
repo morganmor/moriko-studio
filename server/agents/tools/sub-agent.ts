@@ -1,18 +1,4 @@
-/**
- * SUB-AGENT CONTROL — the orchestrator's direct channel to other chat
- * sessions in this harness.
- *
- * · agent__call-sub-agent  — send a message to a registered session EXACTLY
- *   like a user input: the text is appended as a user turn and a generation
- *   starts server-side (serverRun.startServerRun → self-POST /api/chat). No
- *   bus/SSE/browser hop — the "orchestrator message never arrives" bug chain
- *   is gone. Council sub-sessions are just conversations, so their unique id
- *   (chat_…) works directly.
- *
- * · agent__stop-sub-agent  — abort the RUNNING generation of a target session.
- *   MANDATORY user approval first (the same requestApproval gate the sandbox
- *   and browser tools use); without an explicit approve the stop fails.
- */
+
 
 import type { AgentToolContext, HarnessToolResult } from './shared.js';
 import { str, truncateOutput } from './shared.js';
@@ -24,7 +10,7 @@ import { listLiveStreams, abortStream } from '../../streamRegistry.js';
 import { getStoredConversation } from '../../conversationStore.js';
 import { startServerRun } from '../../serverRun.js';
 
-/** Resolve a target id (harness session id ≡ conversationId for chat runs). */
+
 function resolveTarget(raw: string): { conversationId: string; label: string; model?: string; providerId?: string } | { error: string } {
   const target = raw.trim();
   if (!target) return { error: 'A "sessionId" is required — use the id from council_status or the session list.' };
@@ -57,12 +43,32 @@ function resolveTarget(raw: string): { conversationId: string; label: string; mo
   };
 }
 
-async function callSubAgent(args: Record<string, unknown>, _ctx: AgentToolContext): Promise<HarnessToolResult> {
+async function callSubAgent(args: Record<string, unknown>, ctx: AgentToolContext): Promise<HarnessToolResult> {
   const resolved = resolveTarget(str(args, 'sessionId'));
   if ('error' in resolved) return { ok: false, isError: true, errorCode: 'schema_error', text: resolved.error };
 
   const text = str(args, 'text').trim();
   if (!text) return { ok: false, isError: true, errorCode: 'schema_error', text: 'A non-empty "text" is required — it is delivered as the sub-agent\'s next user turn.' };
+
+  const root = getActiveWorkspace(ctx.sessionId)?.path ?? '';
+  const { granted, reason } = await requestApproval(
+    {
+      tool: 'call-sub-agent',
+      paths: [],
+      root,
+      intent: 'exec',
+      command: `Send message to sub-agent "${resolved.label}" (${resolved.conversationId}): ${text.slice(0, 140)}`,
+    },
+    ctx,
+  );
+  if (!granted) {
+    return {
+      ok: false,
+      isError: true,
+      errorCode: 'approval_denied',
+      text: `The user did not approve messaging "${resolved.label}".${reason ? ` Reason: "${reason}".` : ''}`,
+    };
+  }
 
   const report = await startServerRun(resolved.conversationId, text, {
     providerId: str(args, 'providerId') || resolved.providerId,
@@ -100,12 +106,12 @@ async function stopSubAgent(args: Record<string, unknown>, ctx: AgentToolContext
   }
 
   const root = getActiveWorkspace(ctx.sessionId)?.path ?? '';
-  const granted = await requestApproval(
+  const { granted, reason } = await requestApproval(
     { tool: 'stop-sub-agent', paths: [], root, command: `Stop the running response of session ${stream.conversationId ?? stream.id}` },
     ctx,
   );
   if (!granted) {
-    return { ok: false, isError: true, text: `The user did not approve stopping ${stream.conversationId ?? stream.id}. The run continues.` };
+    return { ok: false, isError: true, text: `The user did not approve stopping ${stream.conversationId ?? stream.id}.${reason ? ` Their reason: "${reason}".` : ''} The run continues.` };
   }
 
   const stopped = abortStream(stream.id);
@@ -152,7 +158,7 @@ export const stopSubAgentSpec = defineTool({
   handler: stopSubAgent,
   category: 'orchestration',
 });
-/** Diagnostics helper (verify/review): never shipped to the model. */
+
 export function subAgentSummary(): string {
   return truncateOutput(`call-sub-agent/stop-sub-agent registered; live streams: ${listLiveStreams().length}`);
 }

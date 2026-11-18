@@ -1,10 +1,4 @@
-/**
- * Addon v2 manifest — types + validation (A2).
- *
- * apiVersion '2' → v2 module (activate/deactivate, contributions, permissions);
- * missing apiVersion → legacy v1 addon (register shim). Invalid manifests are
- * listed in the Hub with per-field errors and never loaded.
- */
+
 
 export interface AddonManifestV2 {
   apiVersion: '2';
@@ -44,7 +38,7 @@ export interface AddonViewContribution {
   id: string;
   title: string;
   icon?: string;
-  /** sidebar (full page) | right-dock | hub | slot:<site> */
+  
   location: 'sidebar' | 'right-dock' | 'hub' | `slot:${string}`;
   component: string;
   badge?: boolean;
@@ -63,8 +57,7 @@ export interface AddonSettingProperty {
   description?: string;
   minimum?: number;
   maximum?: number;
-  /** user = ~/.moriko-studio/addon-data/<id>/settings.json;
-   *  workspace = <workspace>/.moriko/addons/<id>/settings.json */
+  
   scope?: 'user' | 'workspace';
   requiresConsent?: boolean;
 }
@@ -72,7 +65,7 @@ export interface AddonSettingProperty {
 export interface ManifestValidation {
   ok: boolean;
   errors: string[];
-  /** '2' = v2, '1' = legacy (no apiVersion), null = invalid. */
+  
   apiVersion: '1' | '2' | null;
 }
 
@@ -184,7 +177,7 @@ export function validateManifest(raw: unknown): ManifestValidation {
   return { ok: errors.length === 0, errors, apiVersion: '2' };
 }
 
-/** Parse a raw validated manifest into the typed v2 shape (after validateManifest ok). */
+
 export function asManifestV2(raw: unknown): AddonManifestV2 {
   return raw as AddonManifestV2;
 }

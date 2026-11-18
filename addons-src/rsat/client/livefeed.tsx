@@ -1,16 +1,11 @@
-/**
- * RSA/T Live feed — port 1:1 dari design/split/rsat-panel-live-feed.html.
- * Dua kolom: .chat aria-live (baris .fe + animasi fin) · kartu injD + Heartbeat.
- * Kini feed dari store bersama (useRsat) — setiap aksi (claim/done/import/…)
- * tercatat real time (RSAT.txt butir 6.3).
- */
+
 import { tr } from './shared.tsx';
 import { Ic } from './icon.tsx';
 import { ttlMs, useRsat } from './store.tsx';
 
 const hh = (at: number) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-/** Teks feed: `*bold*` dan `mono` di-highlight. */
+
 function RichText({ text }: { text: string }) {
   const parts = text.split(/(\*[^*]+\*|`[^`]+`)/g).filter(Boolean);
   return (

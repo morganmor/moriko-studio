@@ -1,9 +1,4 @@
-/**
- * RSA/T UI RPC (R6) — the board talks to these via /api/addons/rsat/rpc/*.
- * Every mutating handler enforces the SAME engine rules as the agent tools:
- * user-only actions (Start/Pause, delete, review accept/reject) verify
- * actor.kind === 'user' — the HTTP route guarantees it.
- */
+
 
 import path from 'node:path';
 
@@ -12,14 +7,11 @@ import { loadDoc, saveDoc, readEvents, readAllLedgers, writeExport, writeImport,
 import { broadcast, presence } from './sync.js';
 import { userActor, readActivity } from './platform.js';
 
-/** The route already wraps the handler value in `{ ok, result }` and the host
- *  `invoke()` unwraps one level — handlers must return the PAYLOAD ITSELF. */
+
 const ok = (result) => result;
 const fail = (error) => { throw error; };
 
-/** Candidate workspaces for the board's picker: the active workspace plus every
- *  running session's folder. (The addon API exposes no registry list, so this
- *  derives the real folders the harness is actually bound to.) */
+
 function listWsp(api) {
   const out = [];
   const seen = new Set();
@@ -38,12 +30,12 @@ function listWsp(api) {
   return out;
 }
 
-/** The board's workspace picker: list registered workspaces + current binding. */
+
 export async function workspaces(api, sessionId) {
   return ok({ items: listWsp(api), binding: rootOf(api, sessionId) });
 }
 
-/** Bind RSA/T to a registered workspace (by id or path) — persisted in the addon store. */
+
 export async function setWorkspace(api, sessionId, body) {
   const idOrPath = String(body?.id ?? body?.path ?? '');
   const items = listWsp(api);
@@ -55,7 +47,7 @@ export async function setWorkspace(api, sessionId, body) {
   return ok({ workspacePath: hit.path, label: hit.label });
 }
 
-/** The full board state in one payload (initial load). */
+
 export async function state(api, sessionId) {
   try {
     const doc = loadDoc(api, sessionId);
@@ -113,7 +105,7 @@ export async function deleteAchievement(api, sessionId, body) {
   return ok({ deleted: true });
 }
 
-/** USER-only full PRD teardown (P3 + design danger zone) — archive copy kept. */
+
 export async function deletePrd(api, sessionId) {
   const result = await engine.deletePrd(api, sessionId, userActor());
   await broadcast(api, sessionId, { type: 'prd_deleted', target: 'prd', by: userActor() });
@@ -126,7 +118,7 @@ export async function restoreAchievement(api, sessionId, body) {
   return ok({ restored: true });
 }
 
-/** User checks/unchecks an acceptance box from the drawer. */
+
 export async function toggleAcceptance(api, sessionId, body) {
   const doc = await engine.markAcceptance(
     api, sessionId, userActor(),
@@ -136,7 +128,7 @@ export async function toggleAcceptance(api, sessionId, body) {
   return ok({ doc });
 }
 
-/** LangGate (P0a): the user picks the board language — consent is explicit. */
+
 export async function setLanguage(api, sessionId, body) {
   const lang = body?.language === 'id' ? 'id' : 'en';
   const doc = loadDoc(api, sessionId);
@@ -164,7 +156,7 @@ export async function exportDoc(api, sessionId) {
   return ok({ file, content: JSON.stringify(doc, null, 2), name: `${doc.prd.id}.rsprd.json` });
 }
 
-/** Import (R7): no mode → DRY-RUN diff; mode=merge|replace → apply (claims reset). */
+
 export async function importDoc(api, sessionId, body) {
   const content = String(body?.content ?? '');
   if (!content) throw new Error('content (the .rsprd.json text) is required.');
@@ -214,7 +206,7 @@ export async function changeScope(api, sessionId, body) {
   return { ok: true };
 }
 
-/** User edits the PRD fields from the Base camp form (title/scope/goals/…). */
+
 export async function updatePrdRpc(api, sessionId, body) {
   const fields = (body?.fields && typeof body.fields === 'object' && !Array.isArray(body.fields)) ? body.fields : {};
   await engine.updatePrd(api, sessionId, userActor(), fields);
@@ -222,14 +214,14 @@ export async function updatePrdRpc(api, sessionId, body) {
   return { ok: true };
 }
 
-/** User approves a pending strict-mode scope request. */
+
 export async function approveScope(api, sessionId, body) {
   await engine.approveScope(api, sessionId, userActor(), String(body?.id), Number(body?.index ?? -1));
   await broadcast(api, sessionId, { type: 'scope_approved', target: String(body?.id), by: userActor() });
   return { ok: true };
 }
 
-/** Drawer action bar (user): claim a quest (engine enforces running+unlocked). */
+
 export async function claim(api, sessionId, body) {
   const id = String(body?.id);
   await engine.claim(api, sessionId, userActor(), id, String(body?.label ?? ''));
@@ -237,7 +229,7 @@ export async function claim(api, sessionId, body) {
   return { ok: true };
 }
 
-/** Drawer action bar (user): finish a quest the user holds — engine marks it done. */
+
 export async function complete(api, sessionId, body) {
   const id = String(body?.id);
   const doc = await engine.complete(api, sessionId, userActor(), id, String(body?.reason ?? ''));
@@ -248,35 +240,35 @@ export async function complete(api, sessionId, body) {
   return { ok: true };
 }
 
-/** Drawer action bar (user): release/take over a claim (reason required by the engine). */
+
 export async function release(api, sessionId, body) {
   await engine.release(api, sessionId, userActor(), String(body?.id), String(body?.reason ?? 'released from the board'));
   await broadcast(api, sessionId, { type: 'released', target: String(body?.id), by: userActor() });
   return { ok: true };
 }
 
-/** Drawer action bar (user): drop (recoverable) — never a hard delete. */
+
 export async function drop(api, sessionId, body) {
   await engine.dropAchievement(api, sessionId, userActor(), String(body?.id), String(body?.reason ?? 'dropped from the board'));
   await broadcast(api, sessionId, { type: 'dropped', target: String(body?.id), by: userActor() });
   return { ok: true };
 }
 
-/** Heartbeat from the drawer (the holder or the user keeps the claim alive). */
+
 export async function progress(api, sessionId, body) {
   await engine.progress(api, sessionId, userActor(), String(body?.id), String(body?.note ?? ''));
   await broadcast(api, sessionId, { type: 'progress', target: String(body?.id), by: userActor() });
   return { ok: true };
 }
 
-/** One-line ledger summary typed in the drawer's Files tab. */
+
 export async function setFileSummary(api, sessionId, body) {
   await engine.setFileSummary(api, sessionId, userActor(), String(body?.id), String(body?.path ?? ''), String(body?.summary ?? ''));
   await broadcast(api, sessionId, { type: 'file_summary', target: String(body?.id), by: userActor() });
   return { ok: true };
 }
 
-/** User creates a quest from the board (P1: user/operator/agent can create). */
+
 export async function createAchievement(api, sessionId, body) {
   const doc = await engine.createAchievement(api, sessionId, userActor(), body ?? {});
   await broadcast(api, sessionId, { type: 'achievement_created', target: 'board', by: userActor() });
@@ -284,13 +276,13 @@ export async function createAchievement(api, sessionId, body) {
 }
 
 
-/** The roster the Create Agent panel + Basecamp party card render. */
+
 export async function agents(api, sessionId) {
   const { loadAgents } = await import('./agents.js');
   return ok({ agents: loadAgents(api, sessionId) });
 }
 
-/** USER-only: create an agent (identity + logo + provider/model + seed note). */
+
 export async function createAgent(api, sessionId, body) {
   const { createAgent: make } = await import('./agents.js');
   const rec = await make(api, sessionId, userActor(), body ?? {});
@@ -298,7 +290,7 @@ export async function createAgent(api, sessionId, body) {
   return ok({ agent: rec });
 }
 
-/** USER-only: edit an agent — swap provider/model WITHOUT touching identity/memory. */
+
 export async function updateAgent(api, sessionId, body) {
   const { updateAgent: edit } = await import('./agents.js');
   const rec = await edit(api, sessionId, userActor(), String(body?.id), body?.fields ?? body ?? {});
@@ -306,7 +298,7 @@ export async function updateAgent(api, sessionId, body) {
   return ok({ agent: rec });
 }
 
-/** USER-only: delete an agent from the registry. */
+
 export async function deleteAgent(api, sessionId, body) {
   const { deleteAgent: rm } = await import('./agents.js');
   await rm(api, sessionId, userActor(), String(body?.id));
@@ -314,7 +306,7 @@ export async function deleteAgent(api, sessionId, body) {
   return ok({ deleted: true });
 }
 
-/** Dispatch step 2: bind the freshly created conversation to the agent. */
+
 export async function bindAgentSession(api, sessionId, body) {
   const { bindSession } = await import('./agents.js');
   const out = await bindSession(api, sessionId, userActor(), String(body?.agentId), String(body?.sessionId ?? ''));
@@ -322,7 +314,7 @@ export async function bindAgentSession(api, sessionId, body) {
   return ok(out);
 }
 
-/** Heartbeat timeout (minutes → seconds stored). */
+
 export async function setTtl(api, sessionId, body) {
   const minutes = Math.max(1, Math.min(120, Number(body?.minutes) || 15));
   api.settings.set('claimTtlSec', minutes * 60);
@@ -330,7 +322,7 @@ export async function setTtl(api, sessionId, body) {
   return { claimTtlSec: minutes * 60 };
 }
 
-/** Graphics quality Interlinked (Options) — rpc setIlQuality. */
+
 export async function setIlQuality(api, sessionId, body) {
   const q = ['verylow', 'low', 'medium', 'high'].includes(body?.q) ? body.q : 'high';
   api.settings.set('ilQuality', q);
@@ -351,7 +343,7 @@ export async function createPrdRpc(api, sessionId, body) {
   return { ok: true };
 }
 
-/** Live Interlinked Node-Wire Graph & @RSLK v1 payload from the bound Moriko workspace. */
+
 export async function interlinkGraph(api, sessionId, body) {
   const { buildWorkspaceInterlink } = await import('./interlink.js');
   return ok(buildWorkspaceInterlink(api, sessionId, {
@@ -360,19 +352,19 @@ export async function interlinkGraph(api, sessionId, body) {
   }));
 }
 
-/** Save dragged node positions in `.moriko/rsat/interlink-positions.json`. */
+
 export async function saveNodePositions(api, sessionId, body) {
   const { saveNodePositions: persistPos } = await import('./interlink.js');
   return ok(await persistPos(api, sessionId, body?.positions ?? {}));
 }
 
-/** Clear all saved node positions — every node returns to the tidy default grid. */
+
 export async function clearNodePositions(api, sessionId) {
   const { clearNodePositions: clearPos } = await import('./interlink.js');
   return ok(await clearPos(api, sessionId));
 }
 
-/** The registry of handlers main.ts wires into ctx.rpc.handle. */
+
 export const rpcHandlers = {
   state, start, pause, updatePrd: updatePrdRpc, reviewAccept, reviewReject, deleteAchievement, deletePrd, restoreAchievement,
   toggleAcceptance, setLanguage, events, files, exportDoc, importDoc,

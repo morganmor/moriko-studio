@@ -1,15 +1,4 @@
-/**
- * RSA/T multi-agent sync (R4) — presence, notifications, injection, prompt
- * fragments, and the sidebar status item.
- *
- * Presence: the board shows every RUNNING harness session (from the platform
- * session registry) + who holds which claim.
- * Injection: when an achievement is claimed/released/completed, other RUNNING
- * sessions get ONE short, idempotent notice at their next round boundary
- * (sessions.inject → system-injection block, user decision Q2).
- * Prompt fragment (per-session): "you hold X; A-003 is held by Agent B" —
- * the A-09 fix: session-scoped, budgeted, never global.
- */
+
 
 import { listSessions } from './platform-live.js';
 import { pushActivity } from './platform.js';
@@ -18,14 +7,14 @@ import { agentBySession, memoryOfSession } from './agents.js';
 
 const INJECT_KEY = 'rsat-board';
 
-/** Which board events announce themselves to the actor's conversation. */
+
 function eventLevelOf(type: string): 'info' | 'warn' | null {
   if (type === 'claimed' || type === 'released') return 'warn';
   if (type === 'completed') return 'info';
   return null;
 }
 
-/** Fire the SSE frames + per-session harness event for one board event. */
+
 export async function broadcast(api, sessionId, event) {
   pushActivity({ kind: 'board', ...event });
   try {
@@ -65,7 +54,7 @@ export async function broadcast(api, sessionId, event) {
   } catch {  }
 }
 
-/** Identity block: named-agent declaration + structured memory (survives swaps). */
+
 function identityLines(api, sessionId) {
   let rec = null;
   try { rec = agentBySession(api, sessionId); } catch {  }
@@ -83,7 +72,7 @@ function identityLines(api, sessionId) {
   return lines;
 }
 
-/** The per-session prompt fragment (A-09 successor, budgeted by the host). */
+
 export function createPromptFragment(api) {
   return {
     id: 'rsat-board',
@@ -126,7 +115,7 @@ export function createPromptFragment(api) {
   };
 }
 
-/** Presence snapshot for the board UI. */
+
 export function presence(api, sessionId) {
   let sessions = [];
   try { sessions = listSessions(api); } catch { sessions = []; }

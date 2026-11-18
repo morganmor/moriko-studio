@@ -1,8 +1,4 @@
-/**
- * agent__goal_create / agent__goal_update / agent__goal_list — the goals
- * panel's state. Goals are per-conversation; the auto-run loop drives the
- * agent through the todo checklist.
- */
+
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, truncateOutput, requireGoalSession } from './shared.js';
 import { createGoal, listGoals, updateGoal, type GoalStatus } from '../../goals/store.js';

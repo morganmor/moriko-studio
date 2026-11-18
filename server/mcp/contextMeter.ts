@@ -1,59 +1,57 @@
-/**
- * THE SERVER CONTEXT METER — the per-second authority over the context
- * buckets, built on the SHARED estimator (shared/contextAccounting) so client
- * and server price the identical wire with identical arithmetic.
- *
- * Seeded from the exact request the adapter is about to send (system message,
- * tool defs, the full messages array), then incremented by EVERY streamed
- * delta: text deltas into `output`, reasoning deltas into `reasoning`. The
- * tool outputs that land mid-run are priced into `tools` by the adapter via
- * `addToolChars`.
- *
- * Emission is THROTTLED to ~1 s (`maybeEmit`) so every delta does not become a
- * wire frame; `flush()` emits immediately at round boundaries. Each frame
- * carries the full five-bucket breakdown — the client stores it verbatim, and
- * the composer's cx-top is the exact sum of the buckets plus the frozen
- * provider gap.
- */
+
 import {
-  CHARS_PER_TOKEN,
+  CALL_FRAME_CHAR_WEIGHT,
   MESSAGE_FRAME_TOKENS,
-  estimateTokens,
-  priceFrame,
+  apportionBuckets,
+  measureMessageWeights,
   sumTotals,
   type BucketTotals,
   type PriceMessage,
 } from '../../shared/contextAccounting.js';
-import type { StreamEvent } from '../contracts.js';
+import type { ContextBucketsSnapshot, StreamEvent } from '../contracts.js';
 
-/** Emission throttle: at most one `context_live` frame per interval. */
+
 const EMIT_INTERVAL_MS = 1_000;
 
+export interface RoundUsageInput {
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  cacheReadTokens?: number;
+  reasoningTokens?: number;
+}
+
 export interface ContextMeter {
-  /** Price a system segment (e.g. Anthropic's stable+volatile blocks). */
+  
   addSystemSegments(text: string): void;
-  /**
-   * Move the frame cost of tool messages the ADAPTER reshapes into user-role
-   * frames (Anthropic) back out of `input` — the tool bodies stay priced in
-   * `tools` by the seed pass, only the frame token moves.
-   */
+  
   repriceToolMessages(count: number): void;
-  /** Price the tool outputs that just landed into the `tools` bucket. */
+  
   addToolChars(chars: number): void;
-  /** Price a mid-run user frame (steer, addon injection) into `input`. */
+  
   addInputChars(chars: number): void;
-  /** Account one streamed text delta (assistant prose). */
+  
   addOutputChars(chars: number): void;
-  /** Account one streamed reasoning delta (chain-of-thought). */
+  
   addReasoningChars(chars: number): void;
-  /** Fold the round's provider usage back in, replacing the estimated tail. */
-  recordUsage(usage: { promptTokens?: number; completionTokens?: number } | undefined): void;
-  /** Emit a throttled `context_live` frame (drops when inside the window). */
+  
+  addCompletionToolChars(chars: number): void;
+  
+  recordUsage(
+    usage: { promptTokens?: number; completionTokens?: number; reasoningTokens?: number } | undefined,
+  ): void;
+  
+  advanceRound(options?: { keepReasoning?: boolean }): void;
+  
+  hasUsage(): boolean;
+  
   maybeEmit(onEvent: (event: StreamEvent) => void): void;
-  /** Emit `context_live` NOW — round boundaries and run end. */
+  
   flush(onEvent: (event: StreamEvent) => void): void;
-  /** The per-second meter's snapshot — used by the compaction handoff. */
+  
   snapshot(): BucketTotals & { liveContextTokens: number };
+  
+  snapshotBuckets(): ContextBucketsSnapshot;
 }
 
 export function createContextMeter(input: {
@@ -61,74 +59,64 @@ export function createContextMeter(input: {
   systemSegments?: string[];
   toolDefsChars: number;
   messages: PriceMessage[];
+  replayReasoning?: boolean;
 }): ContextMeter {
-  const totals: BucketTotals = { system: 0, tools: 0, input: 0, output: 0, reasoning: 0, total: 0 };
+  // Structural char-equivalent weights used strictly as proportional shares inside
+  // provider-authoritative promptTokens and completionTokens; never emitted independently.
+  let systemWeight = (input.systemInstruction ?? '').length;
+  for (const segment of input.systemSegments ?? []) systemWeight += segment.length;
 
-  // SYSTEM: the composed system message (user prompt + harness injections).
-  totals.system += estimateTokens(input.systemInstruction);
-  for (const segment of input.systemSegments ?? []) totals.system += estimateTokens(segment);
+  let toolsWeight = Math.max(0, input.toolDefsChars);
+  let inputWeight = 0;
+  let historyOutputWeight = 0;
+  let historyReasoningWeight = 0;
+  const includeHistoryReasoning = input.replayReasoning === true;
 
-  // TOOLS: the native tool defs JSON riding this request.
-  totals.tools += Math.ceil(input.toolDefsChars / CHARS_PER_TOKEN);
-
-  // The full messages array as it will ride the request.
   for (const message of input.messages) {
-    const priced = priceFrame(message);
-    totals.tools += priced.tools;
-    totals.input += priced.input;
-    totals.output += priced.output;
-    totals.reasoning += priced.reasoning;
+    const weights = measureMessageWeights(message, { includeReasoning: includeHistoryReasoning });
+    toolsWeight += weights.tools;
+    inputWeight += weights.input;
+    historyOutputWeight += weights.output;
+    historyReasoningWeight += weights.reasoning;
   }
-  totals.total = sumTotals(totals);
 
-  /** In-flight delta chars awaiting their token rounding, per bucket. */
+  const totals: BucketTotals = { system: 0, tools: 0, input: 0, output: 0, reasoning: 0, total: 0 };
+  let hasProviderUsage = false;
   let pendingOutputChars = 0;
   let pendingReasoningChars = 0;
-  /** Tool tokens added via addToolChars since the last recordUsage — needed to
-   *  separate new tool outputs (not yet in the provider's promptTokens) from
-   *  the prompt-side tools the provider already counted. */
-  let toolTokensSinceCalibration = 0;
+  let pendingCompletionToolChars = 0;
   let lastEmit = 0;
 
-  const pendingOutputTokens = (): number => Math.ceil(pendingOutputChars / CHARS_PER_TOKEN);
-  const pendingReasoningTokens = (): number => Math.ceil(pendingReasoningChars / CHARS_PER_TOKEN);
+  const toBucketsSnapshot = (): ContextBucketsSnapshot => ({
+    systemTokens: totals.system,
+    toolsTokens: totals.tools,
+    inputTokens: totals.input,
+    outputTokens: totals.output,
+    reasoningTokens: totals.reasoning,
+    totalTokens: totals.total,
+  });
 
   const emit = (onEvent: (event: StreamEvent) => void): void => {
-    const output = pendingOutputTokens();
-    const reasoning = pendingReasoningTokens();
+    if (!hasProviderUsage) return;
     onEvent({
       type: 'context_live',
-      systemTokens: totals.system,
-      toolsTokens: totals.tools,
-      inputTokens: totals.input,
-      outputTokens: totals.output + output,
-      reasoningTokens: totals.reasoning + reasoning,
-      totalTokens: totals.total + output + reasoning,
+      ...toBucketsSnapshot(),
     });
     lastEmit = Date.now();
   };
 
   const meter: ContextMeter = {
     addSystemSegments(text) {
-      const tokens = estimateTokens(text);
-      totals.system += tokens;
-      totals.total += tokens;
+      systemWeight += (text ?? '').length;
     },
     repriceToolMessages(count) {
-      const tokens = count * MESSAGE_FRAME_TOKENS;
-      totals.input -= tokens;
-      totals.tools += tokens;
+      toolsWeight += Math.max(0, count) * CALL_FRAME_CHAR_WEIGHT;
     },
     addToolChars(chars) {
-      const tokens = Math.ceil(Math.max(0, chars) / CHARS_PER_TOKEN);
-      totals.tools += tokens;
-      totals.total += tokens;
-      toolTokensSinceCalibration += tokens;
+      toolsWeight += Math.max(0, chars);
     },
     addInputChars(chars) {
-      const tokens = Math.ceil(Math.max(0, chars) / CHARS_PER_TOKEN);
-      totals.input += tokens;
-      totals.total += tokens;
+      inputWeight += Math.max(0, chars);
     },
     addOutputChars(chars) {
       pendingOutputChars += Math.max(0, chars);
@@ -136,49 +124,80 @@ export function createContextMeter(input: {
     addReasoningChars(chars) {
       pendingReasoningChars += Math.max(0, chars);
     },
+    addCompletionToolChars(chars) {
+      pendingCompletionToolChars += Math.max(0, chars);
+    },
     recordUsage(usage) {
-      const providerPrompt = usage?.promptTokens ?? 0;
-      const providerCompletion = usage?.completionTokens ?? 0;
+      const providerPrompt = Math.max(0, Math.round(usage?.promptTokens ?? 0));
+      const providerCompletion = Math.max(0, Math.round(usage?.completionTokens ?? 0));
+      const providerReasoning = Math.max(0, Math.round(usage?.reasoningTokens ?? 0));
 
-      if (providerPrompt > 0) {
-        // 1. COMPLETION SIDE: lock Output + Reasoning to provider's real count.
-        //    Split proportionally by their char ratio — NOT blind scaling of all
-        //    five buckets, just reconciling two against one real number.
-        const pendingOut = pendingOutputTokens();
-        const pendingReas = pendingReasoningTokens();
-        const pendingTotal = pendingOut + pendingReas;
-        let thisRoundOutput = 0;
-        let thisRoundReasoning = 0;
-        if (providerCompletion > 0 && pendingTotal > 0) {
-          const ratio = providerCompletion / pendingTotal;
-          thisRoundOutput = Math.round(pendingOut * ratio);
-          thisRoundReasoning = providerCompletion - thisRoundOutput;
-        } else if (providerCompletion > 0) {
-          thisRoundOutput = providerCompletion;
-        }
-        totals.output += thisRoundOutput;
-        totals.reasoning += thisRoundReasoning;
+      if (providerPrompt === 0 && providerCompletion === 0) return;
 
-        // 2. PROMPT SIDE: promptTokens is the absolute truth. System and Input
-        //    stay at their payload-based estimates (chars/4 is accurate for
-        //    plain text). Tools absorbs ALL BPE/structural deviation:
-        //      promptTokens + completionTokens = system + tools(prompt-side)
-        //        + input + all_output + all_reasoning
-        //      tools(prompt-side) = promptTokens + completionTokens
-        //        - system - input - output - reasoning
-        //    New tool outputs (added via addToolChars, not yet in the prompt)
-        //    are added back on top.
-        const promptSideTools = providerPrompt + providerCompletion
-          - totals.system - totals.input - totals.output - totals.reasoning;
-        totals.tools = Math.max(0, promptSideTools) + toolTokensSinceCalibration;
-        totals.total = sumTotals(totals);
+      hasProviderUsage = true;
+
+      const promptShares = apportionBuckets(
+        providerPrompt,
+        {
+          system: systemWeight,
+          tools: toolsWeight,
+          input: inputWeight,
+          output: historyOutputWeight,
+          reasoning: historyReasoningWeight,
+        },
+        'input',
+      );
+
+      let roundReasoning = 0;
+      let roundOutput = 0;
+      let roundTools = 0;
+      if (providerReasoning > 0) {
+        roundReasoning = Math.min(providerCompletion, providerReasoning);
+        const remainder = Math.max(0, providerCompletion - roundReasoning);
+        const remShares = apportionBuckets(
+          remainder,
+          { output: pendingOutputChars, tools: pendingCompletionToolChars },
+          pendingCompletionToolChars > 0 && pendingOutputChars === 0 ? 'tools' : 'output',
+        );
+        roundOutput = remShares.output;
+        roundTools = remShares.tools;
+      } else {
+        const compShares = apportionBuckets(
+          providerCompletion,
+          {
+            output: pendingOutputChars,
+            reasoning: pendingReasoningChars,
+            tools: pendingCompletionToolChars,
+          },
+          pendingCompletionToolChars > 0 && pendingOutputChars === 0 && pendingReasoningChars === 0
+            ? 'tools'
+            : 'output',
+        );
+        roundOutput = compShares.output;
+        roundReasoning = compShares.reasoning;
+        roundTools = compShares.tools;
       }
 
+      totals.system = promptShares.system;
+      totals.tools = promptShares.tools + roundTools;
+      totals.input = promptShares.input;
+      totals.output = promptShares.output + roundOutput;
+      totals.reasoning = promptShares.reasoning + roundReasoning;
+      totals.total = sumTotals(totals);
+    },
+    advanceRound(options) {
+      historyOutputWeight += pendingOutputChars;
+      toolsWeight += pendingCompletionToolChars;
+      if (options?.keepReasoning) historyReasoningWeight += pendingReasoningChars;
       pendingOutputChars = 0;
       pendingReasoningChars = 0;
-      toolTokensSinceCalibration = 0;
+      pendingCompletionToolChars = 0;
+    },
+    hasUsage() {
+      return hasProviderUsage;
     },
     maybeEmit(onEvent) {
+      if (!hasProviderUsage) return;
       const now = Date.now();
       if (now - lastEmit >= EMIT_INTERVAL_MS) emit(onEvent);
     },
@@ -190,14 +209,63 @@ export function createContextMeter(input: {
         system: totals.system,
         tools: totals.tools,
         input: totals.input,
-        output: totals.output + pendingOutputTokens(),
-        reasoning: totals.reasoning + pendingReasoningTokens(),
-        total: totals.total + pendingOutputTokens() + pendingReasoningTokens(),
-        liveContextTokens: totals.total + pendingOutputTokens() + pendingReasoningTokens(),
+        output: totals.output,
+        reasoning: totals.reasoning,
+        total: totals.total,
+        liveContextTokens: totals.total,
       };
+    },
+    snapshotBuckets() {
+      return toBucketsSnapshot();
     },
   };
   return meter;
+}
+
+export interface TurnUsageAccumulator {
+  record(round: RoundUsageInput | undefined, billedTotalOverride?: number): void;
+  flush(onEvent: (event: StreamEvent) => void, meter?: ContextMeter): void;
+}
+
+export function createTurnUsageAccumulator(): TurnUsageAccumulator {
+  let sumPromptTokens = 0;
+  let sumCompletionTokens = 0;
+  let sumBilledTokens = 0;
+  let sumCacheReadTokens = 0;
+  let sawAnyUsage = false;
+  let flushed = false;
+  let lastRound: RoundUsageInput | undefined;
+
+  return {
+    record(round, billedTotalOverride) {
+      if (!round) return;
+      sawAnyUsage = true;
+      flushed = false;
+      lastRound = round;
+      sumPromptTokens += round.promptTokens ?? 0;
+      sumCompletionTokens += round.completionTokens ?? 0;
+      sumBilledTokens +=
+        billedTotalOverride ??
+        round.totalTokens ??
+        (round.promptTokens ?? 0) + (round.completionTokens ?? 0);
+      sumCacheReadTokens += round.cacheReadTokens ?? 0;
+    },
+    flush(onEvent, meter) {
+      if (!sawAnyUsage || flushed) return;
+      flushed = true;
+      onEvent({
+        type: 'usage',
+        promptTokens: sumPromptTokens > 0 ? sumPromptTokens : undefined,
+        completionTokens: sumCompletionTokens,
+        totalTokens: sumBilledTokens,
+        cacheReadTokens: sumCacheReadTokens > 0 ? sumCacheReadTokens : undefined,
+        lastPromptTokens: lastRound?.promptTokens,
+        lastCompletionTokens: lastRound?.completionTokens,
+        lastReasoningTokens: lastRound?.reasoningTokens,
+        ...(meter?.hasUsage() ? { lastBuckets: meter.snapshotBuckets() } : {}),
+      });
+    },
+  };
 }
 
 export { MESSAGE_FRAME_TOKENS };

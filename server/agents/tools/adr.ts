@@ -1,8 +1,4 @@
-/**
- * F4.3 — agent__adr: lightweight Architecture Decision Records in
- * docs/adr/NNNN-slug.md (Context / Decision / Consequences / Alternatives /
- * Status). Modes: new, list, read, supersede.
- */
+
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AgentToolContext, HarnessToolResult } from './shared.js';

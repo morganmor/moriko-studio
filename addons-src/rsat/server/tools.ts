@@ -1,12 +1,4 @@
-/**
- * RSA/T agent tools (R2) — eleven focused tools. All receive the full tool
- * ctx (A-01 fix): sessionId + actor ride into the engine, so claims and
- * heartbeats are attributed correctly.
- *
- * Guardrails enforced HERE and in engine.ts (not just documented):
- *  - no delete tool for agents (P3), no Start (P6.4)
- *  - every mutating response suggests the next step
- */
+
 
 import { loadDoc } from './store.js';
 import { agentActor, userActor } from './platform.js';
@@ -16,7 +8,7 @@ import { broadcast } from './sync.js';
 const ok = (text) => ({ ok: true, isError: false, text });
 const fail = (text) => ({ ok: false, isError: true, text });
 
-/** Wrap an engine call: map errors to readable tool results + auto-heartbeat. */
+
 async function run(fn, ctx) {
   try {
     const result = await fn();

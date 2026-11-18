@@ -1,7 +1,4 @@
-/**
- * RSA/T sprite renderer — port dari SPR desain (run-length rect per baris, cached).
- * .spr .a memakai --sa (warna per pemakaian); .k/.g/.h/.b/.c/.w dari CSS RSAT_CSS.
- */
+
 import type { CSSProperties } from 'react';
 
 const SPR: Record<string, string[]> = {
@@ -52,7 +49,7 @@ export function Spr({ name, style, cls }: { name: string; style?: CSSProperties;
   );
 }
 
-/** Style helper: set --sa pada sprite. */
+
 export function sa(value: string): CSSProperties {
   return { '--sa': value } as CSSProperties;
 }

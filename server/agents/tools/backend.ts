@@ -1,26 +1,9 @@
-/**
- * agent__backend — the F5 conditional backend layer (docs/plans/PLAN-SPATIAL-HARNESS.md).
- *
- * Inert by design: the harness gains a database + contract surface ONLY when
- * the agent opens one. In-memory SQLite (node:sqlite builtin — zero native
- * build) dies with the session by default; forks of real data are capped;
- * contract lint/validate consume a parsed OpenAPI JSON the agent provides.
- *
- * Modes:
- *   open            — open a named database (in-memory unless filePath given)
- *   exec / query    — run SQL against an open database (writes / reads)
- *   fork            — branch a database: same schema+data, independent copy
- *   discard         — close and forget one database
- *   list            — open databases + their tables
- *   seed            — deterministic rows from a table spec (same seed → same rows)
- *   contract_lint   — lint a parsed OpenAPI spec (refs, responses, shapes)
- *   contract_check  — validate a request body against one schema in the spec
- *
- * Everything fails loud with an actionable message; nothing runs on its own.
- */
+
 import fs from 'node:fs';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, truncateOutput, resolveWithPermission } from './shared.js';
+import { requestApproval } from '../permissions.js';
+import { getActiveWorkspace } from '../workspace.js';
 import {
   openDb,
   execDb,
@@ -43,7 +26,7 @@ const MODES = [
   'seed', 'contract_lint', 'contract_check',
 ] as const;
 
-/** Parse + validate the seed spec from the args (fail loud, prescriptive). */
+
 function parseSeedSpec(raw: unknown): SeedTableSpec | string {
   if (!raw || typeof raw !== 'object') return 'seed mode needs "spec" as an OBJECT: { table, count, columns } — not a string.';
   const spec = raw as {
@@ -147,6 +130,19 @@ export async function backendTool(args: Record<string, unknown>, ctx: AgentToolC
         const name = str(args, 'name').trim();
         const sql = str(args, 'sql').trim();
         if (!name || !sql) return fail('exec needs "name" (an open database) and "sql".');
+        const decision = await requestApproval(
+          {
+            tool: 'backend',
+            paths: [],
+            root: getActiveWorkspace(ctx.sessionId)?.path ?? process.cwd(),
+            intent: 'write',
+            command: `SQL exec on "${name}": ${sql.slice(0, 200)}`,
+          },
+          ctx,
+        );
+        if (!decision.granted) {
+          return fail(`The user did not approve backend exec.${decision.reason ? ` Reason: "${decision.reason}".` : ''}`);
+        }
         const params = Array.isArray(args.params) ? (args.params as unknown[]) : [];
         const outcome = execDb(sessionId, name, sql, params);
         return done(`OK — ${outcome.changes} row(s) affected${outcome.lastInsertRowid !== undefined ? `, last rowid ${outcome.lastInsertRowid}` : ''}.`);
@@ -188,6 +184,19 @@ export async function backendTool(args: Record<string, unknown>, ctx: AgentToolC
         if (!name) return fail('seed needs "name" (an open database).');
         const specOrError = parseSeedSpec(args.spec);
         if (typeof specOrError === 'string') return fail(specOrError);
+        const decision = await requestApproval(
+          {
+            tool: 'backend',
+            paths: [],
+            root: getActiveWorkspace(ctx.sessionId)?.path ?? process.cwd(),
+            intent: 'write',
+            command: `Seed ${specOrError.count} row(s) into "${specOrError.table}" in "${name}"`,
+          },
+          ctx,
+        );
+        if (!decision.granted) {
+          return fail(`The user did not approve backend seed.${decision.reason ? ` Reason: "${decision.reason}".` : ''}`);
+        }
         const seed = typeof args.seed === 'number' ? Math.floor(args.seed) : 42;
         const result = seedTable(sessionId, name, specOrError, seed);
         return done(`Seeded ${result.inserted} row(s) into "${specOrError.table}" (seed ${seed} — deterministic: same seed, same rows).`);

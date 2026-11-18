@@ -1,15 +1,4 @@
-/**
- * Addon registry — loaded addons + their tools, commands, event hooks,
- * widgets and context providers.
- *
- * listAgentToolDefs() in catalogue.ts merges builtin + addon defs.
- * callAgentTool in dispatcher.ts checks here after its switch default.
- * The event bus walks registered hooks for each event.
- *
- * ADDON v2 (A1): every register* returns a Disposable tracked in the addon's
- * Scope (auto-disposed on unregister); the persistent store lives in
- * storage.ts (A-05); context providers are keyed (addonId, title) (A-09).
- */
+
 
 import type { AgentToolDef } from '../agents/tools/shared.js';
 import type { Disposable } from './disposables.js';
@@ -37,7 +26,7 @@ interface RegisteredTool {
   description: string;
   inputSchema: Record<string, unknown>;
   handler: AddonToolHandler;
-  /** v2 parallel-safety (feeds the loop's isParallelSafe). */
+  
   readOnly?: boolean;
 }
 
@@ -96,8 +85,7 @@ export function unregisterAddon(id: string): void {
 
 export function getAddon(id: string): LoadedAddon | undefined { return addons.get(id); }
 
-/** Deterministic order (by id) — a toggle unregister/re-register must never
- *  reshuffle the list the user sees. */
+
 export function listAddons(): LoadedAddon[] {
   return [...addons.values()].sort((a, b) => a.manifest.id.localeCompare(b.manifest.id));
 }
@@ -126,12 +114,12 @@ export function getAddonToolHandler(wireName: string): AddonToolHandler | undefi
   return tools.get(wireName)?.handler;
 }
 
-/** v2: parallel-safety flag for an addon tool (undefined = not an addon tool). */
+
 export function addonToolReadOnly(wireName: string): boolean | undefined {
   return tools.get(wireName)?.readOnly;
 }
 
-/** Which addon owns this wireName (v2 — replaces the fragile `includes` test, A-20). */
+
 export function addonIdOfTool(wireName: string): string | undefined {
   return tools.get(wireName)?.addonId;
 }
@@ -193,15 +181,12 @@ export function registerAddonHook(
   };
 }
 
-/** How many hooks are registered (for emit disarm decisions + diagnostics). */
+
 export function addonHookCount(): number {
   return hooks.length;
 }
 
-/** Walk hooks for an event in order — middleware chain with next().
- *  v2 (A-03): each hook receives an API facade bound to ITS OWN addon, so
- *  store/bus/context writes are attributed to the hook's owner, not the
- *  harness. Facades are cached per addon id. */
+
 export async function emitAddonEvent(
   event: AddonEvent,
   payload: unknown,
@@ -260,8 +245,7 @@ export function listAddonWidgets(site?: RenderSite): RegisteredWidget[] {
 
 const contextProviders = new Map<string, AddonContextProvider>();
 
-/** Register a context provider. v2 (A-09): keyed (addonId, title) so two addons
- *  with the same title never clobber each other; disposal is automatic. */
+
 export function addContextProvider(provider: AddonContextProvider): Disposable {
   const key = `${provider.addonId}\u0000${provider.title}`;
   contextProviders.set(key, provider);

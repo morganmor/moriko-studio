@@ -1,9 +1,4 @@
-/**
- * F5.1 — moriko-gl: minimal WebGL2 3D helper (~10 KB, zero dependencies).
- * Renderer, perspective camera, orbit controls, box/sphere/plane primitives,
- * Lambert/unlit materials, rAF loop with resize + DPR cap 2.
- * Exposes window.MORIKO_GL.
- */
+
 (function (global) {
   'use strict';
 

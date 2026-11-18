@@ -1,8 +1,4 @@
-/**
- * RSA/T agent store (client) — roster registry + dispatch + AgentFace.
- * Sumber: rpc('agents') → server agents.ts (persisten .moriko/rsat/agents.json).
- * Live: frame bus 'rsat.changed' (event agents_changed/agent_*) → refresh.
- */
+
 import { useEffect, useState } from 'react';
 import { rpc } from './shared.tsx';
 import { Spr, sa } from './sprites.tsx';
@@ -14,13 +10,13 @@ export type AgentMemory = { at: string; kind: string; text: string };
 export type AgentRec = {
   id: string; name: string; logo: string | null;
   providerId: string; model: string;
-  /** Reasoning effort pilihan user ('' = ikut setelan percakapan). */
+  
   thinkingLevel: string;
   memory: AgentMemory[];
   activeSessionId: string | null; createdAt: string;
 };
 
-/** Ladder effort yang bisa dipilih user ('' = inherit percakapan). */
+
 export const EFFORTS: Array<[string, string]> = [
   ['', 'Inherit chat'],
   ['off', 'Off'],
@@ -37,7 +33,7 @@ let primed = false;
 const subs = new Set<() => void>();
 const emit = () => { for (const f of subs) f(); };
 
-/** Muat roster dari server. */
+
 export async function refreshAgents(): Promise<void> {
   try {
     const r = (await rpc('agents', {})) as { agents?: AgentRec[] } | null;
@@ -65,7 +61,7 @@ export function useAgents(): AgentRec[] {
   return list;
 }
 
-/** USER: buat agent (identitas + logo + provider/model + effort + catatan). */
+
 export async function createAgent(fields: {
   name: string; logo: string | null; providerId: string; model: string;
   thinkingLevel: string; note: string;
@@ -81,7 +77,7 @@ export async function createAgent(fields: {
   }
 }
 
-/** USER: edit agent — identitas/memory tetap; provider/model/effort bisa diganti. */
+
 export async function updateAgent(id: string, fields: Partial<Pick<AgentRec, 'name' | 'logo' | 'providerId' | 'model' | 'thinkingLevel'>>): Promise<boolean> {
   try {
     await rpc('updateAgent', { id, fields });
@@ -94,7 +90,7 @@ export async function updateAgent(id: string, fields: Partial<Pick<AgentRec, 'na
   }
 }
 
-/** USER: hapus agent. */
+
 export async function deleteAgent(id: string): Promise<void> {
   try {
     await rpc('deleteAgent', { id });
@@ -105,8 +101,7 @@ export async function deleteAgent(id: string): Promise<void> {
   }
 }
 
-/** Prompt tugas yang dikirim ke sesi baru agent (identitas tidak perlu ada di sini —
- *  prompt fragment server menyuntikkannya; ini instruksi tugasnya). */
+
 function buildPrompt(a: Ach): string {
   const ac = a.ac.map((c, i) => `  ${i + 1}. ${c.t}`).join('\n');
   return [
@@ -119,8 +114,7 @@ function buildPrompt(a: Ach): string {
   ].filter(Boolean).join('\n');
 }
 
-/** Dispatch: kirim quest ke agent → host membuat sesi chat baru + bind + send.
- *  thinkingLevel agent ikut dikirim: sesi baru langsung memakai effort pilihan user. */
+
 export function dispatchQuest(agent: AgentRec, a: Ach): void {
   dispatchAgent({
     providerId: agent.providerId,
@@ -135,7 +129,7 @@ export function dispatchQuest(agent: AgentRec, a: Ach): void {
   toast('ok', `${a.id} dispatched`, `New session for ${agent.name} is opening.`);
 }
 
-/** Wajah agent: logo custom (data URL) bila ada; cocok via agentId ATAU nama. */
+
 export function AgentFace({ by, ag, sz }: { by?: string; ag?: string | null; sz?: number }) {
   const agents = useAgents();
   const rec = (ag ? agents.find((x) => x.id === ag) : undefined)

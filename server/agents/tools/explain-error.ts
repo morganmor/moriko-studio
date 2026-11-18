@@ -1,10 +1,4 @@
-/**
- * agent__explain_error — paste a stack trace and get EVERY workspace frame read
- * and annotated in ONE call.
- *
- * Frames inside the workspace get read receipts, so the very windows that
- * explain the crash are directly editable afterwards.
- */
+
 import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
@@ -18,10 +12,10 @@ interface ErrorFrame {
   column?: number;
 }
 
-/** Own budget for this tool — the shared constant was removed (2026-10-22). */
+
 const EXPLAIN_BUDGET_CHARS = 48_000;
 
-/** Extracts file:line frames from JS/TS stacks and Python tracebacks. */
+
 export function parseErrorFrames(error: string): ErrorFrame[] {
   const frames: ErrorFrame[] = [];
   const push = (file: string, line: number, column?: number): void => {

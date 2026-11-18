@@ -1,15 +1,4 @@
-/**
- * agent__deps — import graph: "what breaks if I change this file?"
- *
- * Parses import/require/dynamic-import specifiers of the JS/TS family and
- * returns, for ONE file: what it imports (relative files + external packages),
- * what imports IT (direct dependents), and a bounded BFS count of all
- * reachable dependents (blast radius, radius ≤ 3). Check this BEFORE
- * renaming/moving/changing signatures of shared files.
- *
- * agent__hash — SHA-256 of arbitrary text (idempotency check, content key).
- * agent__remind — schedule a reminder for THIS conversation.
- */
+
 import { createHash } from 'node:crypto';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, num, truncateOutput, requireGoalSession } from './shared.js';
@@ -20,7 +9,7 @@ import { getActiveWorkspace, isInsideRoot } from '../workspace.js';
 import { createReminder, listReminders, renderReminder } from '../../reminders/store.js';
 import path from 'node:path';
 
-/** Render a queryDeps report as the tool's text output. */
+
 function renderDeps(report: NonNullable<ReturnType<typeof queryDeps>>): string {
   const parts: string[] = [`# import graph — ${report.file} (${report.filesScanned} file(s) scanned)`];
   parts.push('');

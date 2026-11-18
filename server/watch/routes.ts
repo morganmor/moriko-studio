@@ -1,7 +1,4 @@
-/**
- * routes.ts — `/api/watch` (Mobile Watching): cloudflared install, quick
- * tunnel lifecycle, port detection, QR SVG for the tunnel URL.
- */
+
 import { Router } from 'express';
 import QRCode from 'qrcode';
 import { listListeningPorts } from './ports.js';

@@ -5,7 +5,7 @@ import { MAX_REFERENCE_BYTES, encodeWithinLimit } from '../lib/imageEdit';
 import { useStore } from '../store/useStore';
 import { Modal, cx } from './ui';
 
-/** Crop aspect presets; 'free' keeps whatever rectangle the user drags. */
+
 type Ratio = 'free' | '1:1' | '4:3' | '16:9' | '9:16';
 
 const RATIOS: Array<{ id: Ratio; label: string }> = [
@@ -16,7 +16,7 @@ const RATIOS: Array<{ id: Ratio; label: string }> = [
   { id: '9:16', label: '9:16' },
 ];
 
-/** Crop rectangle in fractions of the ORIENTED image (0..1). */
+
 interface CropRect {
   x: number;
   y: number;
@@ -25,9 +25,9 @@ interface CropRect {
 }
 
 const FULL: CropRect = { x: 0, y: 0, w: 1, h: 1 };
-/** Minimum crop size per axis, as a fraction — keeps handles grabbable. */
+
 const MIN_SIZE = 0.04;
-/** Output bounds matching the server's submit validation. */
+
 const OUT_MIN = 64;
 const OUT_MAX = 4096;
 
@@ -41,7 +41,7 @@ function ratioNumber(ratio: Ratio): number | null {
   return b ? a / b : null;
 }
 
-/** Largest centered rectangle of the given pixel ratio inside W×H. */
+
 function fitCrop(ratio: Ratio, width: number, height: number): CropRect {
   const target = ratioNumber(ratio);
   if (!target || width <= 0 || height <= 0) return { ...FULL };
@@ -57,7 +57,7 @@ function fitCrop(ratio: Ratio, width: number, height: number): CropRect {
   return { x: (1 - fw) / 2, y: (1 - fh) / 2, w: fw, h: fh };
 }
 
-/** Maps a crop rect through an orientation change. */
+
 function transformCrop(crop: CropRect, op: 'rot-cw' | 'rot-ccw' | 'flip-h' | 'flip-v'): CropRect {
   switch (op) {
     case 'rot-cw':
@@ -80,11 +80,7 @@ interface DragState {
   rect: CropRect;
 }
 
-/**
- * Corner resize: each mode has a FIXED corner (the one opposite the dragged
- * handle) and available growth space; a locked ratio picks the primary axis
- * by the larger pointer delta, then re-derives the other axis.
- */
+
 function resizeRect(
   mode: DragMode,
   start: CropRect,
@@ -172,14 +168,7 @@ function resizeRect(
   };
 }
 
-/**
- * Client-side image editor: rotate / flip / crop (free or locked ratio) /
- * resize, exported as a data URL under the 15 MB reference cap. Works for ANY
- * model — the result lands in the reference tray; whether it is SENT to the
- * provider is decided by the model's capabilities (the server strips
- * references from text-to-image models), so editing is never gated on
- * edit-capable models.
- */
+
 export function ImageEditorModal({
   open,
   src,

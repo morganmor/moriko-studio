@@ -1,8 +1,4 @@
-/**
- * RS-PRD v1 — serializer/parser frontend. Format ID/version sama dengan
- * server/model.ts (format:'rs-prd', version:1) supaya file bisa dipakai
- * lintas project & sesi percakapan (RSAT.txt butir 4).
- */
+
 import type { Ach, Prd } from './store.tsx';
 
 export const FORMAT_ID = 'rs-prd';
@@ -17,7 +13,7 @@ const strList = (v: unknown, fb: string[]): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : fb;
 const rec = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' ? (v as Record<string, unknown>) : {});
 
-/** Nama aktor: string atau objek actor {kind,name} dari dokumen server. */
+
 const name = (v: unknown): string => {
   if (typeof v === 'string') return v;
   const o = rec(v);
@@ -45,7 +41,7 @@ function toDocAch(a: Ach) {
   };
 }
 
-/** State board → dokumen RS-PRD v1 utuh (untuk unduhan export). */
+
 export function toDoc(s: { language: string; prd: Prd; achs: Ach[] }) {
   return {
     format: FORMAT_ID,
@@ -75,7 +71,7 @@ export function toDoc(s: { language: string; prd: Prd; achs: Ach[] }) {
 }
 
 
-/** op ledger server (add|modify|delete|rename|copy) → kode pendek board. */
+
 const OPC: Record<string, string> = { add: 'add', modify: 'mod', delete: 'del', rename: 'ren', copy: 'ref' };
 
 function fromDocAch(x: Record<string, unknown>, i: number): Ach {
@@ -142,7 +138,7 @@ function fromDocAch(x: Record<string, unknown>, i: number): Ach {
   };
 }
 
-/** Parse isi .rsprd.json → { prd, achs }. Error message dapat dibaca user. */
+
 export function fromDoc(raw: unknown): { prd: Prd; achs: Ach[] } {
   const doc = rec(raw);
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('File is not an RS-PRD document.');
@@ -202,7 +198,7 @@ export function fromDoc(raw: unknown): { prd: Prd; achs: Ach[] } {
 }
 
 
-/** Nama aktor dari objek actor server: 'U' untuk user, label > name > kind. */
+
 export function actorName(v: unknown): string {
   if (typeof v === 'string') return v;
   const o = rec(v);
@@ -210,11 +206,7 @@ export function actorName(v: unknown): string {
   return str(o.label) || str(o.name) || str(o.kind) || '?';
 }
 
-/**
- * Normalisasi dokumen RS-PRD v1 dari rpc 'state' ({ doc, presence, … })
- * menjadi bentuk board client. Reuse fromDocAch/fromDoc — server shape
- * sama dengan format ekspor, plus field heartbeat/beat untuk claim.
- */
+
 export function fromServerState(payload: Record<string, unknown>): {
   prd: Prd | null;
   achs: Ach[];

@@ -7,7 +7,7 @@ import type { ImageSession, ImageSessionItem } from '../types';
 import { EmptyState } from './ui';
 import { ImageLightbox } from './ImageLightbox';
 
-/** Groups sessions by calendar day, newest first (design day labels). */
+
 function groupByDay(sessions: ImageSession[]) {
   const groups = new Map<string, ImageSession[]>();
   const sorted = [...sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -32,13 +32,13 @@ function groupByDay(sessions: ImageSession[]) {
   return groups;
 }
 
-/** Design time label: "14:05". */
+
 const hm = (iso: string) => {
   const date = new Date(iso);
   return `${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`;
 };
 
-/** Hover overlay actions shared by every card (design .acts buttons). */
+
 function SessionActions({ session, onRename }: { session: ImageSession; onRename: () => void }) {
   const selectImageSession = useStore((state) => state.selectImageSession);
   const setView = useStore((state) => state.setView);
@@ -85,7 +85,7 @@ function SessionActions({ session, onRename }: { session: ImageSession; onRename
   );
 }
 
-/** Inline rename field pinned to the card overlay (design .field). */
+
 function RenameInput({
   session,
   draft,
@@ -123,11 +123,7 @@ function RenameInput({
   );
 }
 
-/**
- * One image card (design .card from image-viewer.html): a 4:3 tile that
- * opens the lightbox; hover reveals the session caption plus open-in-
- * studio / rename / delete.
- */
+
 function ImageCard({
   session,
   item,
@@ -187,7 +183,7 @@ function ImageCard({
   );
 }
 
-/** Placeholder for a session that has no images yet (New session flow). */
+
 function GhostCard({
   session,
   editing,
@@ -225,12 +221,7 @@ function GhostCard({
   );
 }
 
-/**
- * Image History — the design's card grid (design/image-viewer.html): a
- * page-head with a live count and a New session action, day groups of 4:3
- * image cards, click → lightbox browsing every visible image. Search,
- * rename and delete stay available on the card overlay.
- */
+
 export function ImageHistoryView() {
   const sessions = useStore((state) => state.imageSessions);
   const loadImageSessions = useStore((state) => state.loadImageSessions);
@@ -242,9 +233,9 @@ export function ImageHistoryView() {
   const addToGallery = useStore((state) => state.addToGallery);
   const removeFromGallery = useStore((state) => state.removeFromGallery);
   const [query, setQuery] = useState('');
-  /** Open lightbox preview: current url + every visible image. */
+  
   const [preview, setPreview] = useState<{ url: string; urls: string[] } | null>(null);
-  /** Inline rename target; url: null marks the session's ghost card. */
+  
   const [editing, setEditing] = useState<{ id: string; url: string | null } | null>(null);
   const [draft, setDraft] = useState('');
 
@@ -264,13 +255,13 @@ export function ImageHistoryView() {
     [sessions],
   );
 
-  /** Flat browse list — same order as the grouped cards (design viewer). */
+  
   const allUrls = useMemo(
     () => filtered.flatMap((session) => session.items.map((item) => item.url)),
     [filtered],
   );
 
-  /** Viewer fields by url: prompt + session label (design title/prompt). */
+  
   const infoByUrl = useMemo(() => {
     const map = new Map<string, { prompt: string; label: string }>();
     for (const session of filtered) {

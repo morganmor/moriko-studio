@@ -1,8 +1,4 @@
-/**
- * RSA/T canvas (area utama) — port 1:1 dari design/split/rsat-panel-canvas.html.
- * `.view > .view-in`: view overview → Base camp, view board → Quest board,
- * view tree → Skill tree, view lain → canvas-hint (placeholder berikutnya).
- */
+
 import Basecamp from './basecamp.tsx';
 import QuestBoard from './questboard.tsx';
 import SkillTree from './skilltree.tsx';

@@ -1,21 +1,10 @@
-/**
- * Moco Canvas — measured scene + lint 2D (P2).
- *
- * Compiles the scene to HTML, measures it in the harness headless browser
- * (api.harness.measureHtml → spatial-runtime measureHtml → getReusableBrowser)
- * at 3 viewports, then runs the core geometric/typographic/color lint over the
- * MEASURED data — facts, not intent (plan §10).
- *
- * Fallback contract (plan §9): any failure — browser unavailable, permission
- * missing, extraction empty — degrades to tier "intent" with an honest note,
- * never a silent pass.
- */
+
 
 import { compileScene } from '../client/compile.ts';
 import type { IntentLint } from '../client/readout.ts';
 import { SPACE, type Scene, type Viewport } from '../client/scene.ts';
 
-/** Mirrors harness MeasuredNode (server/agents/spatial-runtime.ts). */
+
 export interface McvMeasuredNode {
   id: string;
   tag: string;
@@ -44,7 +33,7 @@ export interface McvMeasuredViewport {
 export interface MeasureOutcome {
   tier: 'runtime' | 'intent';
   viewports: McvMeasuredViewport[];
-  /** lint computed from MEASURED data (empty when tier === intent) */
+  
   lint: IntentLint[];
   notes: string[];
 }
@@ -56,15 +45,12 @@ const L = (
   node?: string,
 ): IntentLint => ({ rule, severity, node, detail });
 
-// ── color math ───────────────────────────────────────────────────────────────
 
-/** Parse rgb()/rgba()/oklch() into [r,g,b] 0–255 (oklch via CSS matrices —
- *  browsers report oklch() strings verbatim, so we convert them ourselves). */
+
 function parseColor(input: string): [number, number, number] | null {
   const c = input.trim();
   let m = /rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/.exec(c);
   if (m) return [Number(m[1]), Number(m[2]), Number(m[3])];
-  // oklch(L C H) — OKLab → linear sRGB
   m = /oklch\(\s*([\d.]+)%?\s+([\d.]+)\s+([\d.-]+)/.exec(c);
   if (m) {
     let Lc = Number(m[1]);
@@ -97,7 +83,7 @@ function luminance(rgb: [number, number, number]): number {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
-/** WCAG contrast ratio; null when either side fails to parse. */
+
 export function contrastRatio(fg: string, bg: string): number | null {
   const f = parseColor(fg);
   const b = parseColor(bg);
@@ -108,7 +94,6 @@ export function contrastRatio(fg: string, bg: string): number | null {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-// ── measured lint rules ──────────────────────────────────────────────────────
 
 function overlapFraction(a: McvMeasuredNode, b: McvMeasuredNode): number {
   const x1 = Math.max(a.rect.x, b.rect.x);
@@ -121,7 +106,7 @@ function overlapFraction(a: McvMeasuredNode, b: McvMeasuredNode): number {
   return smaller > 0 ? inter / smaller : 0;
 }
 
-/** Sibling pair alignment drift: edges within 1–6 px look accidental. */
+
 function driftLint(nodes: McvMeasuredNode[]): IntentLint[] {
   const out: IntentLint[] = [];
   for (let i = 0; i < nodes.length; i++) {
@@ -141,7 +126,7 @@ function driftLint(nodes: McvMeasuredNode[]): IntentLint[] {
   return out.slice(0, 8);
 }
 
-/** Measured gap between consecutive siblings vs the spacing scale. */
+
 function gapLint(nodes: McvMeasuredNode[]): IntentLint[] {
   const scale = Object.values(SPACE);
   const names = Object.keys(SPACE);
@@ -167,12 +152,10 @@ function gapLint(nodes: McvMeasuredNode[]): IntentLint[] {
 function measuredLint(viewport: McvMeasuredViewport): IntentLint[] {
   const out: IntentLint[] = [];
 
-  // h-scroll (critical)
   if (viewport.docOverflowX) {
     out.push(L('h-scroll', 'critical', `document overflows horizontally at ${viewport.width}px viewport`));
   }
 
-  // node-level: overflow + contrast + line-length
   for (const n of viewport.nodes) {
     if (n.overflow) {
       out.push(L('overflow', 'critical', `${Math.round(n.rect.w)}×${Math.round(n.rect.h)} — scrollWidth exceeds clientWidth`, n.id));
@@ -184,9 +167,8 @@ function measuredLint(viewport: McvMeasuredViewport): IntentLint[] {
       } else if (ratio !== null && n.fontSize >= 24 && ratio < 3) {
         out.push(L('contrast', 'critical', `large-text contrast ${ratio.toFixed(2)}:1 < 3:1 on "${n.text.slice(0, 40)}"`, n.id));
       }
-      // line-length: mid-size multi-line text only
       if (n.lines >= 2 && n.fontSize >= 14 && n.fontSize < 24) {
-        const chW = n.fontSize * 0.5; // ≈ average glyph width of the body font
+        const chW = n.fontSize * 0.5;
         const chPerLine = Math.round(n.rect.w / chW);
         if (chPerLine > 75) {
           out.push(L('line-length', 'warn', `${chPerLine} ch/line > 75 — add maxWidth in ch units`, n.id));
@@ -195,8 +177,6 @@ function measuredLint(viewport: McvMeasuredViewport): IntentLint[] {
     }
   }
 
-  // sibling-level: overlap + drift + off-scale-gap. Only leaf nodes —
-  // container boxes contain their children by construction.
   const leaves = viewport.nodes.filter((n) => !n.hasMcVChildren);
   const byParent = new Map<string, McvMeasuredNode[]>();
   for (const n of leaves) {
@@ -231,7 +211,6 @@ function measuredLint(viewport: McvMeasuredViewport): IntentLint[] {
     out.push(...driftLint(group), ...gapLint(group));
   }
 
-  // hierarchy-flat: measured display/body size ratio
   const sizes = viewport.nodes.map((n) => n.fontSize).filter((s) => s > 0);
   if (sizes.length >= 2) {
     const display = Math.max(...sizes);
@@ -247,7 +226,6 @@ function measuredLint(viewport: McvMeasuredViewport): IntentLint[] {
   return out.slice(0, 24);
 }
 
-// ── measure orchestration ────────────────────────────────────────────────────
 
 function viewportsFor(scene: Scene, only?: Viewport): Array<{ name: string; width: number; height: number }> {
   const all: Array<{ name: Viewport; width: number; height: number }> = [
@@ -258,10 +236,7 @@ function viewportsFor(scene: Scene, only?: Viewport): Array<{ name: string; widt
   return all.filter((v) => !only || v.name === only);
 }
 
-/**
- * Measure the compiled scene at 3 viewports and run the measured lint.
- * Any failure → tier "intent" with a note (never a silent pass).
- */
+
 export async function measureScene(
   scene: Scene,
   api: any,
@@ -276,9 +251,6 @@ export async function measureScene(
   }
   try {
     const compiled = compileScene(scene);
-    // Overlay affordances (resize handles, id badges, grid guide, drop ghost)
-    // extend the scroll area and would fake `overflow` lint — hide them for
-    // the measurement pass only.
     const suppress = '<style id="mcv-measure-suppress">' +
       '.mcv-rh,.mcv-grid-guide,#mcv-drop-ghost{display:none!important}' +
       '[data-mcv-id]::before{display:none!important}' +
@@ -310,7 +282,7 @@ export async function measureScene(
   }
 }
 
-/** Compact measured block for the tool result (delta budget). */
+
 export function measuredLintBlock(outcome: MeasureOutcome): string {
   const lines: string[] = [`tier: ${outcome.tier}`];
   for (const note of outcome.notes) lines.push(`· ${note}`);

@@ -1,52 +1,9 @@
-/**
- * agent__exec — the tool-call ORCHESTRATOR (layer 2).
- *
- * The model emits ONE JavaScript program; a Node `vm` sandbox runs it with a
- * `tools.*` proxy that dispatches nested `agent__*` calls through the SAME
- * pipeline every top-level call uses (schema validation → audit → spatial
- * gate → handler → transform → postExecute). Only the accumulated `text()`
- * output re-enters the model context — the intermediate tool results do NOT.
- *
- * This kills 3-15× model round-trips for non-visual work: parallel reads
- * (Promise.allSettled), conditional follow-ups (if/else on a parsed JSON
- * field), retry loops, paging — all expressed in one program, one model turn,
- * wall-clock ≈ max(tool latency) instead of sum + N×decode.
- *
- * The visual loop (screenshot → judge → click) CANNOT be folded — the isolate
- * has no eyes. `image()` / `view_image` only ferry pixels back to the model.
- * The vision gate is the exit: the orchestrator runs the deterministic prefix,
- * yields a screenshot, and the model decides the next step.
- *
- * Safety posture:
- *  - The sandbox context has NO `require`, `process`, `fs`, `child_process`,
- *    `global`, `Buffer`, or `fetch`. It has only: `tools`, `text`, `store`,
- *    `load`, `notify`, `setTimeout`, `clearTimeout`, `exit`, `console` (noop),
- *    `JSON`, `Math`, `Date`, `RegExp`, `Promise`, `Array`, `Object`, `String`,
- *    `Number`, `Boolean`, `Error`, `Set`, `Map`, `Symbol`, `isFinite`,
- *    `isNaN`, `parseInt`, `parseFloat`, and top-level `await`.
- *  - `tools.*` is a Proxy: every property access returns an async dispatcher
- *    that calls `callAgentTool('agent__' + name, args, ctx)`. Nested calls
- *    re-enter the FULL pipeline, so the `agent__run` approval gate, the
- *    workspace jail, and the spatial gate all still apply. The orchestrator
- *    CANNOT bypass them — it can only call what the model could call directly.
- *  - Global timeout (Promise.race, default 30s), max nested calls (200), max
- *    output chars (MAX_OUTPUT_CHARS). When the script ends, unawaited
- *    promises are discarded — same semantics as the Astra isolate.
- *
- * State:
- *  - `store(key, value)` / `load(key)` — a session-scoped Map keyed by
- *    `ctx.sessionId`. Persists across exec calls in the same conversation,
- *    dies with the session. Values must be JSON-serializable.
- *
- * v1 scope (deliberately minimal):
- *  - `image()` and `yield_control()` are NOT implemented — they need a richer
- *    result channel (ToolImage + streaming) that v1's `text`-only return
- *    cannot carry. Add when the browser feature needs the vision gate.
- */
+
 import vm from 'node:vm';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, num, truncateOutput, requireWorkspace } from './shared.js';
 import { callAgentTool } from './dispatcher.js';
+import { requestApproval } from '../permissions.js';
 
 
 const sessionStores = new Map<string, Map<string, unknown>>();
@@ -66,22 +23,13 @@ const MAX_NESTED_CALLS = 200;
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 
-/**
- * Builds the sandbox globals for one exec call. The `tools` Proxy is the
- * heart: every `tools.foo(args)` dispatches back through the full pipeline.
- */
+
 function buildSandbox(ctx: AgentToolContext, state: {
   output: string[];
   nestedCalls: number;
   timedOut: boolean;
   exited: boolean;
-  /**
-   * MUTATIONS THE SCRIPT PERFORMED — file diffs its nested tool calls
-   * returned. `exec` is otherwise opaque: the UI sees raw code and one text
-   * blob, so a script that rewrote twelve files reported nothing. Collected
-   * here and hoisted onto the exec result so the row shows real +X -Y badges
-   * and the files it touched.
-   */
+  
   diffs: string[];
   diffstat: { added: number; removed: number };
   files: string[];
@@ -104,8 +52,6 @@ function buildSandbox(ctx: AgentToolContext, state: {
       const wireName = `agent__${prop}`;
       return async (args: Record<string, unknown>) => {
         const result = await callAgentTool(wireName, args ?? {}, ctx);
-        // Every nested call re-enters the FULL pipeline, so the file tools
-        // already computed a diff — keep it instead of dropping it.
         if (result.ok && result.diff) {
           state.diffs.push(result.diff);
           if (result.diffstat) {
@@ -175,7 +121,7 @@ function buildSandbox(ctx: AgentToolContext, state: {
   };
 }
 
-/** JSON.stringify that never throws on circular structures. */
+
 function safeStringify(value: unknown): string {
   try {
     return JSON.stringify(value, null, 0);
@@ -184,15 +130,12 @@ function safeStringify(value: unknown): string {
   }
 }
 
-/** Wraps user code in an async IIFE so top-level `await` works. */
+
 function wrapUserCode(code: string): string {
   return `(async () => {\n${code}\n})();`;
 }
 
-/**
- * Runs the user's JS in a vm sandbox with the orchestrator globals.
- * Returns the accumulated `text()` output.
- */
+
 async function runOrchestrator(
   code: string,
   ctx: AgentToolContext,
@@ -262,7 +205,6 @@ async function runOrchestrator(
       nestedCalls: 0,
       timedOut: false,
       error: `Syntax error in exec script: ${error instanceof Error ? error.message : String(error)}`,
-      // Nothing ran, so nothing was mutated — but the shape must stay whole.
       diff: null,
       diffstat: undefined,
     };
@@ -287,8 +229,6 @@ async function runOrchestrator(
   }
 
   const output = state.output.join('\n');
-  // A script that rewrote files must SAY which files. Without this line the
-  // exec result is indistinguishable from a read-only script.
   const mutationNote =
     state.files.length > 0
       ? `\n── mutated ${state.files.length} file(s): ${state.files.join(', ')}`
@@ -298,8 +238,6 @@ async function runOrchestrator(
     nestedCalls: state.nestedCalls,
     timedOut: state.timedOut,
     error,
-    // Hoisted mutations: without these the exec row is a text blob and the
-    // files it rewrote are invisible in the trace.
     diff: state.diffs.length > 0 ? state.diffs.join('\n') : null,
     diffstat:
       state.diffstat.added > 0 || state.diffstat.removed > 0 ? state.diffstat : undefined,
@@ -308,9 +246,41 @@ async function runOrchestrator(
 
 
 export async function execTool(args: Record<string, unknown>, ctx: AgentToolContext): Promise<HarnessToolResult> {
+  const mode = ctx.terminalMode ?? 'auto';
+  if (mode === 'off') {
+    return {
+      ok: false,
+      isError: true,
+      text:
+        'Execution tools are turned OFF in the harness settings. Ask the user to enable Terminal (Ask or Auto) if exec is needed.',
+    };
+  }
+
   const code = str(args, 'code');
   if (!code.trim()) {
     return { ok: false, isError: true, text: 'exec needs a "code" string — the JavaScript program to run.' };
+  }
+
+  if (mode === 'ask') {
+    const { root } = requireWorkspace(ctx);
+    const decision = await requestApproval(
+      {
+        tool: 'exec',
+        paths: [root],
+        root,
+        intent: 'exec',
+        command: `agent__exec script (${code.length} chars): ${code.trim().slice(0, 140)}`,
+      },
+      ctx,
+    );
+    if (!decision.granted) {
+      return {
+        ok: false,
+        isError: true,
+        errorCode: 'approval_denied',
+        text: `The user did not approve running agent__exec.${decision.reason ? ` Reason: "${decision.reason}".` : ''}`,
+      };
+    }
   }
 
   const timeoutMs = Math.min(Math.max(num(args, 'timeoutMs') ?? DEFAULT_TIMEOUT_MS, 1_000), 120_000);
@@ -340,9 +310,6 @@ export async function execTool(args: Record<string, unknown>, ctx: AgentToolCont
     ok: !result.timedOut && !result.error,
     isError: result.timedOut || !!result.error,
     text: truncateOutput(parts.join('\n')),
-    // NO INVISIBLE MUTATIONS — the nested file edits this script performed
-    // ride out as a real diff, so the exec row shows its +X -Y badge and the
-    // changed files exactly like edit_file does.
     ...(result.diff ? { diff: result.diff } : {}),
     ...(result.diffstat ? { diffstat: result.diffstat } : {}),
   };

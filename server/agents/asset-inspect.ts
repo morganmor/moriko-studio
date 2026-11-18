@@ -1,8 +1,4 @@
-/**
- * F5.4 — asset_inspect: zero-dependency binary asset parsers.
- * GLB/glTF (meshes, triangles, materials, textures, animations, extensions,
- * bounds), PNG/JPEG/WebP/KTX2 (dimensions, POT, VRAM estimate), WAV (duration).
- */
+
 import { readFileSync, statSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 

@@ -1,39 +1,4 @@
-/**
- * Build-time sync of model capability metadata from models.dev.
- *
- * Downloads the full catalog and writes `server/modelMetadata.snapshot.json`,
- * which the server serves to the client (`GET /api/model-metadata`) and
- * consults itself. Only the CAPABILITY fields the app actually reads are
- * written (see the mapper below) — the descriptive/bookkeeping models.dev
- * fields (description, family, knowledge, releaseDate, lastUpdated,
- * openWeights, structuredOutput, reasoningOptions) were ~2.4 MB / 44% of the
- * snapshot while NO code path read them. Add a field to the mapper when a
- * feature starts needing one.
- *
- * Run via `pnpm sync:models`, or automatically (when stale) through the
- * `sync-if-stale.mjs` gate that `pnpm dev` calls before starting the servers.
- *
- * Trimmed shape per model key ("{provider}/{model}"):
- *   name / description / family   — catalog identity
- *   reasoning                     — supports a thinking mode
- *   efforts                       — reasoning-effort ladder (the "effort"
- *                                   option's values), or null
- *   reasoningOptions              — the FULL reasoning_options array
- *                                   (toggle / budget_tokens / effort)
- *   tools                         — tool/function calling
- *   structuredOutput              — JSON-schema structured output
- *   temperature                   — sampling temperature is supported
- *   attachment                    — accepts file attachments
- *   openWeights                   — weights are open
- *   knowledge                     — knowledge cutoff
- *   releaseDate / lastUpdated     — catalog timestamps
- *   textIn/imageIn/videoIn/audioIn/pdfIn — modalities.input membership
- *   textOut/imageOut/audioOut     — modalities.output membership
- *   context                       — context window (tokens)
- *   inputLimit                    — per-request input ceiling (limit.input)
- *   maxOut                        — max output tokens (limit.output)
- *   cost                          — { input, output, cacheRead } per million
- */
+
 
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -50,32 +15,14 @@ if (!response.ok) {
   console.error(`models.dev returned HTTP ${response.status}`);
   process.exit(1);
 }
-/** @type {Record<string, { models?: Record<string, RawModel> }>} */
+
 const catalog = await response.json();
 
-/**
- * @typedef {object} RawModel
- * @property {string} [name]
- * @property {string} [description]
- * @property {string} [family]
- * @property {boolean} [reasoning]
- * @property {Array<{ type: string, values?: string[] }>} [reasoning_options]
- * @property {boolean} [tool_call]
- * @property {boolean} [structured_output]
- * @property {boolean} [temperature]
- * @property {boolean} [attachment]
- * @property {boolean} [open_weights]
- * @property {string} [knowledge]
- * @property {string} [release_date]
- * @property {string} [last_updated]
- * @property {{ input?: string[], output?: string[] }} [modalities]
- * @property {{ context?: number, input?: number, output?: number }} [limit]
- * @property {{ input?: number, output?: number, cache_read?: number }} [cost]
- */
+
 
 const hasModality = (arr, modality) => Array.isArray(arr) && arr.includes(modality);
 
-/** @type {Record<string, unknown>} */
+
 const out = {};
 let count = 0;
 

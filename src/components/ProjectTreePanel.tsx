@@ -1,16 +1,4 @@
-/**
- * ProjectTreePanel (Fase B → Fase 4) — the REALTIME PROJECT STRUCTURE panel.
- *
- * FASE 4 (6B): the panel is now DOCKED in the right sidebar column, sharing
- * the fold/width chrome with the Configuration panel (rightPanelMode switch in
- * the TopBar). The old floating chrome — drag-by-header, corner resize,
- * collapse-pill, device geometry — is gone; a docked panel is always where
- * the user left it. Rendering stays manual windowing over a FLATTENED
- * visible-row list (no deps): only the rows inside the viewport + overscroll
- * mount, so a 20k-node workspace scrolls at 60fps. The tree data lives in
- * the store and is updated in place by tree deltas (in-stream `tree_update`
- * or the idle SSE channel — see useTreeLive).
- */
+
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronDown,
@@ -39,8 +27,7 @@ interface FlatRow {
 const ROW_H = 22;
 const OVERSCAN = 8;
 
-/** Depth-first flatten honoring the expanded set + filter. Dirs collapsed by
- *  default UNTIL touched — the panel opens showing the first two levels. */
+
 function flatten(root: TreeNodeInfo, expanded: Set<string>, filter: string): FlatRow[] {
   const rows: FlatRow[] = [];
   const needle = filter.trim().toLowerCase();
@@ -71,16 +58,7 @@ function formatSize(bytes: number): string {
 }
 
 
-/** Subscribes to the dedicated SSE channel and mirrors deltas into the store.
- *
- *  BOUND TO THE SESSION'S WORKSPACE, not to whatever the store happens to
- *  hold: the bootstrap/recovery step inside the loop re-fetches whenever the
- *  view is missing or stale (the reported "no contents at all" bug — the
- *  panel opened while the server was mid-reload, the first fetch died, and
- *  the old code never recovered because it keyed the loop off the very state
- *  that failed). The loop itself IS the fallback polling: on any SSE error it
- *  retries after a beat, and a hello-version drift triggers one full refetch.
- */
+
 function useTreeLive(workspaceId: string | null, active: boolean): void {
   useEffect(() => {
     if (!workspaceId || !active) return;
@@ -169,12 +147,7 @@ export function ProjectTreePanel({ width }: { width?: number }) {
     });
   }, []);
 
-  /**
-   * TREE ATTACH (right-dock design): clicking a file fetches it through the
-   * workspace-scoped raw endpoint and hands it to the composer's normal
-   * attachment pipeline as a reference. The raw route already clamps to the
-   * active workspace and 403s on traversal, so no extra guard is needed here.
-   */
+  
   const attachFile = useCallback(
     async (node: TreeNodeInfo) => {
       try {

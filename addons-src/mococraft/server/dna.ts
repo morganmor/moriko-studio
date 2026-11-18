@@ -1,8 +1,4 @@
-/**
- * Mococraft Design DNA — genre library (Foundry).
- * Palettes are OKLCH-based (research: Evil Martians OKLCH ecosystem, apcach).
- * Each genre: display/body font roles, OKLCH anchors, macrostructure hints.
- */
+
 
 export interface DesignDna {
   id: string;
@@ -10,7 +6,7 @@ export interface DesignDna {
   tagline: string;
   displayFont: string;
   bodyFont: string;
-  /** OKLCH tokens: anchor hue drives all tints. No pure #000/#fff. */
+  
   palette: Record<string, string>;
   macrostructures: string[];
   antiTells: string[];

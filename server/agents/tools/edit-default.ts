@@ -1,18 +1,4 @@
-/**
- * agent__edit_file — the DEFAULT edit tool: anchor mode (oldString/newString).
- * Replaces the first occurrence of oldString with newString (or every
- * occurrence when replaceAll: true). Unique-match by default; multiple matches
- * are disambiguated with lineHint or refused with their line numbers.
- *
- * Safety posture (shared via edit-core): read-before-edit policy, optimistic
- * concurrency (expectedReadHash), read-range enforcement, EOL preservation,
- * idempotency guard, prescriptive diagnosis, and a syntax guard that rolls
- * back broken writes.
- *
- * The other edit shapes live in their own tools: agent__multi_edit (batch),
- * agent__edit_lines (line range), agent__edit_between (anchor pair),
- * agent__insert_at_line (insert/append). File creation is agent__write.
- */
+
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, num, bool } from './shared.js';
 import {

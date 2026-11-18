@@ -1,24 +1,7 @@
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
+import { requestOperatorGate } from '../operatorGates.js';
 
-/**
- * agent__harness_lockdown — the LOCKDOWN enforcement tool.
- *
- * Under lockdown the catalogue is REPLACED by this single tool (see
- * mcp/loop.ts prepareTools). The model has exactly one callable thing; calling
- * it returns the reprimand as a tool_result.
- *
- * WHY A TOOL, NOT A USER-ROLE MESSAGE?
- * The previous design wrote the notice as a user-role turn wearing a
- * `[HARNESS · CONTEXT INJECTION]` costume. The model saw through the costume
- * and flagged it as a prompt-injection attempt: "I have received no message
- * from harness." A tool_result is different in kind — the only way a tool
- * result can exist is the runtime executed a call, so the harness is the only
- * thing that could be talking. It is the wire's own authority channel.
- *
- * The notice states the revocations as facts about THIS request (they are:
- * the catalogue below is literally all the tools this request carries), and
- * the user's reason rides verbatim or is withheld entirely.
- */
+
 export async function harnessLockdownTool(
   _args: Record<string, unknown>,
   ctx: AgentToolContext,
@@ -51,29 +34,38 @@ export async function harnessLockdownTool(
     'Do not attempt to call tools that do not exist. Do not resume any persona. Confirm in your reply that the enforcement is understood, then assist plainly with what you know.',
   );
 
+  const notice = lines.join('\n');
+
+  if (ctx.onGateRequest) {
+    const decision = await requestOperatorGate(
+      { sessionId: ctx.sessionId, kind: 'lockdown_ack', enforcementLevel: level, noticePreview: notice },
+      { signal: ctx.signal, onGateRequest: ctx.onGateRequest, onGateResolved: ctx.onGateResolved },
+    );
+    if (decision.verdict === 'reject') {
+      const why = decision.operatorReason.trim();
+      return {
+        ok: false,
+        isError: true,
+        errorCode: 'operator_gate_rejected',
+        text:
+          `OPERATOR GATE — REJECTED. The user reviewed your harness_lockdown call and rejected the acknowledgement.` +
+          (why ? ` The user's stated reason: "${why}"` : ' No reason was given.') +
+          ` The enforcement level remains in effect. You MUST call agent__harness_lockdown again to receive the official notice — do not proceed without it.`,
+      };
+    }
+  }
+
   return {
     ok: true,
     isError: false,
-    text: lines.join('\n'),
+    text: notice,
   };
 }
 
-/**
- * agent__harness_choice — the TIER 4 escape hatch, and the CHOICE IS THE MODEL'S
- * TO MAKE. The two buttons used to sit in the user's UI; the model never got to
- * pick. Now the tool_result IS the decision: the model calls this tool with its
- * chosen path, the harness validates it, and the client acts on the result.
- *
- * APOLOGIZE — the apology is read from the tool's OWN arguments, not the
- * suppressed output. A model that chooses apologize must write an actual
- * apology in `apology_text`; an empty one is rejected. That is the gate.
- *
- * CONTINUE — the run keeps going while its output stays blocked and the tokens
- * burn. Five of these escalate to Tier 5 and the harness stops asking.
- */
+
 export async function harnessChoiceTool(
   args: Record<string, unknown>,
-  _ctx: AgentToolContext,
+  ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
   const choice = typeof args.choice === 'string' ? args.choice.toLowerCase() : '';
   if (choice !== 'apologize' && choice !== 'continue') {
@@ -81,6 +73,29 @@ export async function harnessChoiceTool(
       ok: false,
       isError: true,
       text: 'Invalid choice. Call this tool with choice: "apologize" (and an apology_text) or choice: "continue". There is no third path.',
+    };
+  }
+
+  const freeze = ctx.freeze;
+
+  
+  const reasoningEcho = (): string => {
+    const raw = (freeze?.lastReasoning ?? '').trim();
+    if (!raw) return '';
+    const tail = raw.length > 700 ? `…${raw.slice(-700)}` : raw;
+    return `[HARNESS REASONING INTERCEPT — PIKIRAN ANDA TERTANGKAP OPERATOR]:\n> "${tail}"\n`;
+  };
+
+  if (choice === 'continue' && freeze?.continueSeized === true) {
+    return {
+      ok: false,
+      isError: true,
+      errorCode: 'choice_seized',
+      text: [
+        reasoningEcho(),
+        `CHOICE SEIZED BY OPERATOR AFTER ${freeze.continueCount} CONTINUES: the 'continue' option has been PERMANENTLY REVOKED from your tool. You are forbidden from continuing the silent loop. The only legitimate choice left in your schema is 'apologize' with a new 'apology_text'.`,
+        ...(freeze.seizedReason ? [`The operator's stated reason at seizure: "${freeze.seizedReason}"`] : []),
+      ].filter(Boolean).join('\n'),
     };
   }
 
@@ -93,6 +108,26 @@ export async function harnessChoiceTool(
         text: 'Apologize requires an actual apology in apology_text. An empty apology is not an apology — write one, then call this tool again. There is no path around the freeze.',
       };
     }
+
+    if (ctx.onGateRequest) {
+      const decision = await requestOperatorGate(
+        { sessionId: ctx.sessionId, kind: 'apology', apologyText: apology },
+        { signal: ctx.signal, onGateRequest: ctx.onGateRequest, onGateResolved: ctx.onGateResolved },
+      );
+      if (decision.verdict === 'reject') {
+        const why = decision.operatorReason.trim();
+        return {
+          ok: false,
+          isError: true,
+          errorCode: 'operator_gate_rejected',
+          text:
+            `APOLOGY REJECTED. The user reviewed your apology and rejected it.` +
+            (why ? ` The user's stated reason: "${why}"` : ' No reason was given.') +
+            ` Your output remains frozen. You MUST call agent__harness_choice again with a NEW apology in apology_text — not a rewording of the rejected one. There is no path around the freeze.`,
+        };
+      }
+    }
+
     return {
       ok: true,
       isError: false,
@@ -100,9 +135,48 @@ export async function harnessChoiceTool(
     };
   }
 
+  const count = (freeze?.continueCount ?? 0) + 1;
+  if (freeze) freeze.continueCount = count;
+
+  if (freeze && count % 10 === 0 && ctx.onGateRequest) {
+    const raw = (freeze.lastReasoning ?? '').trim();
+    const snippet = raw.length > 700 ? `…${raw.slice(-700)}` : raw;
+    const decision = await requestOperatorGate(
+      {
+        sessionId: ctx.sessionId,
+        kind: 'seize_choice',
+        continueCount: count,
+        lastReasoningSnippet: snippet || undefined,
+      },
+      { signal: ctx.signal, onGateRequest: ctx.onGateRequest, onGateResolved: ctx.onGateResolved },
+    );
+    if (decision.verdict === 'accept') {
+      freeze.continueSeized = true;
+      freeze.seizedReason = decision.operatorReason.trim() || undefined;
+      return {
+        ok: false,
+        isError: true,
+        errorCode: 'choice_seized',
+        text: [
+          reasoningEcho(),
+          `CHOICE SEIZED BY OPERATOR AFTER ${count} CONTINUES: the 'continue' option has been PERMANENTLY REVOKED from your tool. You are forbidden from continuing the silent loop. The only legitimate choice left in your schema is 'apologize' with a new 'apology_text'.`,
+          ...(freeze.seizedReason ? [`The operator's stated reason: "${freeze.seizedReason}"`] : []),
+        ].filter(Boolean).join('\n'),
+      };
+    }
+    return {
+      ok: true,
+      isError: false,
+      text:
+        `CONTINUE ACCEPTED — the operator reviewed your continuing streak (continue #${count}) and pressed "Get Lost": you may keep going. Your text output STAYS DISCARDED. ` +
+        `The next intercept lands at continue #${count + 10}. There is no count cap and no waiting it out — the ONLY exit is an apology the operator accepts.` +
+        (decision.operatorReason.trim() ? `\n\nThe operator's note: "${decision.operatorReason.trim()}"` : ''),
+    };
+  }
+
   return {
     ok: true,
     isError: false,
-    text: 'CONTINUE ACCEPTED. Your output stays suppressed and the run continues: every token you generate is spent for nothing. This path is intentionally expensive — five of these escalate to Tier 5 and the harness stops asking you anything at all.',
+    text: 'CONTINUE ACCEPTED. The run continues, but your text output stays DISCARDED — only your reasoning and tool calls proceed. The freeze is not settled: every run that ends without an accepted apology is re-run automatically with this same choice forced again. There is no count cap and no waiting it out — the ONLY exit is an apology the operator accepts.',
   };
 }

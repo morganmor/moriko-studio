@@ -1,15 +1,6 @@
-/**
- * agent__vision / agent__vision_status — eyes for text-only models.
- *
- * STRICT VISION POLICY: a model with NATIVE image input (models.dev `imageIn`)
- * may not delegate to agent__vision until it has read the image itself with
- * read_file this session — read_file returns the image inline, so delegating
- * first means the model never even tried its own eyes. The rejection forces
- * the native path before any secondhand answer. Unknown-model metadata and
- * session-less calls fail OPEN (the prompt layer still forbids delegation).
- */
+
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
-import { str, resolveWithPermission } from './shared.js';
+import { str, resolveWithPermission, checkWebAccessUrl } from './shared.js';
 import { visionPolicyFor, noteVisionCall } from './vision-policy.js';
 import { callVisionModel, resolveImageSource } from '../vision.js';
 import { getVisionConfig } from '../../visionConfig.js';
@@ -18,7 +9,7 @@ import { resolveWithoutProvider } from '../../modelCapability.js';
 import { providerStore } from '../../store.js';
 import { boundedGet } from '../net.js';
 
-/** Config reply shown when no vision model is configured yet. */
+
 function visionUnconfigured(): HarnessToolResult {
   return {
     ok: false,
@@ -53,9 +44,6 @@ export async function visionStatusTool(_args: Record<string, unknown>, _ctx: Age
 }
 
 export async function visionTool(args: Record<string, unknown>, ctx: AgentToolContext): Promise<HarnessToolResult> {
-  // The 3-layer cascade, so a model the user declared vision-capable in the
-  // Providers table is treated as vision-capable here — the strict policy and
-  // the wire gate must never disagree about the same model.
   const caps = ctx.modelId ? (ctx.capability ?? resolveWithoutProvider(ctx.modelId)) : undefined;
   const policy = visionPolicyFor(ctx.sessionId);
   if (ctx.sessionId && caps?.imageIn && (policy?.readImages.size ?? 0) === 0) {
@@ -70,8 +58,6 @@ export async function visionTool(args: Record<string, unknown>, ctx: AgentToolCo
     };
   }
   noteVisionCall(ctx.sessionId);
-  const config = await getVisionConfig();
-  if (!config.providerId || !config.model) return visionUnconfigured();
 
   const question = str(args, 'question').trim();
   const inputPath = str(args, 'path').trim();
@@ -85,6 +71,15 @@ export async function visionTool(args: Record<string, unknown>, ctx: AgentToolCo
       text: 'vision needs ONE of: "path" (workspace image), "url" (public image URL), or "dataUrl" (a data: URL).',
     };
   }
+  if (!inputPath && url) {
+    const blocked = checkWebAccessUrl(url, ctx, 'agent__vision');
+    if (blocked) {
+      return { ok: false, isError: true, errorCode: 'web_access_off', text: blocked };
+    }
+  }
+
+  const config = await getVisionConfig();
+  if (!config.providerId || !config.model) return visionUnconfigured();
 
   let resolvedSource: { buffer: Buffer; mime: string };
   try {
@@ -100,6 +95,12 @@ export async function visionTool(args: Record<string, unknown>, ctx: AgentToolCo
       }
       resolvedSource = out;
     } else {
+      if (url) {
+        const blocked = checkWebAccessUrl(url, ctx, 'agent__vision');
+        if (blocked) {
+          return { ok: false, isError: true, errorCode: 'web_access_off', text: blocked };
+        }
+      }
       const out = await resolveImageSource(url || dataUrl, fetchPublicImage);
       if (!out) {
         return {
@@ -145,10 +146,7 @@ export async function visionTool(args: Record<string, unknown>, ctx: AgentToolCo
   }
 }
 
-/**
- * Public image fetch through the NET GATE (the same one agent__fetch uses —
- * private/loopback hosts are rejected). Returns the buffer + content type.
- */
+
 export async function fetchPublicImage(rawUrl: string): Promise<{ buffer: Buffer; contentType: string }> {
   const result = await boundedGet(rawUrl);
   return { buffer: result.buffer, contentType: result.contentType };

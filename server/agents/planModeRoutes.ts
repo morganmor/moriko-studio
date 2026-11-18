@@ -3,18 +3,7 @@ import { Router } from 'express';
 import { asyncRoute } from '../http.js';
 import { enterPlanMode, exitPlanMode, planModePosture } from '../agents/plan-mode.js';
 
-/**
- * PLAN MODE control surface for the UI.
- *
- * The state itself lives in server/agents/plan-mode.ts (in-memory, per
- * session) — this router only exposes it so the composer's "+" row and the
- * /plan slash command can toggle the SAME flag the pipeline gate reads. There
- * is no second source of truth: turning it on here is identical to the agent
- * calling agent__enter_plan_mode.
- *
- *   GET  /api/plan-mode?sessionId=…   → { active, reason, enteredAt, rsatLock }
- *   POST /api/plan-mode  { sessionId, active, reason? } → same shape
- */
+
 export function planModeRouter(): Router {
   const router = Router();
 

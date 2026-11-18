@@ -1,22 +1,11 @@
-/**
- * Council sync — prompt fragment, membership projection, cross-session broadcast.
- *
- * The host owns the conversation records; the server cannot enumerate them.
- * The panel pushes a projection of the ACTIVE council through the syncSessions
- * RPC whenever it mounts or membership changes. That projection backs the
- * agent tools (council_status / council_broadcast) and the prompt fragment
- * (council identity + members + shared brief).
- *
- * Projection shape (per council):
- *   { councilId, councilTitle, members: [{ sessionId, role, label, agentId, agentName }] }
- */
+
 import { getBrief, getDirective, saveProjection, loadProjections } from './store.js';
 
 const INJECT_KEY = 'council-board';
 
-/** councilId → projection. */
+
 const projections = new Map();
-/** sessionId → councilId (fast lookup for the caller's council). */
+
 const sessionIndex = new Map();
 
 function normProjection(p) {
@@ -38,9 +27,7 @@ function normProjection(p) {
   };
 }
 
-/** Upsert the projection for a council (called by the panel RPC syncSessions).
- *  Also PERSISTS it — the maps alone die with the server process, and a
- *  graceful reload mid-council must not orphan every member. */
+
 export function upsertProjection(api, sessionId, projection) {
   const norm = normProjection(projection);
   if (!norm) return;
@@ -50,7 +37,7 @@ export function upsertProjection(api, sessionId, projection) {
   try { void api.bus.publish('council.changed', { event: { type: 'synced', target: norm.councilId }, at: Date.now() }); } catch {  }
 }
 
-/** Rebuild the maps from the workspace doc after a server restart. */
+
 function rehydrate(api, sessionId) {
   try {
     for (const { projection } of loadProjections(api, sessionId)) {
@@ -62,7 +49,7 @@ function rehydrate(api, sessionId) {
   } catch {  }
 }
 
-/** The caller's council projection (null when the panel never synced it). */
+
 export function membershipOf(api, sessionId) {
   const sid = String(sessionId ?? '');
   let councilId = sessionIndex.get(sid);
@@ -77,7 +64,7 @@ export function membershipOf(api, sessionId) {
   return projections.get(councilId) ?? null;
 }
 
-/** Build + cache a projection from conversation records (server-side truth). */
+
 function synthesizeFromConversations(api, sessionId) {
   try {
     const convos = api.sessions.listConversations?.() ?? [];
@@ -103,20 +90,12 @@ function synthesizeFromConversations(api, sessionId) {
   }
 }
 
-/** Is this session currently RUNNING a turn? (the registry lists live runs only). */
+
 export function isSessionActive(api, sessionId) {
   try { return Boolean(api.sessions.get(sessionId)); } catch { return false; }
 }
 
-/**
- * Wake IDLE sub-sessions. A queued injection is only drained by a RUNNING
- * adapter at its next round boundary, so a message to an idle sub-session sits
- * forever (the "orchestrator message never arrives" bug). The wake is now a
- * SERVER-SIDE run start (api.sessions.startRun → self-POST /api/chat): no bus,
- * no SSE, no browser hop — the old bus→SSE→bridge chain dropped frames in a
- * verified live test, so it is gone. A 'council:wake' bus notice is still
- * published for UI observers only.
- */
+
 export async function wakeSessions(api, items): Promise<boolean> {
   if (!items || items.length === 0) return true;
   try { void api.bus.publish('council:wake', { items, at: Date.now() }); } catch {  }
@@ -137,7 +116,7 @@ export async function wakeSessions(api, items): Promise<boolean> {
   return allOk;
 }
 
-/** Broadcast a short notice to the OTHER members of a council. */
+
 export async function broadcastToCouncil(api, sessionId, mem, text) {
   const targets = mem.members
     .map((m) => m.sessionId)
@@ -155,7 +134,7 @@ export async function broadcastToCouncil(api, sessionId, mem, text) {
   return { delivered: 0, queued: 0 };
 }
 
-/** Per-session prompt fragment: council identity + members + shared brief. */
+
 export function createPromptFragment(api) {
   return {
     id: 'council-board',
@@ -194,7 +173,7 @@ export function createPromptFragment(api) {
   };
 }
 
-/** Fire the SSE frame + cross-session injections for one panel event. */
+
 export async function broadcast(api, sessionId, event) {
   try {
     await api.bus.publish('council.changed', { event: { ...event }, at: Date.now() });

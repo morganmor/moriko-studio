@@ -6,7 +6,7 @@ import { useStore } from '../store/useStore';
 import { ImageLightbox } from './ImageLightbox';
 import { cx } from './ui';
 
-/** Design's download filename: moriko-<prompt-slug>.jpg */
+
 const downloadImage = (url: string, prompt: string) => {
   const slug =
     prompt
@@ -20,14 +20,7 @@ const downloadImage = (url: string, prompt: string) => {
   anchor.click();
 };
 
-/**
- * Gallery — the design's card grid (design/image-viewer.html): a
- * page-head with a live count, a drag (or Alt+←/→) reorderable card grid,
- * and the shared lightbox with prev/next through the whole collection.
- *
- * Every entry lives server-side, so the collection survives reloads and is
- * shared by every browser that talks to this proxy.
- */
+
 export function Gallery() {
   const images = useStore((state) => state.galleryImages);
   const sessions = useStore((state) => state.imageSessions);
@@ -36,19 +29,18 @@ export function Gallery() {
   const reorderGalleryImages = useStore((state) => state.reorderGalleryImages);
   const setView = useStore((state) => state.setView);
   const requestImageStudioPrompt = useStore((state) => state.requestImageStudioPrompt);
-  /** Refetch on every mount — the view may be showing a stale store cache
-   *  from before another tab (or the agent) appended new images. */
+  
   const loadGallery = useStore((state) => state.loadGallery);
   useEffect(() => {
     void loadGallery();
   }, [loadGallery]);
   const [lightbox, setLightbox] = useState<string | null>(null);
-  /** HTML5 drag: which tile is being dragged + which one is the drop target. */
+  
   const dragIdRef = useRef<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
 
-  /** Viewer info: the prompt + session label each gallery image came from. */
+  
   const infoByUrl = useMemo(() => {
     const map = new Map<string, { prompt: string; label: string }>();
     for (const session of sessions) {

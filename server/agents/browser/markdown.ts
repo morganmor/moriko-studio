@@ -1,10 +1,4 @@
-/**
- * Minimal HTML → Markdown conversion for the browser↔workspace bridge
- * (browser_save_page). Zero external deps — covers the common cases:
- * headings, links, bold/italic, lists, code, images, paragraphs.
- * Runs on the server side against the STRUCTURED output of the in-page
- * readability walker (browser_read_article), not raw HTML soup.
- */
+
 export function htmlToMarkdown(parts: Array<{ t: string; level?: number; text: string }>): string {
   const lines: string[] = [];
   for (const part of parts) {

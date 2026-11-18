@@ -1,55 +1,129 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import type { ToolImage } from '../agents/tools/index.js';
 import { coerceText } from '../textUtil.js';
 import { LivenessTimeout, deadline, withDeadline } from '../liveness.js';
 
-/**
- * Minimal MCP client — the protocol subset Moriko needs:
- *   initialize → notifications/initialized → tools/list → tools/call
- *
- * Two transports (spec 2026-07-28):
- *  - `McpStdioClient`: spawns the local server, newline-delimited JSON-RPC
- *    over stdin/stdout (the standard MCP stdio framing).
- *  - `McpHttpClient`: Streamable HTTP — POST the JSON-RPC message, accept
- *    either a JSON response or an SSE stream, honour `Mcp-Session-Id`.
- *
- * Deliberately dependency-free: the surface above is small, stable, and
- * keeps the proxy's install footprint untouched.
- */
+
 
 export interface McpToolDef {
   name: string;
   description?: string;
   inputSchema?: Record<string, unknown>;
+  annotations?: Record<string, unknown>;
 }
 
 export interface McpToolResult {
   ok: boolean;
-  /** Concatenated text content; empty when the tool returned nothing. */
+  
   text: string;
+  
+  images?: ToolImage[];
   isError: boolean;
 }
 
 export interface McpClient {
-  /** Establishes the session (initialize handshake) and returns tool defs. */
+  
   connect(): Promise<McpToolDef[]>;
   listTools(): Promise<McpToolDef[]>;
   callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult>;
   close(): Promise<void>;
 }
 
-const PROTOCOL_VERSION = '2025-06-18';
+const PROTOCOL_VERSION = '2026-07-28';
 const REQUEST_TIMEOUT_MS = 60_000;
 
 function nextId(): number {
   return Math.floor(Math.random() * 1_000_000) + 1;
 }
 
-function extractText(result: { content?: Array<{ type?: string; text?: unknown }>; isError?: boolean }): McpToolResult {
-  const text = (result.content ?? [])
-    .map((part) => (part.type === 'text' ? (coerceText(part.text) ?? '') : ''))
-    .filter(Boolean)
-    .join('\n');
-  return { ok: !result.isError, text, isError: result.isError === true };
+interface RawMcpContentPart {
+  type?: string;
+  text?: unknown;
+  data?: unknown;
+  mimeType?: unknown;
+  uri?: unknown;
+  name?: unknown;
+  description?: unknown;
+  resource?: {
+    uri?: unknown;
+    mimeType?: unknown;
+    text?: unknown;
+    blob?: unknown;
+  };
+}
+
+interface RawMcpCallResult {
+  content?: RawMcpContentPart[];
+  structuredContent?: unknown;
+  isError?: boolean;
+}
+
+function toDataUrl(rawBase64OrUrl: string, mime: string): string {
+  const trimmed = rawBase64OrUrl.trim();
+  if (trimmed.startsWith('data:')) return trimmed;
+  return `data:${mime};base64,${trimmed}`;
+}
+
+function extractText(result: RawMcpCallResult): McpToolResult {
+  const textParts: string[] = [];
+  const images: ToolImage[] = [];
+
+  for (const part of result.content ?? []) {
+    if (!part || typeof part !== 'object') continue;
+    if (part.type === 'text') {
+      const t = coerceText(part.text);
+      if (t) textParts.push(t);
+    } else if (part.type === 'image') {
+      const rawData = typeof part.data === 'string' ? part.data.trim() : '';
+      if (rawData) {
+        const mime =
+          typeof part.mimeType === 'string' && part.mimeType.trim()
+            ? part.mimeType.trim()
+            : 'image/png';
+        images.push({ mime, dataUrl: toDataUrl(rawData, mime) });
+      }
+    } else if (part.type === 'resource' && part.resource && typeof part.resource === 'object') {
+      const res = part.resource;
+      const uri = typeof res.uri === 'string' ? res.uri : '';
+      const mime =
+        typeof res.mimeType === 'string' && res.mimeType.trim()
+          ? res.mimeType.trim()
+          : 'application/octet-stream';
+      const resText = coerceText(res.text);
+      if (resText) {
+        textParts.push(uri ? `[Resource ${uri}]\n${resText}` : resText);
+      } else if (typeof res.blob === 'string' && res.blob.trim()) {
+        if (mime.startsWith('image/')) {
+          images.push({ mime, dataUrl: toDataUrl(res.blob, mime) });
+        } else {
+          textParts.push(`[Binary resource ${uri || 'inline'} (${mime})]`);
+        }
+      }
+    } else if (part.type === 'resource_link') {
+      const uri = typeof part.uri === 'string' ? part.uri : '';
+      const name = typeof part.name === 'string' && part.name ? part.name : uri;
+      const desc = typeof part.description === 'string' && part.description ? ` — ${part.description}` : '';
+      if (uri) textParts.push(`[Resource link: ${name} (${uri})${desc}]`);
+    }
+  }
+
+  if (textParts.length === 0 && result.structuredContent !== undefined) {
+    try {
+      textParts.push(JSON.stringify(result.structuredContent, null, 2));
+    } catch {
+    }
+  }
+
+  if (textParts.length === 0 && images.length > 0) {
+    textParts.push(`(${images.length} image${images.length === 1 ? '' : 's'} attached)`);
+  }
+
+  return {
+    ok: !result.isError,
+    text: textParts.join('\n'),
+    ...(images.length > 0 ? { images } : {}),
+    isError: result.isError === true,
+  };
 }
 
 
@@ -185,11 +259,11 @@ export class McpStdioClient implements McpClient {
   }
 
   async callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult> {
-    const result = await this.rpc<{ content?: Array<{ type?: string; text?: string }>; isError?: boolean }>(
+    const result = await this.rpc<RawMcpCallResult>(
       'tools/call',
       { name, arguments: args },
     );
-    return extractText(result);
+    return extractText(result ?? {});
   }
 
   async close(): Promise<void> {
@@ -205,8 +279,9 @@ export class McpStdioClient implements McpClient {
 
 export class McpHttpClient implements McpClient {
   private sessionId: string | null = null;
+  private negotiatedVersion: string = PROTOCOL_VERSION;
   private readonly url: string;
-  /** Static headers, or a getter re-resolved per request (e.g. OAuth tokens). */
+  
   private readonly headers: Record<string, string> | (() => Promise<Record<string, string>>) | undefined;
   private readonly label: string;
 
@@ -227,6 +302,14 @@ export class McpHttpClient implements McpClient {
 
   private async post(body: Record<string, unknown>, expectResponse: boolean): Promise<unknown> {
     const bound = deadline(undefined, REQUEST_TIMEOUT_MS, 'MCP_HTTP_TIMEOUT');
+    const method = typeof body.method === 'string' ? body.method : undefined;
+    const params = body.params && typeof body.params === 'object' ? (body.params as Record<string, unknown>) : undefined;
+    const mcpName =
+      typeof params?.name === 'string'
+        ? params.name
+        : typeof params?.uri === 'string'
+          ? params.uri
+          : undefined;
     try {
       const response = await fetch(this.url, {
         method: 'POST',
@@ -234,6 +317,9 @@ export class McpHttpClient implements McpClient {
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json, text/event-stream',
+          'MCP-Protocol-Version': this.negotiatedVersion,
+          ...(method ? { 'Mcp-Method': method } : {}),
+          ...(mcpName ? { 'Mcp-Name': mcpName } : {}),
           ...(this.sessionId ? { 'Mcp-Session-Id': this.sessionId } : {}),
           ...(await this.resolveHeaders()),
         },
@@ -257,7 +343,7 @@ export class McpHttpClient implements McpClient {
     }
   }
 
-  /** Parses one MCP HTTP response body: plain JSON, or a single-message SSE stream. */
+  
   private async readResponse(response: Response): Promise<unknown> {
     const contentType = response.headers.get('content-type') ?? '';
     if (contentType.includes('text/event-stream')) {
@@ -305,9 +391,13 @@ export class McpHttpClient implements McpClient {
         },
       },
       true,
-    ) as { serverInfo?: { name?: string } } | null;
-    await this.post({ jsonrpc: '2.0', method: 'notifications/initialized' }, false).catch(() => null);
-    void result;
+    ) as { protocolVersion?: string; serverInfo?: { name?: string } } | null;
+    if (result?.protocolVersion && typeof result.protocolVersion === 'string') {
+      this.negotiatedVersion = result.protocolVersion;
+    }
+    if (this.negotiatedVersion !== '2026-07-28') {
+      await this.post({ jsonrpc: '2.0', method: 'notifications/initialized' }, false).catch(() => null);
+    }
     return this.listTools();
   }
 
@@ -323,7 +413,7 @@ export class McpHttpClient implements McpClient {
     const result = await this.post(
       { jsonrpc: '2.0', id: nextId(), method: 'tools/call', params: { name, arguments: args } },
       true,
-    ) as { content?: Array<{ type?: string; text?: string }>; isError?: boolean } | null;
+    ) as RawMcpCallResult | null;
     return extractText(result ?? {});
   }
 

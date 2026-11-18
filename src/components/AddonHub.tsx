@@ -1,12 +1,4 @@
-/**
- * AddonHub (Addon v2, A6) — the full-page addon manager (ViewId = 'addons').
- *
- * Tabs: Installed · Permissions · Logs. The right dock's "Addons" tab stays as
- * a shortcut that opens this Hub. All data comes from GET /api/addons (the
- * registry's client entries carry status/permissions/logs metadata); actions
- * POST the existing routes (toggle/reload/permissions). Themed components
- * only — no native alert/confirm (deletes confirm through Modal).
- */
+
 
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 
@@ -16,7 +8,7 @@ import type { AddonClientEntry } from '../types/addon';
 
 type HubTab = 'installed' | 'permissions' | 'logs';
 
-/** One line in the terminal Logs tab (server addon-log entry). */
+
 interface TerminalEntry {
   at: number;
   level: string;
@@ -25,14 +17,14 @@ interface TerminalEntry {
   durationMs?: number;
 }
 
-/** HH:MM:SS — compact console timestamp. */
+
 function fmtTime(at: number): string {
   const d = new Date(at);
   const p = (n: number) => String(n).padStart(2, '0');
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
-/** Load duration chip — "123ms" / "1.2s". */
+
 function fmtDur(ms: number): string {
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
@@ -190,12 +182,7 @@ function AddonCard({ addon, onChanged, onOpenLogs }: {
   );
 }
 
-/**
- * AddonTerminal — the Logs tab as a CMD/UNIX-style console. One selector for
- * the addon (or ALL), a live tail (2s poll), monospace lines with UTC-typed
- * timestamps, level + source coloring, and count/status chips in a title bar.
- * `initialId` comes from the "Logs" button on an addon card.
- */
+
 function AddonTerminal({ addons, initialId }: { addons: AddonClientEntry[]; initialId: string | null }) {
   const [target, setTarget] = useState<string>(initialId ?? 'all');
   const [entries, setEntries] = useState<TerminalEntry[]>([]);
@@ -209,7 +196,7 @@ function AddonTerminal({ addons, initialId }: { addons: AddonClientEntry[]; init
       if (!resp.ok) return;
       const payload = await resp.json() as { logs: TerminalEntry[] };
       setEntries(payload.logs);
-    } catch { /* transient */ }
+    } catch {  }
   }, []);
 
   useEffect(() => { void load(target); }, [target, load]);
@@ -320,7 +307,7 @@ export const AddonHub = memo(function AddonHub() {
     return () => window.removeEventListener('moriko:addons-reloaded', onReload);
   }, [refresh]);
 
-  /** Terminal takes over fetching — the card button just selects the stream. */
+  
   const openLogs = useCallback((id: string) => {
     setLogsFor(id);
     setTab('logs');
@@ -424,7 +411,7 @@ export const AddonHub = memo(function AddonHub() {
   );
 });
 
-/** Dock shortcut (right dock "Addons" tab) — opens the Hub page. */
+
 export const AddonDockShortcut = memo(function AddonDockShortcut({ width: _width }: { width?: number }) {
   void _width;
   const setView = useStore((state) => state.setView);
@@ -443,13 +430,7 @@ export const AddonDockShortcut = memo(function AddonDockShortcut({ width: _width
   );
 });
 
-/**
- * AddonHubModal — the compact Hub as a themed popup list (opened from the
- * sidebar footer's addon-brick button). One row per addon: name — description
- * + version, an ON/OFF switch, and ONE global reload button for all addons.
- * The full manager (details, permissions table, logs, remove) stays on the
- * Hub page (ViewId 'addons').
- */
+
 export function AddonHubModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [addons, setAddons] = useState<AddonClientEntry[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -463,7 +444,7 @@ export function AddonHubModal({ open, onClose }: { open: boolean; onClose: () =>
         const payload = await resp.json() as { addons: AddonClientEntry[] };
         setAddons(payload.addons);
       }
-    } catch { /* keep last known list */ }
+    } catch {  }
   }, []);
 
   useEffect(() => {
@@ -486,8 +467,7 @@ export function AddonHubModal({ open, onClose }: { open: boolean; onClose: () =>
     } finally { setBusyId(null); }
   };
 
-  /** ONE button for everything: reseed every builtin from addons-src, then
-   *  reload the registry — new addons are picked up without a restart. */
+  
   const reloadAll = async () => {
     setReloading(true);
     try {

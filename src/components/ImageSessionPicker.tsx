@@ -4,12 +4,7 @@ import { ImagePlus, Loader2, Trash2 } from './icons';
 import { useStore } from '../store/useStore';
 import './ui';
 
-/**
- * The Image Studio session picker: the dropdown that lists every generation
- * session so the user can continue one, delete it, or start a new one. Used
- * as the sidebar popover (Image Studio ▸ History) and as an inline panel
- * inside the studio itself.
- */
+
 export function ImageSessionPicker({ onClose }: { onClose: () => void }) {
   const sessions = useStore((state) => state.imageSessions);
   const activeId = useStore((state) => state.activeImageSessionId);

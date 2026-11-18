@@ -1,15 +1,4 @@
-/**
- * Persistent addon storage (Addon v2, A1) — closes audit A-05.
- *
- * `store` was an in-memory Map that died on restart and on every reload; the
- * values now live in files:
- *   - global:    ~/.moriko-studio/addon-data/<id>/store.json
- *   - workspace: <workspace>/.moriko/addons/<id>/store.json   (project-scoped)
- *
- * Writes are debounced (200 ms) and flushed on dispose/exit; the JSON write
- * itself is atomic (tmp+rename via atomicWriteJson). The per-addon API keeps
- * the SAME synchronous get/set/delete surface (values are strings, like v1).
- */
+
 
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -104,7 +93,7 @@ export function storeDelete(addonId: string, key: string, scope: 'global' | 'wor
   schedule(file, state);
 }
 
-/** Flush one addon's stores (called on deactivate; store SURVIVES reload). */
+
 export function flushAddonStores(addonId: string): void {
   for (const [file, state] of stores) {
     if (file.includes(`addon-data${path.sep}${addonId}${path.sep}`) || file.includes(`.moriko${path.sep}addons${path.sep}${addonId}${path.sep}`)) {
@@ -113,7 +102,7 @@ export function flushAddonStores(addonId: string): void {
   }
 }
 
-/** Flush everything (server shutdown). */
+
 export function flushAllStores(): void {
   for (const [file, state] of stores) flush(file, state);
 }

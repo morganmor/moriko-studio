@@ -1,15 +1,4 @@
-/**
- * Topbar addon buttons — a tiny user-editable whitelist deciding which addons
- * get a launch button in the harness TopBar (replaces the old hardcoded RSAT
- * gem button).
- *
- * The list lives in `~/.moriko-studio/topbar-addons.json`:
- *   { "addons": ["rsat", "moco-canvas"] }
- * A user or an agent can edit the file directly; the client also patches it
- * through POST /api/addons/topbar-buttons. Buttons render only for addons in
- * the list that are enabled and healthy — the list is the anti-crowding gate,
- * so not every installed addon floods the topbar.
- */
+
 
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -17,14 +6,14 @@ import path from 'node:path';
 import { atomicWriteJson } from '../atomicWrite.js';
 import { morikoHome } from '../paths.js';
 
-/** Shipped defaults — used until the user creates/edits the file. */
+
 const DEFAULTS = ['rsat', 'moco-canvas'];
 
 function file(): string {
   return path.join(morikoHome, 'topbar-addons.json');
 }
 
-/** Addon ids only — basename-safe, trimmed, deduped, order preserved. */
+
 function sanitize(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   const seen = new Set<string>();
@@ -49,7 +38,7 @@ export function listTopbarAddons(): string[] {
   }
 }
 
-/** Overwrite the whitelist; returns the sanitized list that was persisted. */
+
 export function setTopbarAddons(ids: unknown): string[] {
   const addons = sanitize(ids);
   atomicWriteJson(file(), { addons });

@@ -1,16 +1,4 @@
-/**
- * NotificationHost (Addon v2, A5) — center-top viewport toasts for addon
- * notifications (`ui.toast` / achievement frames on the SSE bus).
- *
- * NOT the NoticeCenter stack at the bottom-right bell: addon achievements are
- * momentary, celebratory, and must be seen — hence center-top, portaled to
- * document.body (escapes the zoomed #root transform, 1:1 viewport pixels),
- * with its own queue, its own timing, and reduced-motion respect.
- *
- * Frames arrive as SSE topic `addon.notify` with payload.notification:
- * { kind: 'info'|'warn'|'error'|'achievement', title, subtitle?, icon?,
- *   openView?, ttlMs? }. Clicking a toast with openView navigates there.
- */
+
 
 import { memo, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';

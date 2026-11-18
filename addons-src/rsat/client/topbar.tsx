@@ -1,9 +1,4 @@
-/**
- * RSA/T topbar — port dari design/split/rsat-panel-topbar.html, versi backend:
- * crumb + tombol toggle sidebar host + toggle dock RSAT + kontrol tema/accent
- * host. Kontrol demo (acting-as, Simulate Agent B, Reset demo) DIHAPUS —
- * aksi agent kini nyata: mereka bekerja lewat tool rsat_* di sesi chat.
- */
+
 import { useState } from 'react';
 import { getAppearance, navigate, setAccent as hostSetAccent, setTheme as hostSetTheme, toggleSidebar } from '@moriko/host';
 import { Ic } from './icon.tsx';
@@ -11,7 +6,7 @@ import { Ic } from './icon.tsx';
 const ACCENTS = ['ember', 'sakura', 'matcha', 'ocean', 'violet'] as const;
 const THEMES = ['light', 'dark', 'mocha'] as const;
 
-/** Kontrol tampilan host (tema/accent) — preferensi nyata, bukan demo. */
+
 function Appearance() {
   const [ap, setAp] = useState(() => getAppearance());
   const pickTheme = (m: (typeof THEMES)[number]) => {
@@ -47,7 +42,7 @@ function Appearance() {
   );
 }
 
-/** Label crumb per view (desain: #crumbView dinamis). */
+
 const VIEW_LABELS: Record<string, string> = {
   overview: 'Overview',
   board: 'Quest board',

@@ -10,6 +10,8 @@ import {
   listPendingPermissions,
   revokeAllGrants,
 } from './permissions.js';
+import { listBgTasks, stopBgTaskAsUser } from './tools/bg-task.js';
+import { decideGate, listPendingGates } from './operatorGates.js';
 import { answerQuestions, extendQuestionTimeout, listPendingQuestions } from './tools/ask.js';
 import {
   addAllowedDir,
@@ -41,7 +43,7 @@ import {
 } from './treeIndex.js';
 import type { IgnoreRules } from './treeIndex.js';
 
-/** Validates a PUT /tree/:id/rules body into clean IgnoreRules. */
+
 function sanitizeTreeRules(input: unknown): IgnoreRules {
   const raw = (input ?? {}) as { dirs?: unknown; patterns?: unknown };
   const pick = (value: unknown): string[] =>
@@ -51,28 +53,9 @@ function sanitizeTreeRules(input: unknown): IgnoreRules {
   return { dirs: pick(raw.dirs), patterns: pick(raw.patterns) };
 }
 
-/**
- * REST surface for the built-in agent harness:
- *
- *   GET    /api/agent/workspaces          — registry + activeId
- *   POST   /api/agent/workspaces          — register a directory { path, label? }
- *   DELETE /api/agent/workspaces/:id      — remove from the registry (disk untouched)
- *   PUT    /api/agent/workspaces/active   — set the active one { id }
- *   GET    /api/agent/browse?path=…       — read-only directory listing for the picker
- *   POST   /api/agent/call                — debug/inspection helper: run one harness tool
- *   GET    /api/agent/permissions         — pending outside-workspace permission requests
- *   POST   /api/agent/permissions/:id/decision — user decision { approve, remember? }
- *   GET    /api/agent/vault?session=…     — file snapshots (the undo system)
- *   POST   /api/agent/vault/restore       — restore a snapshot { session, snapshotId, to? }
- *   POST   /api/agent/vault/remove-created — delete an agent-created file { session, path }
- *   DELETE /api/agent/vault/:id?session=… — permanently purge one snapshot
- *   POST   /api/agent/harness-reload      — typecheck gate + graceful server reload
- *
- * The browse route exists for the Explorer-style folder picker: it is
- * strictly read-only and never mutates anything.
- */
 
-/** One row of the picker's listing (Explorer-style table). */
+
+
 interface BrowseEntry {
   name: string;
   path: string;
@@ -81,7 +64,7 @@ interface BrowseEntry {
   size?: number | null;
 }
 
-/** Drive roots on Windows, "/" elsewhere — the picker's starting level. */
+
 function listRoots(): BrowseEntry[] {
   if (process.platform === 'win32') {
     const roots: BrowseEntry[] = [];
@@ -99,72 +82,71 @@ function listRoots(): BrowseEntry[] {
   return [{ name: '/', path: '/', kind: 'drive', size: null }];
 }
 
-/** Combined dirs+files cap per listing (the client paginates visually anyway). */
+
 const MAX_LISTED_ENTRIES = 800;
 
 export function agentRouter(): Router {
   const router = Router();
 
-  /**
-   * BROWSER PANEL — the URL the SPA opens in a new tab/window when the agent
-   * drives the built-in browser. The panel itself connects over WebSocket
-   * (see browser/ws.ts) and never needs this route again after launch.
-   *
-   *   GET /api/agent/browser/panel-url?session=…
-   */
+  
   router.get(
     '/browser/panel-url',
     asyncRoute(async (req, res) => {
       const session = String(req.query.session ?? '').trim();
       const query = session ? `?session=${encodeURIComponent(session)}` : '';
-      if (browserManager.isWebAccessOn() === false) {
+      const sid = session || undefined;
+      if (browserManager.isWebAccessOn(sid) === false) {
         throw new HttpError(403, 'Web access is OFF — the built-in browser is disabled (Configuration → Tools → Web Access).');
       }
-      void browserManager.ensureContext().catch(() => undefined);
+      void browserManager.ensureContext(sid).catch(() => undefined);
       res.json({ panelUrl: `/browser-view.html${query}` });
     }),
   );
 
-  /**
-   * WEB ACCESS KILL-SWITCH — the SPA calls this whenever the Web Access
-   *   toggle changes value. `on: true` merely arms the gate; `on: false`
-   *   broadcasts shutdown to every open panel (they close their own
-   *   windows) and tears down the shared Edge context so nothing keeps
-   *   running in the background.
-   *
-   *   POST /api/agent/browser/web-access  { on: boolean }
-   */
   router.post(
     '/browser/web-access',
     asyncRoute(async (req, res) => {
-      const body = req.body as { on?: unknown };
-      await browserManager.setWebAccess(body?.on === true);
-      res.json({ ok: true, webAccess: body?.on === true });
+      const body = req.body as { on?: unknown; sessionId?: unknown; session?: unknown };
+      const rawSid =
+        typeof body?.sessionId === 'string' && body.sessionId.trim()
+          ? body.sessionId.trim()
+          : typeof body?.session === 'string' && body.session.trim()
+            ? body.session.trim()
+            : undefined;
+      await browserManager.setWebAccess(body?.on === true, rawSid);
+      res.json({ ok: true, webAccess: body?.on === true, sessionId: rawSid ?? null });
     }),
   );
 
-  /**
-   * Immediate teardown + panel shutdown — used on harness exit and by
-   * scripts. Same effect as Web Access off, without flipping the gate.
-   *
-   *   POST /api/agent/browser/close
-   */
   router.post(
     '/browser/close',
-    asyncRoute(async (_req, res) => {
-      await browserManager.close();
+    asyncRoute(async (req, res) => {
+      const body = req.body as { sessionId?: unknown; session?: unknown } | undefined;
+      const rawSid =
+        typeof body?.sessionId === 'string' && body.sessionId.trim()
+          ? body.sessionId.trim()
+          : typeof body?.session === 'string' && body.session.trim()
+            ? body.session.trim()
+            : undefined;
+      await browserManager.close(rawSid);
       res.json({ ok: true });
     }),
   );
 
-  /**
-   * DURABLE RUNS — the job journal's read surface (see docs/ARCHITECTURE.md).
-   *   GET /api/agent/runs?sessionId=…  — a session's runs, newest first
-   *   GET /api/agent/runs/:id           — one run's full record incl. call log
-   *
-   * No writes: status transitions happen only in the chat route and the boot
-   * sweep, never here.
-   */
+  router.get(
+    '/browser/download/:sessionId/:downloadId',
+    asyncRoute(async (req, res) => {
+      const rawSid = String(req.params.sessionId ?? '').trim();
+      const downloadId = String(req.params.downloadId ?? '').trim();
+      const entry = browserManager.getDownload(downloadId, rawSid || undefined);
+      if (!entry || entry.status !== 'done' || !existsSync(entry.path)) {
+        throw new HttpError(404, 'Browser download not found.');
+      }
+      res.download(entry.path, entry.filename);
+    }),
+  );
+
+  
   router.get(
     '/runs',
     asyncRoute(async (req, res) => {
@@ -191,14 +173,7 @@ export function agentRouter(): Router {
     res.json({ workspaces: store, activeId });
   });
 
-  /**
-   * VISUAL v2 PICK — the user chose one frontend-preview candidate. Broadcasts
-   * the decision to every other browser (their card re-binds the chosen frame)
-   * and returns the tool_result-shaped sentence the client turns into a steer
-   * so the RUNNING model learns the pick between tool rounds.
-   *
-   *   POST /api/agent/visual/pick  { visualId, variantId, variantIndex?, title? }
-   */
+  
   router.post('/visual/pick', (req, res) => {
     const body = (req.body ?? {}) as {
       visualId?: unknown;
@@ -218,14 +193,7 @@ export function agentRouter(): Router {
     res.json({ ok: true, steerText: resolved.steerText });
   });
 
-  /**
-   * F5.1 — VISUAL VENDOR BUNDLES: serves the locally-built IIFE bundles from
-   * the MORIKO home cache (scripts/build-visual-vendor.mjs). Same-origin so
-   * the client can fetch the text and inject it into the sandboxed iframe;
-   * the iframe itself keeps CSP default-src 'none'.
-   *
-   *   GET /api/agent/visual-vendor/:lib
-   */
+  
   router.get('/visual-vendor/:lib', (req, res) => {
     const allowed = new Set(['three', 'three-addons-orbit', 'pixi', 'matter', 'moriko-gl']);
     const lib = String(req.params.lib ?? '');
@@ -306,11 +274,7 @@ export function agentRouter(): Router {
     }),
   );
 
-  /**
-   * NATIVE device folder picker (Windows FolderBrowserDialog via the local
-   * proxy's PowerShell). Resolves { path: string | null } — null when the
-   * user cancels or no native dialog is available.
-   */
+  
   router.post(
     '/native-pick',
     asyncRoute(async (_req, res) => {
@@ -320,7 +284,7 @@ export function agentRouter(): Router {
   );
 
 
-  /** Per-workspace tree payload shape (routes + SSE agree on this). */
+  
   const treePayload = (workspaceId: string) => {
     const view = getTree(workspaceId);
     if (!view) return null;
@@ -334,7 +298,7 @@ export function agentRouter(): Router {
     };
   };
 
-  /** GET /api/agent/tree?workspaceId=… — the full tree (from MEMORY). */
+  
   router.get('/tree', (req, res) => {
     const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
     const payload = workspaceId ? treePayload(workspaceId) : null;
@@ -343,7 +307,7 @@ export function agentRouter(): Router {
     res.json(payload);
   });
 
-  /** POST /api/agent/tree/:id/refresh — force one rebuild walk. */
+  
   router.post(
     '/tree/:workspaceId/refresh',
     asyncRoute(async (req, res) => {
@@ -369,17 +333,7 @@ export function agentRouter(): Router {
       res.json({ rules: applied });
     }),
   );
-  /**
-   * GET /api/agent/tree/events?workspaceId=… — the realtime channel.
-   *
-   * An SSE stream of { type:'tree_hello', version } followed by
-   * { type:'tree_delta', … } frames (the same shapes the in-stream
-   * `tree_update` event carries, minus
-   * the sessionId). The channel is IDLE-path only: while a chat stream runs,
-   * tree deltas ride it as `tree_update` events; this endpoint covers the
-   * panel when no chat is generating. Heartbeat every 20s; auto-closes when
-   * the workspace is removed.
-   */
+  
   router.get('/tree/events', (req, res) => {
     const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
     if (!workspaceId || !getTree(workspaceId)) {
@@ -414,12 +368,7 @@ export function agentRouter(): Router {
     });
   });
 
-  /**
-   * GRACEFUL HARNESS RELOAD — the manual/HTTP twin of agent__harness_reload.
-   * Runs the typecheck apply-gate, then schedules an exit(75) the supervisor
-   * restarts from; the exit waits until no chat stream is active. 409 with
-   * the compiler output when the gate refuses.
-   */
+  
   router.post(
     '/harness-reload',
     asyncRoute(async (_req, res) => {
@@ -483,10 +432,7 @@ export function agentRouter(): Router {
     }),
   );
 
-  /**
-   * Forget every "Allow for this session" grant (paths + commands). The
-   * grants file is what survives harness reloads; this clears it.
-   */
+  
   router.delete(
     '/permissions/grants',
     (_req, res) => {
@@ -495,12 +441,7 @@ export function agentRouter(): Router {
     },
   );
 
-  /**
-   * Debug/inspection helper (mirrors the MCP `/call` route): run one harness
-   * tool against the ACTIVE workspace without going through a model round —
-   * this is what `scripts/test-agent-e2e.mjs` drives. Outside-workspace
-   * targets pause here too; decide them via the permission endpoints.
-   */
+  
   router.post(
     '/call',
     asyncRoute(async (req, res) => {
@@ -526,7 +467,7 @@ export function agentRouter(): Router {
   );
 
 
-  /** Undecided requests (for UI reconnects; the live stream is the primary path). */
+  
   router.get('/permissions', (_req, res) => {
     res.json({ requests: listPendingPermissions() });
   });
@@ -534,11 +475,12 @@ export function agentRouter(): Router {
   router.post(
     '/permissions/:id/decision',
     asyncRoute(async (req, res) => {
-      const body = req.body as { approve?: unknown; remember?: unknown };
+      const body = req.body as { approve?: unknown; remember?: unknown; reason?: unknown };
       if (typeof body?.approve !== 'boolean') {
         throw new HttpError(400, 'A boolean "approve" is required.');
       }
-      const applied = decidePermission(req.params.id, body.approve, body.remember === true);
+      const reason = typeof body.reason === 'string' ? body.reason.slice(0, 2000) : undefined;
+      const applied = decidePermission(req.params.id, body.approve, body.remember === true, reason);
       if (!applied) {
         throw new HttpError(404, 'Unknown or already-decided permission request.');
       }
@@ -546,17 +488,52 @@ export function agentRouter(): Router {
     }),
   );
 
+  
+  router.get('/tasks', (req, res) => {
+    const sessionId = typeof req.query.sessionId === 'string' && req.query.sessionId.trim() ? req.query.sessionId.trim() : undefined;
+    res.json({ tasks: listBgTasks(sessionId) });
+  });
 
-  /** Undecided question batches (for polling / reconnects). */
+  
+  router.post('/tasks/:id/stop', (req, res) => {
+    const body = req.body as { sessionId?: unknown } | undefined;
+    const sessionId = typeof body?.sessionId === 'string' && body.sessionId.trim() ? body.sessionId.trim() : undefined;
+    const result = stopBgTaskAsUser(req.params.id, sessionId);
+    if (!result.ok) {
+      if (result.notOwner) throw new HttpError(403, 'That process belongs to another session.');
+      throw new HttpError(404, result.error ?? 'Unknown task.');
+    }
+    res.json({ ok: true });
+  });
+
+  
+  router.get('/gates', (_req, res) => {
+    res.json({ requests: listPendingGates() });
+  });
+
+  router.post(
+    '/gates/:id/decision',
+    asyncRoute(async (req, res) => {
+      const body = req.body as { verdict?: unknown; reason?: unknown };
+      if (body?.verdict !== 'accept' && body?.verdict !== 'reject') {
+        throw new HttpError(400, 'A "verdict" of "accept" or "reject" is required.');
+      }
+      const reason = typeof body.reason === 'string' ? body.reason : '';
+      const applied = decideGate(req.params.id, body.verdict, reason);
+      if (!applied) {
+        throw new HttpError(404, 'Unknown or already-decided operator gate.');
+      }
+      res.json({ ok: true, verdict: body.verdict });
+    }),
+  );
+
+
+  
   router.get('/ask-user', (_req, res) => {
     res.json({ requests: listPendingQuestions() });
   });
 
-  /**
-   * Tab-hidden keepalive (C3): push the auto-skip deadline forward while the
-   * user cannot see the card. Client heartbeats here; a settled batch just
-   * answers ok:false (harmless).
-   */
+  
   router.post('/ask-user/:id/extend', (req, res) => {
     const body = req.body as { ms?: unknown };
     const ms =
@@ -612,11 +589,7 @@ export function agentRouter(): Router {
     res.json({ ok: true });
   });
 
-  /**
-   * Diff Panel: delete a file the AGENT CREATED (no pre-agent state exists to
-   * restore to). A pre-delete snapshot is taken first, so even this removal
-   * is undoable through the restore marker. Workspace-jailed.
-   */
+  
   router.post('/vault/remove-created', (req, res) => {
     const body = req.body as { session?: unknown; path?: unknown };
     if (typeof body?.session !== 'string' || typeof body?.path !== 'string') {
@@ -704,13 +677,13 @@ export function agentRouter(): Router {
     '.md': 'text/markdown; charset=utf-8',
   };
 
-  /** ?sessionId=<chatId> — scopes raw/preview to that session's workspace. */
+  
   function previewSessionId(req: { query: Record<string, unknown> }): string | undefined {
     const raw = req.query.sessionId;
     return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined;
   }
 
-  /** Resolves a raw/preview request path INSIDE the active workspace only. */
+  
   function resolvePreviewPath(relative: string, sessionId?: string): string {
     const workspace = getActiveWorkspace(sessionId);
     if (!workspace) throw new HttpError(400, 'No active agent workspace.');

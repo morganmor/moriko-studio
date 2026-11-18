@@ -1,15 +1,4 @@
-/**
- * agent__batch_read — read ANY number of files in ONE call.
- *
- * Contract (owner directive 2026-10-22): the CALLER decides how many files and
- * how many lines per file. Every entry MUST carry its own `maxLines` limit —
- * the same per-file cap read_file uses. There is NO default, NO clamp, NO
- * min/max, NO file-count cap, NO aggregate budget and NO output truncation:
- * nothing in the harness may cut a batch read.
- *
- * Each file still gets its numbered window, sha footer and read receipt, so
- * the read-before-edit gate works exactly as with read_file.
- */
+
 import { readFileSync, statSync } from 'node:fs';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { num, resolveWithPermission } from './shared.js';
@@ -20,15 +9,11 @@ import { MAX_READ_BYTES } from './shared.js';
 
 interface BatchEntry {
   path: string;
-  /** Caller-specified line limit for THIS file — required, never defaulted. */
+  
   maxLines: number;
 }
 
-/**
- * Accepts { files: [{ path, maxLines }] } (canonical) or { paths: [...] }.
- * A bare string entry is rejected: without a per-file maxLines there would
- * have to be a default, and defaults are forbidden.
- */
+
 function parseEntries(args: Record<string, unknown>): { entries: BatchEntry[]; problem?: string } {
   const raw = Array.isArray(args.files) ? args.files : Array.isArray(args.paths) ? args.paths : null;
   if (!raw) {
@@ -111,7 +96,6 @@ export async function batchReadTool(args: Record<string, unknown>, ctx: AgentToo
     const eol = content.includes('\r\n') ? 'CRLF' : 'LF';
     const contentHash = sha256(content);
 
-    // Only EOF bounds the window — the caller's maxLines is never clamped.
     const sliceEnd = Math.min(maxLines, view.length);
     const slice: string[] = [];
     for (let n = 0; n < sliceEnd; n += 1) {

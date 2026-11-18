@@ -1,10 +1,4 @@
-/**
- * agent__insert_at_line — place newString BEFORE a given line (or at EOF via
- * append: true) through the same safe path as edit_file: read-before-edit +
- * optimistic concurrency + read-range enforcement (the insertion point must
- * touch the window the model actually read), LF-space splice, vault snapshot,
- * syntax guard.
- */
+
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, bool } from './shared.js';
 import { resolveWriteTarget, loadEditable, finishEdit } from './edit-core.js';

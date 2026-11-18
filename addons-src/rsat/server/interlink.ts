@@ -1,16 +1,4 @@
-/**
- * RSA/T Interlinked & Architectural Scanner Engine (R8).
- * Self-contained inside addons-src/rsat/server/ (NO imports from host server/).
- *
- * Scans the bound Moriko workspace in real time:
- *  - Discovers TS/TSX/JS/JSX source files across src/, server/, addons-src/
- *  - Parses exports (functions, classes, hooks, types, components) -> OUT sockets
- *  - Parses imports (value vs type-only, named symbols) -> IN sockets & glowing wires
- *  - Maps every file to PRD Architecture Modules (layer + allowedImports) and
- *    Achievement Quest claims/ledgers (active touch, cross-agent links)
- *  - Detects circular dependencies (Tarjan SCC) & cross-layer violations
- *  - Emits both the ComfyUI Node-Wire Graph payload AND the @RSLK v1 Agent DSL.
- */
+
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -27,7 +15,7 @@ const POSITIONS_FILE = `${DIR}/interlink-positions.json`;
 const MAX_SCAN_FILES = 600;
 const MAX_CANVAS_NODES = 48;
 
-/** Cache hasil scan per workspace root (TTL 4 detik agar responsif tapi hemat I/O). */
+
 const graphCache = new Map();
 const CACHE_TTL_MS = 4000;
 
@@ -36,7 +24,7 @@ export function invalidateInterlinkCache(root) {
   else graphCache.clear();
 }
 
-/** Baca posisi kustom node yang digeser user di kanvas Interlinked. */
+
 export function loadNodePositions(ws) {
   try {
     if (!ws?.root() || !ws.exists(POSITIONS_FILE)) return {};
@@ -47,7 +35,7 @@ export function loadNodePositions(ws) {
   }
 }
 
-/** Simpan posisi node yang digeser user ke `.moriko/rsat/interlink-positions.json`. */
+
 export async function saveNodePositions(api, sessionId, positions) {
   const ws = workspaceOf(api, sessionId);
   if (!ws?.root()) return { saved: false };
@@ -66,7 +54,7 @@ export async function saveNodePositions(api, sessionId, positions) {
   return { saved: true, count: Object.keys(merged).length };
 }
 
-/** Hapus SEMUA posisi tersimpan — graph kembali ke grid default yang rapi. */
+
 export async function clearNodePositions(api, sessionId) {
   const ws = workspaceOf(api, sessionId);
   if (!ws?.root()) return { cleared: false };
@@ -78,7 +66,7 @@ export async function clearNodePositions(api, sessionId) {
   return { cleared: true };
 }
 
-/** Walk direktori workspace secara deterministik. */
+
 function walkWorkspaceFiles(rootDir, maxFiles = MAX_SCAN_FILES, includeAddons = false) {
   const out = [];
   function walk(absDir, relPrefix) {
@@ -110,7 +98,7 @@ function walkWorkspaceFiles(rootDir, maxFiles = MAX_SCAN_FILES, includeAddons = 
   return out;
 }
 
-/** Resolve relative specifier (`./store.js` -> `addons-src/rsat/server/store.ts`). */
+
 function resolveImportTarget(fromFile, spec, fileSet) {
   if (!spec || !spec.startsWith('.')) return null;
   const fromDir = path.posix.dirname(fromFile);
@@ -126,7 +114,7 @@ function resolveImportTarget(fromFile, spec, fileSet) {
   return null;
 }
 
-/** Parse cepat & akurat untuk export dan import dari satu file sumber. */
+
 export function parseFileAstLight(source) {
   const exportsList = [];
   const seenExp = new Set();
@@ -201,7 +189,7 @@ export function parseFileAstLight(source) {
   return { exports: exportsList.slice(0, 8), imports: importsList };
 }
 
-/** Deduksi modul arsitektur otomatis bila PRD belum mendefinisikan modules[]. */
+
 function deriveModules(doc, allFiles) {
   if (doc?.prd?.modules?.length > 0) {
     return doc.prd.modules.map((m, idx) => {
@@ -287,7 +275,7 @@ function matchModuleForFile(file, modules) {
   return modules[modules.length - 1] || { id: 'M-01', name: 'Core', layer: 'shared', allowedImports: ['M-01'] };
 }
 
-/** Tarjan Strongly Connected Components untuk mendeteksi circular dependency. */
+
 function findCycleEdges(nodes, edges) {
   const adj = new Map();
   for (const n of nodes) adj.set(n, []);
@@ -345,7 +333,7 @@ function findCycleEdges(nodes, edges) {
   return { sccCount: sccs.length, cycleEdgeKeys };
 }
 
-/** Bangun graf Interlinked penuh dari workspace aktif. */
+
 export function buildWorkspaceInterlink(api, sessionId, opts = {}) {
   const ws = workspaceOf(api, sessionId);
   const root = ws?.root();
@@ -857,7 +845,7 @@ export function buildWorkspaceInterlink(api, sessionId, opts = {}) {
   return result;
 }
 
-/** Format Khusus Agent: @RSLK v1 (Server-side generator untuk rsat_interlink tool). */
+
 export function formatRslkServer(clusters, nodes, wires, meta = {}) {
   const broken = wires.filter((w) => w.kind === 'broken');
   const cross = wires.filter((w) => w.kind === 'cross');
@@ -958,10 +946,7 @@ export function formatRslkServer(clusters, nodes, wires, meta = {}) {
   return lines.join('\n');
 }
 
-/**
- * Verifikasi apakah seluruh simbol yang dijanjikan di `achievement.contracts.provides`
- * benar-benar telah di-export pada AST file di dalam scope quest tersebut.
- */
+
 export function verifyQuestContracts(api, sessionId, achievement) {
   const normalizeSymName = (raw) =>
     String(raw || '')
@@ -992,11 +977,7 @@ export function verifyQuestContracts(api, sessionId, achievement) {
   };
 }
 
-/**
- * Cek cepat untuk Guard saat Agent menulis ke `relPath`:
- * 1) Apakah file tersebut melanggar allowedImports modulnya?
- * 2) Berapa downstream consumer di luar quest Agent tersebut (blast radius)?
- */
+
 export function inspectFileArchImpact(api, sessionId, relPath) {
   try {
     const clean = String(relPath || '').replace(/\\/g, '/');

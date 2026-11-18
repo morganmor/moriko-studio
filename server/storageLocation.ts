@@ -1,15 +1,4 @@
-/**
- * STORAGE LOCATION — the API layer for "where Moriko keeps its data".
- *
- * MORIKO_HOME is resolved once at boot (paths.ts), so the user's pick from
- * Settings cannot switch the running process live. The whole contract:
- *
- *   1. validate the folder,
- *   2. persist the choice in .env (MORIKO_HOME),
- *   3. the user presses "Reload harness" and the fresh boot reads the new
- *      home — which starts EMPTY. Data in the previous location is never
- *      touched: no copy, no move, no delete.
- */
+
 
 import { existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -19,15 +8,15 @@ import { getEnvValue, setEnvValue } from './envFile.js';
 import { morikoHome, morikoHomeDefault, morikoHomeDisplay } from './paths.js';
 
 export interface StorageLocationView {
-  /** The home the RUNNING process was booted with. */
+  
   current: string;
-  /** What .env selects — differs from `current` until the next reload. */
+  
   pending: string | null;
-  /** The built-in default (~/.moriko-studio). */
+  
   default: string;
-  /** True when the running home is the default. */
+  
   isDefault: boolean;
-  /** Set after PUT — the change goes live on the next harness reload. */
+  
   needsReload?: boolean;
 }
 
@@ -45,11 +34,7 @@ function view(): StorageLocationView {
   };
 }
 
-/**
- * Validate a user-supplied location before anything is written. Absolute, not
- * the source tree, not an existing FILE, and writable (probe by creating the
- * directory — the same mkdir the boot would run).
- */
+
 export function validateLocation(raw: string): { ok: true; resolved: string } | { ok: false; error: string } {
   const value = raw.trim();
   if (!value) return { ok: false, error: 'Enter an absolute folder path.' };
@@ -87,12 +72,12 @@ export function validateLocation(raw: string): { ok: true; resolved: string } | 
   return { ok: true, resolved };
 }
 
-/** Current location + what .env selects (never mutates anything). */
+
 export function getStorageLocation(): StorageLocationView {
   return view();
 }
 
-/** Persist a new location: validate + write .env. Nothing is copied or moved. */
+
 export function setStorageLocation(raw: string): StorageLocationView & { needsReload: boolean } {
   const checked = validateLocation(raw);
   if (!checked.ok) {

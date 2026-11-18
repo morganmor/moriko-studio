@@ -5,55 +5,26 @@ import { atomicWriteJson } from './atomicWrite.js';
 import { appDataDir, conversationDir, conversationIndexFile, conversationManifestFile } from './paths.js';
 import { migrateAttachmentDataUrls, stripAttachmentDataUrls, stripTurnPayloads, INLINE_DATA_URL_LIMIT, putBytes } from './attachmentStore.js';
 
-/**
- * CONVERSATION STORE — one shared chat history for every browser, archived
- * one chat per folder.
- *
- * Conversations used to live ONLY in the browser's localStorage, so Chrome
- * and Firefox (and every profile/incognito window) each showed a different —
- * private — history. The proxy is the single process every browser already
- * talks to and already persists to `.data/`, so the shared truth moved here.
- *
- * Layout (see paths.ts):
- *
- *   .data/conversation/
- *   ├── index.json          — summaries (id, title, updatedAt, rev, turnCount, preview)
- *   ├── manifest.json       — { version, nextSeq, order, folders: { id → dir } }
- *   ├── chat-001-20260919/
- *   │   ├── chat-data.json  — the full conversation record (turns…)
- *   │   └── goals-plan.json — this session's agent goals (see goals/store)
- *   └── chat-002-20260920/…
- *
- * Rewriting ONE multi-megabyte JSON file on every sync is gone: a sync now
- * writes only the chats it touched, plus the two small index files.
- *
- * The browser keeps its localStorage copy only as an instant-boot cache.
- * Sync is PER CONVERSATION (upsert by id + explicit deletions), so two
- * browsers editing different chats never overwrite each other's history.
- *
- * Records are opaque JSON — the client owns the `Conversation` shape; this
- * module only validates what the merge needs (string id, turns array) and
- * writes atomically (tmp + rename, one write at a time).
- */
+
 
 const INDEX_FILE = conversationIndexFile;
 const MANIFEST_FILE = conversationManifestFile;
 const LEGACY_ARCHIVE = path.join(appDataDir, 'conversations.json');
 
-/** Anything the client pushed that survived validation. */
+
 export type StoredConversation = { id: string } & Record<string, unknown>;
 
-/** Oversized single-chat guard (base64 attachments inflate turns). */
+
 const MAX_RECORD_JSON = 24_000_000;
 
-/** Structural truth for the chat archive: order, folder mapping, next seq. */
+
 interface ManifestFile {
   version: 1;
-  /** Next chat sequence number for NEW chat folder names. */
+  
   nextSeq: number;
-  /** Authoritative chat order (folder sequence order). */
+  
   order: string[];
-  /** conversation id → folder name under .data/conversation/. */
+  
   folders: Record<string, string>;
 }
 
@@ -70,7 +41,7 @@ function isStoredConversation(entry: unknown): entry is StoredConversation {
   );
 }
 
-/** `chat-003-20260920` — padded sequence + the chat's creation date (local). */
+
 function chatFolderName(seq: number, createdAtMs: number): string {
   const date = new Date(Number.isFinite(createdAtMs) && createdAtMs > 0 ? createdAtMs : Date.now());
   const pad = (value: number): string => String(value).padStart(2, '0');
@@ -103,11 +74,7 @@ function readManifest(): ManifestFile {
   return emptyManifest();
 }
 
-/**
- * Adopts chat folders that exist on disk but not in the manifest (a crashed
- * write, or a folder left behind by an older run): their chat-data.json holds
- * the record, and the folder name carries the sequence number.
- */
+
 function adoptOrphanFolders(active: ManifestFile, records: Map<string, StoredConversation>): void {
   const claimed = new Set(Object.values(active.folders));
   let entries: string[] = [];
@@ -140,11 +107,7 @@ function adoptOrphanFolders(active: ManifestFile, records: Map<string, StoredCon
   });
 }
 
-/**
- * First-access migration: the pre-restructure single-file archive
- * (`.data/conversations.json`) is split into the per-chat layout and the
- * original is parked as `.migrated` (never deleted). Runs once.
- */
+
 function migrateLegacyArchive(): void {
   if (!existsSync(LEGACY_ARCHIVE) || existsSync(MANIFEST_FILE)) return;
   let entries: StoredConversation[] = [];
@@ -186,14 +149,10 @@ function migrateLegacyArchive(): void {
 
 let cache: Map<string, StoredConversation> | null = null;
 let manifest: ManifestFile | null = null;
-/** Serializes disk writes so two syncs can never interleave a partial file. */
+
 let writeChain: Promise<void> = Promise.resolve();
 
-/**
- * Synchronous ON PURPOSE: the sync merge compares FULL records, and the
- * goals store needs the chat folder map without an await (its own writes are
- * sync persists). One boot-time read of small JSON files costs nothing.
- */
+
 function ensureLoaded(): Map<string, StoredConversation> {
   if (cache) return cache;
   migrateLegacyArchive();
@@ -225,18 +184,7 @@ function buildIndex(): Array<ConversationSummary> {
   return [...(cache?.values() ?? [])].map(summarizeConversation);
 }
 
-/**
- * VISUAL v2 — SERVER-SIDE EDIT-IN-PLACE. Replaces one stored visual payload
- * (matched by id) across every turn of a conversation record and flushes the
- * record to disk. This is what makes `render_visual` with `id` a true
- * update-in-place: the store never grows a second card, the new html rides
- * under the SAME id, and every client re-binds on its next hydration.
- *
- * Externalization follows the byte-store rule (>= INLINE_DATA_URL_LIMIT →
- * htmlRef), so an edit can move a payload inline ⇄ external without
- * corrupting the record. Returns false when the id is unknown to THIS
- * conversation — the tool then fails fast with the list of stored ids.
- */
+
 export function updateStoredVisual(
   sessionId: string,
   visualId: string,
@@ -281,7 +229,7 @@ export function updateStoredVisual(
   return false;
 }
 
-/** The stored ids of every visual in one conversation (newest first). */
+
 export function listStoredVisuals(sessionId: string): Array<{ id: string; title: string }> {
   const map = ensureLoaded();
   const record = map.get(sessionId);
@@ -311,7 +259,7 @@ export function listStoredVisuals(sessionId: string): Array<{ id: string; title:
   return found;
 }
 
-/** Summaries for every chat — the list view never needs the turn bodies. */
+
 export interface ConversationSummary {
   id: string;
   title: string;
@@ -319,17 +267,20 @@ export interface ConversationSummary {
   updatedAt: number;
   providerId?: string;
   model?: string;
-  /** 6A: the agent workspace this chat is bound to (sidebar grouping). */
+  
   workspaceId?: string;
-  /** COUNCIL (Council Agent addon): sub sessions carry their container's id. */
+  
   councilId?: string;
   councilRole?: 'main' | 'sub';
   councilAgentId?: string;
-  /** Monotonic client mutation counter — newer-wins tiebreak on merge. */
+  
   rev?: number;
   turnCount: number;
-  /** First ~120 chars of the newest turn — the sidebar's preview line. */
+  
   preview: string;
+  settings?: Record<string, unknown>;
+  compaction?: unknown;
+  liveContext?: unknown;
 }
 
 function latestPreview(turns: unknown[]): string {
@@ -359,19 +310,186 @@ export function summarizeConversation(entry: StoredConversation): ConversationSu
     rev: typeof entry.rev === 'number' && Number.isFinite(entry.rev) ? entry.rev : undefined,
     turnCount: turns.length,
     preview: latestPreview(turns),
+    ...(entry.settings && typeof entry.settings === 'object'
+      ? { settings: entry.settings as Record<string, unknown> }
+      : {}),
+    ...(entry.compaction !== undefined ? { compaction: entry.compaction } : {}),
+    ...(entry.liveContext !== undefined ? { liveContext: entry.liveContext } : {}),
   };
+}
+
+export interface ConversationConfigPatch {
+  settings?: Record<string, unknown>;
+  compaction?: unknown;
+  hasCompaction?: boolean;
+  providerId?: string;
+  model?: string;
+  liveContext?: unknown;
+  initialConversation?: StoredConversation;
+}
+
+export function patchConversationConfig(
+  id: string,
+  patch: ConversationConfigPatch,
+): StoredConversation | null {
+  if (!id || id.length > 96) return null;
+  const map = ensureLoaded();
+  const existing = map.get(id);
+
+  if (!existing) {
+    if (!patch.initialConversation || !Array.isArray(patch.initialConversation.turns)) {
+      return null;
+    }
+    const base = { ...patch.initialConversation, id } as Record<string, unknown> & { id: string };
+    stripAttachmentDataUrls(base as StoredConversation);
+    const baseSettings =
+      typeof base.settings === 'object' && base.settings !== null
+        ? (base.settings as Record<string, unknown>)
+        : {};
+    const created: StoredConversation = {
+      ...(base as StoredConversation),
+      ...(patch.settings
+        ? {
+            settings: {
+              ...baseSettings,
+              ...patch.settings,
+            },
+          }
+        : {}),
+      ...(patch.hasCompaction
+        ? { compaction: patch.compaction === null ? undefined : patch.compaction }
+        : {}),
+      ...(patch.providerId !== undefined ? { providerId: patch.providerId } : {}),
+      ...(patch.model !== undefined ? { model: patch.model } : {}),
+      ...(patch.liveContext !== undefined
+        ? { liveContext: patch.liveContext === null ? undefined : patch.liveContext }
+        : {}),
+      rev: Math.max(1, typeof base.rev === 'number' && Number.isFinite(base.rev) ? base.rev : 1),
+    };
+    if (patch.hasCompaction && patch.compaction === null) delete created.compaction;
+    if (patch.liveContext === null) delete created.liveContext;
+    if (JSON.stringify(created).length > MAX_RECORD_JSON) return null;
+    map.set(id, created);
+    scheduleFlush(new Set([id]), []);
+    return created;
+  }
+
+  const next: StoredConversation = { ...existing };
+  if (patch.settings) {
+    const prevSettings =
+      typeof existing.settings === 'object' && existing.settings !== null
+        ? (existing.settings as Record<string, unknown>)
+        : {};
+    next.settings = { ...prevSettings, ...patch.settings };
+  }
+  if (patch.hasCompaction) {
+    if (patch.compaction === null || patch.compaction === undefined) {
+      delete next.compaction;
+    } else {
+      next.compaction = patch.compaction;
+    }
+  }
+  if (patch.providerId !== undefined) next.providerId = patch.providerId;
+  if (patch.model !== undefined) next.model = patch.model;
+  if (patch.liveContext !== undefined) {
+    if (patch.liveContext === null) delete next.liveContext;
+    else next.liveContext = patch.liveContext;
+  }
+  const prevRev = typeof existing.rev === 'number' && Number.isFinite(existing.rev) ? existing.rev : 0;
+  next.rev = prevRev + 1;
+  if (JSON.stringify(next).length > MAX_RECORD_JSON) return null;
+  map.set(id, next);
+  scheduleFlush(new Set([id]), []);
+  return next;
+}
+
+function liveContextMeta(value: unknown): { at: number; hasBuckets: boolean; tokens: number } | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const record = value as { at?: unknown; buckets?: unknown; liveContextTokens?: unknown };
+  const at = typeof record.at === 'number' && Number.isFinite(record.at) ? record.at : 0;
+  const tokens =
+    typeof record.liveContextTokens === 'number' && Number.isFinite(record.liveContextTokens)
+      ? record.liveContextTokens
+      : 0;
+  const hasBuckets = typeof record.buckets === 'object' && record.buckets !== null;
+  return { at, hasBuckets, tokens };
+}
+
+function chooseNewerLiveContext(incoming: unknown, existing: unknown): unknown {
+  if (existing === undefined) return incoming;
+  if (incoming === undefined) return existing;
+  const inMeta = liveContextMeta(incoming);
+  const exMeta = liveContextMeta(existing);
+  if (!exMeta) return incoming;
+  if (!inMeta) return existing;
+  if (inMeta.at !== exMeta.at) return inMeta.at > exMeta.at ? incoming : existing;
+  if (inMeta.hasBuckets !== exMeta.hasBuckets) return inMeta.hasBuckets ? incoming : existing;
+  return inMeta.tokens >= exMeta.tokens ? incoming : existing;
+}
+
+function lastTurnIdOf(turns: unknown): string | null {
+  if (!Array.isArray(turns) || turns.length === 0) return null;
+  const tail = turns[turns.length - 1];
+  return typeof tail === 'object' && tail !== null && typeof (tail as { id?: unknown }).id === 'string'
+    ? (tail as { id: string }).id
+    : null;
+}
+
+function shouldAcceptSyncedEntry(entry: StoredConversation, existing: StoredConversation): boolean {
+  const incomingAt = typeof entry.updatedAt === 'number' ? entry.updatedAt : null;
+  const existingAt = typeof existing.updatedAt === 'number' ? existing.updatedAt : null;
+  if (incomingAt !== null && existingAt !== null && incomingAt !== existingAt) {
+    return incomingAt > existingAt;
+  }
+  const incomingRev = typeof entry.rev === 'number' && Number.isFinite(entry.rev) ? entry.rev : null;
+  const existingRev = typeof existing.rev === 'number' && Number.isFinite(existing.rev) ? existing.rev : null;
+  if (incomingRev !== null && existingRev !== null && incomingRev !== existingRev) {
+    return incomingRev > existingRev;
+  }
+  if (incomingRev !== null && existingRev === null) return true;
+  if (incomingRev === null && existingRev !== null) return false;
+  const incomingTurns = Array.isArray(entry.turns) ? entry.turns.length : -1;
+  const existingTurns = Array.isArray(existing.turns) ? existing.turns.length : -1;
+  return incomingTurns >= existingTurns;
+}
+
+function mergeSyncedConversation(
+  entry: StoredConversation,
+  existing: StoredConversation,
+): StoredConversation {
+  if (entry.liveContext !== undefined) {
+    return { ...entry, liveContext: chooseNewerLiveContext(entry.liveContext, existing.liveContext) };
+  }
+  if (existing.liveContext === undefined) return entry;
+  // Preserve server-recorded liveContext unless the client clearly truncated/rewrote turns.
+  const entryTurns = Array.isArray(entry.turns) ? entry.turns.length : 0;
+  const existingTurns = Array.isArray(existing.turns) ? existing.turns.length : 0;
+  const sameTail =
+    entryTurns >= existingTurns &&
+    (existingTurns === 0 || lastTurnIdOf(entry.turns) === lastTurnIdOf(existing.turns));
+  if (!sameTail) return entry;
+  return { ...entry, liveContext: existing.liveContext };
+}
+
+export function setStoredLiveContext(id: string, liveContext: unknown, flush = false): void {
+  if (!id || liveContext === undefined) return;
+  const map = ensureLoaded();
+  const existing = map.get(id);
+  if (!existing) return;
+  existing.liveContext = chooseNewerLiveContext(liveContext, existing.liveContext);
+  if (flush) scheduleFlush(new Set([id]), []);
 }
 
 export function listStoredConversations(): StoredConversation[] {
   return [...ensureLoaded().values()];
 }
 
-/** Summaries for every chat — the list view never needs the turn bodies. */
+
 export function listStoredConversationSummaries(): ConversationSummary[] {
   return [...ensureLoaded().values()].map(summarizeConversation);
 }
 
-/** One full record by id (null when absent) — the thread loads a chat on demand. */
+
 export function getStoredConversation(id: string): StoredConversation | null {
   const record = ensureLoaded().get(id) ?? null;
   if (!record) return null;
@@ -400,26 +518,14 @@ export function getStoredConversation(id: string): StoredConversation | null {
   };
 }
 
-/**
- * The chat's own folder under `.data/conversation/`, or null when this
- * session has no archived chat (synthetic ids, a chat not yet synced).
- * Shared with the goals store, which files this session's goals-plan.json
- * inside the folder.
- */
+
 export function chatDirFor(sessionId: string): string | null {
   ensureLoaded();
   const folder = manifest?.folders[sessionId];
   return folder ? path.join(conversationDir, folder) : null;
 }
 
-/**
- * The chat's own folder, CREATED on demand: a brand-new chat has no folder
- * until its first sync flush, but attachments (and anything else filing
- * under the chat's session directory) must have a home IMMEDIATELY — the
- * upload arrives before the record is ever persisted. Allocating here keeps
- * the manifest authoritative and reuses the same folder once the record
- * flushes (scheduleFlush keeps an existing mapping).
- */
+
 export function ensureChatDirFor(sessionId: string): string | null {
   if (!/^[a-zA-Z0-9_-]{1,96}$/.test(sessionId)) return null;
   ensureLoaded();
@@ -449,17 +555,7 @@ export function ensureChatDirFor(sessionId: string): string | null {
   return dir;
 }
 
-/**
- * Applies one client sync batch — upserts replace by id (an existing chat
- * keeps its position), removeIds move the chat to the trash (never a delete;
- * see moveToTrash) — and returns the authoritative list AFTER the merge, so
- * the sender converges with edits made elsewhere.
- *
- * `removeIds` is authoritative ONLY because the client now sends it solely for
- * the user's own deletions: it used to be computed as "the server holds this
- * and I do not", which let a boot whose body fetches failed order a wipe of
- * everything it had not managed to load.
- */
+
 export function syncStoredConversations(
   upsert: unknown[],
   removeIds: unknown[],
@@ -517,33 +613,8 @@ export function syncStoredConversations(
       changed.add(entry.id);
       continue;
     }
-    const incomingAt = typeof entry.updatedAt === 'number' ? entry.updatedAt : null;
-    const existingAt = typeof existing.updatedAt === 'number' ? existing.updatedAt : null;
-    if (incomingAt !== null && existingAt !== null && incomingAt > existingAt) {
-      map.set(entry.id, entry);
-      changed.add(entry.id);
-      continue;
-    }
-    if (incomingAt !== null && existingAt !== null && incomingAt < existingAt) continue;
-    // delete → …) — the reported "pesan terhapus lalu muncul lagi" bug.
-    const incomingRev = typeof entry.rev === 'number' && Number.isFinite(entry.rev) ? entry.rev : null;
-    const existingRev = typeof existing.rev === 'number' && Number.isFinite(existing.rev) ? existing.rev : null;
-    if (incomingRev !== null && existingRev !== null && incomingRev !== existingRev) {
-      if (incomingRev < existingRev) continue;
-      map.set(entry.id, entry);
-      changed.add(entry.id);
-      continue;
-    }
-    if (incomingRev !== null && existingRev === null) {
-      map.set(entry.id, entry);
-      changed.add(entry.id);
-      continue;
-    }
-    if (incomingRev === null && existingRev !== null) continue;
-    const incomingTurns = Array.isArray(entry.turns) ? entry.turns.length : -1;
-    const existingTurns = Array.isArray(existing.turns) ? existing.turns.length : -1;
-    if (incomingTurns < existingTurns) continue;
-    map.set(entry.id, entry);
+    if (!shouldAcceptSyncedEntry(entry, existing)) continue;
+    map.set(entry.id, mergeSyncedConversation(entry, existing));
     changed.add(entry.id);
   }
 
@@ -551,33 +622,7 @@ export function syncStoredConversations(
   return [...map.values()];
 }
 
-/**
- * Applies INCREMENTAL turn patches for LIVE chats: each patch replaces or
- * inserts ONE turn by id inside a record the store already holds, so a run's
- * in-flight text reaches the shared store WITHOUT re-uploading the whole
- * multi-megabyte conversation on every client sync debounce.
- *
- * The store stays AUTHORITATIVE for in-flight turns this way: a browser that
- * never saw the stream (or a reload once the SSE replay buffer is gone)
- * reads the live partial straight from the record instead of the pre-run
- * thread. This replaces the client-side stream suppression, which skipped
- * generating chats entirely and left the server arbitrarily behind.
- *
- * A patch for an UNKNOWN conversation is dropped: the record must exist first
- * (the run-start full upsert creates it). Patches are idempotent — replacing
- * a turn by id with an older copy is harmless because the sender is the sole
- * writer of that turn for the run's duration.
- *
- * The record's own `rev` is deliberately NOT touched: a patch carries only
- * turns, and `deleteTurn` bumps rev WITHOUT updatedAt. Adopting the patch rev
- * would let it TIE the run-end full upsert on (updatedAt, rev), and the
- * turn-count heuristic below would then read the deletion as a stale copy and
- * RESURRECT the deleted turns — the exact bug the rev discipline exists to
- * prevent. The server's summary keeps the pre-run rev while its turnCount
- * climbs, which is all a second browser needs to see the record as newer
- * (its stale local copy fails localMatchesSummary on the count and fetches
- * the live body).
- */
+
 function turnOrderKey(turn: { createdAt?: unknown; role?: unknown }): [number, number] {
   const createdAt = typeof turn.createdAt === 'number' ? turn.createdAt : 0;
   const role = turn.role;
@@ -608,7 +653,7 @@ export function applyTurnPatches(patches: unknown[]): void {
     const patch = raw as {
       conversationId?: unknown;
       turnId?: unknown;
-      /** null = delete this turn id (mid-run regenerate must reach the server). */
+      
       turn?: unknown;
     };
     if (typeof patch.conversationId !== 'string' || patch.conversationId.length === 0) continue;
@@ -644,19 +689,17 @@ export function applyTurnPatches(patches: unknown[]): void {
   scheduleFlush(changed, []);
 }
 
-/** Where a deleted chat's folder goes. Restore & purge live in the trash API. */
+
 const TRASH_DIR = 'trash';
 
-/** Trash entries older than this are swept on boot and on every trash read.
- *  User decision: bekas percakapan di folder trash dihapus otomatis setelah
- *  30 hari — purga berjalan best-effort, kegagalan disk tidak pernah fatal. */
+
 const TRASH_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 function trashDir(): string {
   return path.join(conversationDir, TRASH_DIR);
 }
 
-/** Removes trash folders older than 30 hari — boot + tiap listTrash. */
+
 function sweepTrash(): void {
   try {
     if (!existsSync(trashDir())) return;
@@ -674,21 +717,7 @@ function sweepTrash(): void {
   }
 }
 
-/**
- * NEVER DESTROY A CHAT. A removed record leaves the manifest — so it is gone
- * from every list, every wire, and every browser — but its folder MOVES to
- * `conversation/trash/<folder>-<stamp>` instead of being deleted. Restore
- * (`restoreFromTrash`) and the 30-day purge (`sweepTrash`) live in the trash
- * API; `emptyTrash` is the manual cleanup.
- *
- * This store is the only copy of the user's history: the browser keeps no
- * durable record and there is no backup. An archive that can shrink from ~123
- * chats to 2 with no error anywhere (its `nextSeq` read 124 while two folders
- * were left on disk) is the reason recovery must not depend on having
- * predicted the failure. The trash is never scanned — `adoptOrphanFolders`
- * only re-adopts `chat-NNN-*` folders at the archive root — so a trashed chat
- * stays out of every list until it is restored explicitly.
- */
+
 function moveToTrash(folder: string): void {
   const from = path.join(conversationDir, folder);
   if (!existsSync(from)) return;
@@ -700,12 +729,7 @@ function moveToTrash(folder: string): void {
   }
 }
 
-/**
- * Assigns (or keeps) a folder per changed chat, then queues ONE serialized
- * disk pass: per-chat records first (a crash between them and the index
- * rewrite can only orphan a folder, which boot re-adopts — never lose a
- * record), removed folders to the trash, then manifest + index rewritten.
- */
+
 function scheduleFlush(changed: Set<string>, removedFolders: string[]): void {
   const active = manifest!;
   mkdirSync(conversationDir, { recursive: true });
@@ -748,30 +772,25 @@ function scheduleFlush(changed: Set<string>, removedFolders: string[]): void {
     });
 }
 
-/** Awaits every queued disk write (tests / shutdown; routes don't need it). */
+
 export function flushConversationWrites(): Promise<void> {
   return writeChain;
 }
 
-/**
- * TRASH API — list, restore, empty. A trashed chat is a folder under
- * `conversation/trash/` (`chat-NNN-YYYYMMDD-<stamp>`) holding its original
- * chat-data.json. The stamp splits id → folder: the FIRST `chat-NNN-*` run is
- * the original folder name, the trailing ISO stamp belongs to the deletion.
- */
+
 export interface TrashEntry {
-  /** Conversation id (parsed from the folder name). */
+  
   id: string;
-  /** Trash folder name (used by restore/empty). */
+  
   folder: string;
   title: string;
   updatedAt: number;
   turnCount: number;
-  /** Deletion time (the folder's mtime) — ms epoch. */
+  
   deletedAt: number;
 }
 
-/** Parses `chat-012-20261005-2026-10-07T...` → original folder + stamp. */
+
 function splitTrashFolder(folder: string): { original: string; id: string | null } | null {
   const match = /^((chat-\d{3,})-\d{8})-/.exec(folder);
   if (!match) return null;
@@ -785,7 +804,7 @@ function splitTrashFolder(folder: string): { original: string; id: string | null
   return { original: match[1], id: null };
 }
 
-/** Every trashed chat, newest deletion first. Sweeps >30-day entries first. */
+
 export function listTrash(): TrashEntry[] {
   sweepTrash();
   const entries: TrashEntry[] = [];
@@ -814,8 +833,7 @@ export function listTrash(): TrashEntry[] {
   return entries.sort((a, b) => b.deletedAt - a.deletedAt);
 }
 
-/** Moves one trash folder back into the archive and re-registers it in the
- *  manifest. Returns the restored id (null when the folder is unreadable). */
+
 export function restoreFromTrash(folder: string): string | null {
   if (!/^([\w.-]+)$/.test(folder)) return null;
   const from = path.join(trashDir(), folder);
@@ -855,7 +873,7 @@ export function restoreFromTrash(folder: string): string | null {
   }
 }
 
-/** Manual cleanup: deletes EVERY trash folder. Returns how many were removed. */
+
 export function emptyTrash(): number {
   sweepTrash();
   let removed = 0;

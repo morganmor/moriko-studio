@@ -1,10 +1,4 @@
-/**
- * Moco Canvas — readout (P1): the layered "eyes" for a 1D model.
- *
- * Layer 1 char-map per frame · layer 2 relational facts in plain sentences.
- * Everything here is derived from intent geometry (cells, tokens, stack order),
- * so it is honest without a browser and labelled `tier: intent` (plan §9).
- */
+
 
 import {
   SPACE,
@@ -44,7 +38,7 @@ export interface Readout {
   facts: string[];
   lint: IntentLint[];
   chars: number;
-  /** the whole readout as one block (what the agent tool returns) */
+  
   text: string;
 }
 
@@ -57,7 +51,6 @@ function glyphFor(index: number): string {
 }
 
 function legendName(node: SceneNode): string {
-  // Full id, not the last segment: the agent must reuse these exact ids.
   return node.id.length > 14 ? `${node.id.slice(0, 13)}…` : node.id;
 }
 
@@ -82,7 +75,6 @@ export function buildCharMap(frame: SceneNode): FrameMap {
     glyphs.set(p.node.id, glyph);
     for (let r = p.rect.r1; r <= Math.min(rows, p.rect.r2); r++) {
       for (let c = p.rect.c1; c <= Math.min(cols, p.rect.c2); c++) {
-        // '#' marks a contested cell: two nodes claim the same address.
         if (grid[r - 1][c - 1] !== '.') {
           overlaps++;
           grid[r - 1][c - 1] = '#';
@@ -102,7 +94,7 @@ export function buildCharMap(frame: SceneNode): FrameMap {
   return { lines: [header, ...lines], legend, overlaps, empty, free: lattice.free };
 }
 
-/** Stack frames read as an ordered list with relative weight, not a lattice. */
+
 function stackMap(frame: SceneNode): string[] {
   const kids = frame.children ?? [];
   const lines = [`  stack ${frame.layout?.dir === 'row' ? 'row' : 'col'} · gap ${frame.layout?.gap ?? '—'} · ${kids.length} item`];
@@ -118,7 +110,7 @@ function pxOf(token: string | undefined): number | null {
   return spacePx(token);
 }
 
-/** ALIGN: siblings sharing the same left/top cell. */
+
 function alignFacts(placements: Placement[]): string[] {
   const out: string[] = [];
   const byLeft = new Map<number, string[]>();
@@ -136,7 +128,7 @@ function alignFacts(placements: Placement[]): string[] {
   return out;
 }
 
-/** FLOW: how the leading siblings split the width (composition fact). */
+
 function flowFacts(placements: Placement[]): string[] {
   if (placements.length < 2) return [];
   const sorted = [...placements].sort((a, b) => a.rect.c1 - b.rect.c1);
@@ -149,7 +141,7 @@ function flowFacts(placements: Placement[]): string[] {
   return [`FLOW    ${a.node.id} (${formatAt(a.rect)}) | ${b.node.id} (${formatAt(b.rect)}) · width split ${split}  ${verdict}`];
 }
 
-/** GAP: vertical/horizontal holes between adjacent placements, in cells. */
+
 function gapFacts(placements: Placement[], frame: SceneNode): string[] {
   const out: string[] = [];
   const frameGap = pxOf(frame.layout?.gap);
@@ -168,7 +160,7 @@ function gapFacts(placements: Placement[], frame: SceneNode): string[] {
   return out;
 }
 
-/** TEXT: ch-per-line discipline for body copy. */
+
 function textFacts(scene: Scene): string[] {
   const out: string[] = [];
   nodeIndex(scene.root).forEach(({ node }) => {
@@ -180,7 +172,7 @@ function textFacts(scene: Scene): string[] {
   return out;
 }
 
-/** TYPE: is there a real hierarchy (display + body), or one flat size? */
+
 function typeFact(scene: Scene): string {
   const roles = new Set<string>();
   nodeIndex(scene.root).forEach(({ node }) => {
@@ -190,7 +182,7 @@ function typeFact(scene: Scene): string {
   return `TYPE    active roles: ${[...roles].join(', ') || '—'}  ${verdict}`;
 }
 
-/** VIEW: derived from the compiler's own breakpoint rule (emitted CSS). */
+
 function viewFact(scene: Scene, viewport: Viewport): string {
   const vpPx = scene.breakpoints[viewport];
   const overridden = nodeIndex(scene.root).filter(({ node }) => node.responsive && Object.keys(node.responsive).length > 0);
@@ -199,7 +191,7 @@ function viewFact(scene: Scene, viewport: Viewport): string {
   return `VIEW    @${viewport} · ${vpPx}px · ${mode}${p4}  ✓`;
 }
 
-/** RELATION: each stored constraint (plan §7.3) and whether it currently holds. */
+
 function constraintFacts(scene: Scene): string[] {
   const list = scene.constraints ?? [];
   if (!list.length) return [];
@@ -211,7 +203,7 @@ function constraintFacts(scene: Scene): string[] {
   });
 }
 
-/** FREE: stack frames that carry addresses would silently ignore them. */
+
 function structureFacts(scene: Scene): string[] {
   const out: string[] = [];
   nodeIndex(scene.root).forEach(({ node }) => {
@@ -222,7 +214,7 @@ function structureFacts(scene: Scene): string[] {
   });
   return out;
 }
-/** BALANCE: area-weighted left/right centroid (plan §6 lapis 2). */
+
 function balanceFacts(frame: SceneNode): string[] {
   const split = weightSplit(frame);
   if (!split) return [];
@@ -261,7 +253,6 @@ function frameLint(frame: SceneNode): IntentLint[] {
     if (!(gap in SPACE)) out.push({ rule: 'off-scale-gap', severity: 'warn', node: frame.id, detail: `gap "${gap}" is off the spacing scale` });
   }
 
-  // Symmetry default: equal-width bands = the AI attractor (plan §10).
   const bands = lattice.placements.filter((p) => rectHeight(p.rect) >= 1).map((p) => rectWidth(p.rect));
   if (bands.length === 3 && bands.every((b) => b === bands[0])) {
     out.push({ rule: 'symmetry-default', severity: 'warn', node: frame.id, detail: `3 equal-width columns (${bands[0]} cells) — consider asymmetry` });
@@ -282,8 +273,6 @@ function hierarchyLint(scene: Scene): IntentLint[] {
 }
 
 export function buildReadout(scene: Scene, viewport: Viewport = 'lg', focus?: string | null): Readout {
-  // P4: @sm/@md readouts project the scene through its responsive overrides,
-  // so the char-map shows what that viewport would actually render.
   const projected = effectiveScene(scene, viewport);
   const frames = gridFrames(projected.root);
   const stacks = nodeIndex(projected.root)
@@ -335,10 +324,7 @@ export interface DeltaInput {
 
 const DELTA_BUDGET = 1500;
 
-/**
- * Delta readout (plan §6 budget rule): only what changed — op notes, the
- * focused frame's map, and the lint that appeared or disappeared.
- */
+
 export function buildDelta(input: DeltaInput, viewport: Viewport = 'lg'): string {
   const { notes, changed, before, after } = input;
   const beforeLint = buildReadout(before, viewport).lint;
@@ -388,7 +374,7 @@ export function buildDelta(input: DeltaInput, viewport: Viewport = 'lg'): string
   return text;
 }
 
-/** Inspect one node: its address, parent chain, and sibling context. */
+
 export function inspectNode(scene: Scene, id: string): string {
   const chain = pathTo(scene.root, id);
   if (chain.length === 0) return `node "${id}" does not exist. Valid ids: ${nodeIndex(scene.root).map((n) => n.node.id).join(', ')}`;
@@ -425,7 +411,7 @@ export function inspectNode(scene: Scene, id: string): string {
   return lines.join('\n');
 }
 
-/** Full tree with addresses — the map the agent reads once, then works by id. */
+
 export function outline(scene: Scene): string {
   const lines: string[] = [`OUTLINE ${scene.id} rev ${scene.rev} · dna ${scene.dna} · template ${scene.template ?? '—'}`];
   const visit = (node: SceneNode, depth: number) => {

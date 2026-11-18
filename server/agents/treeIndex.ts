@@ -1,27 +1,4 @@
-/**
- * REALTIME PROJECT STRUCTURE (Fase B) — the in-memory tree index.
- *
- * ONE `WorkspaceTree` per workspace id, held in a module-level Map. The FIRST
- * consumer triggers a single directory walk (with ignore rules + caps); after
- * that every consumer — the user's floating panel, `agent__tree_outline`, the
- * SSE channel — reads MEMORY ONLY. This is the I/O-bottleneck prevention the
- * feature exists for: a 20k-file workspace answers outline requests without
- * touching the disk, and filesystem changes arrive as WATCHER DELTAS instead
- * of re-walks.
- *
- * Persistence (B.3): the index snapshot + the workspace's custom ignore rules
- * live in `~/.moriko/tree-index/<workspaceId>.json` (atomicWriteJson), loaded
- * LAZILY on first use after a restart — a cold boot does not re-walk every
- * registered workspace, and the panel still renders instantly from the
- * snapshot while a fresh walk validates it in the background.
- *
- * Watcher (B.2): `fs.watch(root, { recursive: true })` — native on Windows
- * (ReadDirectoryChangesW) and macOS; on Linux recursive is not supported, so
- * the watcher transparently falls back to per-top-level-dir watchers.
- * Events are debounced 300 ms, classified, and applied to the in-memory tree
- * as a delta; every applied change bumps `version` and fires the change
- * listeners (the SSE channel fans them out).
- */
+
 import { watch, type FSWatcher } from 'node:fs';
 import { existsSync, readdirSync, readFileSync, statSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
@@ -31,27 +8,27 @@ import { treeIndexDir } from '../paths.js';
 import { listWorkspaces } from './workspace.js';
 
 
-/** One node of the in-memory tree. */
+
 export interface TreeNode {
   name: string;
-  /** Path relative to the workspace root, POSIX separators ('src/lib/api.ts'). */
+  
   relPath: string;
   kind: 'dir' | 'file';
-  /** Direct children (sorted: dirs first, then case-insensitive by name). */
+  
   children: TreeNode[];
-  /** File size in bytes (0 for dirs). */
+  
   size: number;
-  /** mtime (ms) — the watcher's no-op delta filter. */
+  
   mtimeMs: number;
-  /** Set when depth/node caps or read errors cut this subtree short. */
+  
   truncated?: boolean;
 }
 
-/** Custom ignore rules persisted PER WORKSPACE (the panel edits these). */
+
 export interface IgnoreRules {
-  /** Extra directory names to skip (in addition to the built-ins). */
+  
   dirs: string[];
-  /** Extra suffix/wildcard patterns, e.g. '*.log', '*.tmp', 'secrets*'. */
+  
   patterns: string[];
 }
 
@@ -67,7 +44,7 @@ export interface TreeView {
   version: number;
   stats: TreeStats;
   builtAt: number;
-  /** True while a background rebuild is walking (view is still served). */
+  
   refreshing: boolean;
 }
 
@@ -77,10 +54,7 @@ export interface TreeChangeEvent {
   op: 'add' | 'change' | 'remove' | 'rebuild';
   relPath: string;
   kind: 'dir' | 'file';
-  /**
-   * Post-apply node body for add/change (dirs arrive WITH their children) —
-   * clients upsert the real subtree without a round-trip. Absent on remove.
-   */
+  
   node?: TreeNode;
 }
 
@@ -104,7 +78,7 @@ interface WorkspaceTree {
   version: number;
   walking: Promise<void> | null;
   watcher: FSWatcher | null;
-  /** Per-top-level-dir fallback (Linux, where recursive watch is unsupported). */
+  
   fallbackWatchers: FSWatcher[];
   debounceTimer: NodeJS.Timeout | null;
   pendingPaths: Set<string>;
@@ -118,7 +92,7 @@ export const TREE_NODE_CAP = 20_000;
 const PERSIST_MIN_INTERVAL_MS = 2000;
 const SNAPSHOT_MAX_AGE_MS = 30_000;
 
-/** Built-in ignores — ALWAYS on. Heavy/generated dirs + OS noise. */
+
 const BUILTIN_IGNORED_DIRS = new Set([
   'node_modules', '.git', '.data', '.moriko', '.pnpm-store', 'dist', 'build', 'out',
   'coverage', '.venv', 'venv', '__pycache__', '.next', '.turbo', '.zvec-grep',
@@ -126,7 +100,7 @@ const BUILTIN_IGNORED_DIRS = new Set([
 ]);
 const BUILTIN_IGNORED_NAMES = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini']);
 
-/** ONE tree per workspace id — the whole module's purpose. */
+
 const trees = new Map<string, WorkspaceTree>();
 
 
@@ -147,7 +121,7 @@ function sanitizeRules(input: unknown): IgnoreRules {
   return { dirs: pick(raw.dirs), patterns: pick(raw.patterns) };
 }
 
-/** Tiny glob: '*' wildcards within a name; otherwise a suffix/prefix match. */
+
 function compilePattern(pattern: string): RegExp | null {
   const escaped = pattern.trim().replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/\\\\]*');
   if (!escaped) return null;
@@ -342,7 +316,7 @@ function removeNode(root: TreeNode, relPath: string): boolean {
   return true;
 }
 
-/** Walks/creates the parent chain, keeping dirs-first order intact. */
+
 function ensureDirChain(root: TreeNode, relDir: string, rootAbs: string): TreeNode | null {
   if (!relDir) return root;
   let current = root;
@@ -403,7 +377,7 @@ function insertDirNode(root: TreeNode, relPath: string, rootAbs: string): void {
   else parent.children.splice(index, 0, node);
 }
 
-/** Classify one debounced watcher event against the CURRENT index. */
+
 function classifyPath(tree: WorkspaceTree, absPath: string): TreeChangeEvent | null {
   const relPath = toRelPath(tree.workspacePath, absPath);
   if (!relPath) return null;
@@ -577,11 +551,7 @@ function emptyRoot(workspacePath: string): TreeNode {
   return { name: path.basename(workspacePath) || 'workspace', relPath: '', kind: 'dir', children: [], size: 0, mtimeMs: 0 };
 }
 
-/**
- * The ONE entry point every consumer shares (panel SSE bootstrap, REST GET,
- * agent tool). Serves MEMORY (or the persisted snapshot on first touch after
- * a restart); a stale/absent snapshot triggers exactly one background walk.
- */
+
 export function getTree(workspaceId: string): TreeView | null {
   const workspace = listWorkspaces().find((entry) => entry.id === workspaceId);
   if (!workspace || !existsSync(workspace.path)) return null;
@@ -619,7 +589,7 @@ export function getTree(workspaceId: string): TreeView | null {
   return { root: tree.root, version: tree.version, stats: tree.stats, builtAt: tree.builtAt, refreshing: tree.walking !== null };
 }
 
-/** Full rebuild — ONE walk on a setImmediate; concurrent calls share it. */
+
 export function refreshTree(workspaceId: string): Promise<void> {
   const existing = trees.get(workspaceId);
   if (existing?.walking) return existing.walking;
@@ -675,7 +645,7 @@ export function refreshTree(workspaceId: string): Promise<void> {
   return walking;
 }
 
-/** The panel's ignore-rule editor — rules live in the snapshot file. */
+
 export function getRules(workspaceId: string): IgnoreRules {
   return trees.get(workspaceId)?.rules ?? loadSnapshot(workspaceId)?.rules ?? defaultRules();
 }
@@ -699,7 +669,7 @@ export function setRules(workspaceId: string, rules: IgnoreRules): IgnoreRules {
   return clean;
 }
 
-/** Subscribe to deltas (the SSE channel). Returns an unsubscribe function. */
+
 export function subscribeTree(workspaceId: string, listener: (event: TreeChangeEvent) => void): () => void {
   const tree = trees.get(workspaceId);
   if (!tree) return () => undefined;
@@ -709,7 +679,7 @@ export function subscribeTree(workspaceId: string, listener: (event: TreeChangeE
   };
 }
 
-/** Workspace removed from the registry — drop its tree + snapshot entirely. */
+
 export function dropTree(workspaceId: string): void {
   const tree = trees.get(workspaceId);
   if (tree) {
@@ -723,10 +693,7 @@ export function dropTree(workspaceId: string): void {
   }
 }
 
-/**
- * ASCII outline for `agent__tree_outline` — rendered from MEMORY (no disk).
- * `filter` keeps dirs that CONTAIN a match (so structure stays readable).
- */
+
 export function outlineFromMemory(
   workspaceId: string,
   opts: { depth?: number; filter?: string; maxEntries?: number } = {},
@@ -774,7 +741,7 @@ export function outlineFromMemory(
   return lines.join('\n');
 }
 
-/** Memory-only lookup — the agent tool's fast path. */
+
 export function peekTree(workspaceId: string): TreeView | null {
   const tree = trees.get(workspaceId);
   if (!tree) return null;

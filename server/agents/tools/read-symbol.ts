@@ -1,8 +1,4 @@
-/**
- * F2.1 — agent__read_symbol: read EXACTLY one symbol's line range (AST-driven
- * for TS/JS, fold-based fallback for other languages), with an exact per-span
- * read receipt and sha256 footer so the range can be edited directly.
- */
+
 import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { AgentToolContext, HarnessToolResult } from './shared.js';

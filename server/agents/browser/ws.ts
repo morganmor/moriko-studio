@@ -1,232 +1,378 @@
-/**
- * Browser Panel WebSocket — the user-facing window into the built-in browser.
- * WebRTC P2P video transport; input only dispatched during takeover.
- */
 import type { Server } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
-
-import { browserManager, WS_OPEN } from './manager.js';
+import { browserManager, normalizeSessionId, WS_OPEN, type PanelSubscriber } from './manager.js';
 import { browserRTC } from './webrtc.js';
 
-/** Panel-server shutdown: sent when Web Access is turned off (or the context
- *  closes). The panel stops reconnecting and closes its own window. */
-export function shutdownBrowserPanels(reason: string): void {
+export function shutdownBrowserPanels(reason: string, sessionId?: string): void {
+  if (sessionId !== undefined) {
+    browserManager.broadcast({ type: 'shutdown', reason }, normalizeSessionId(sessionId));
+    return;
+  }
   browserManager.broadcast({ type: 'shutdown', reason });
 }
 
-/**
- * Omnibox resolution for the panel URL bar — Chrome-style:
- *   "example.com"          → https://example.com
- *   "https://x.y"          → as-is (assertUrl still gates it)
- *   "who is the president" → https://www.google.com/search?q=... (Google is
- *                             the harness's DEFAULT search engine)
- */
 function omniboxTarget(raw: string): URL {
-  if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return browserManager.assertUrl(raw, true);
-  if (!/\s/.test(raw) && raw.includes('.')) return browserManager.assertUrl(`https://${raw}`, true);
-  return browserManager.assertUrl(`https://www.google.com/search?q=${encodeURIComponent(raw)}`, true);
+  const trimmed = raw.trim();
+  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  return browserManager.assertUrl(withScheme, true);
 }
 
 let wss: WebSocketServer | null = null;
 
-/** attachBrowserPanelWs(server) — idempotent; call once after app.listen(). */
 export function attachBrowserPanelWs(server: Server): void {
   if (wss) return;
-  wss = new WebSocketServer({ server, path: '/api/browser/ws' });
+  wss = new WebSocketServer({
+    server,
+    path: '/api/browser/ws',
+    maxPayload: 32 * 1024 * 1024,
+  });
 
-  wss.on('connection', (ws: WebSocket, req) => {
-    if (browserManager.isWebAccessOn() === false) {
-      if (ws.readyState === WS_OPEN) {
+  wss.on('connection', async (ws: WebSocket, req) => {
+    const url = new URL(req.url ?? '/api/browser/ws', 'http://localhost');
+    const sessionId = normalizeSessionId(url.searchParams.get('session') ?? undefined);
+
+    if (browserManager.isWebAccessOn(sessionId) === false) {
+      try {
         ws.send(JSON.stringify({ type: 'shutdown', reason: 'web-access-off' }));
+      } catch {
       }
       ws.close(1000, 'web-access-off');
       return;
     }
-    const url = new URL(req.url ?? '/api/browser/ws', `http://${req.headers.host ?? '127.0.0.1'}`);
-    const session = (url.searchParams.get('session') ?? '').trim();
-    void session;
 
-    const subscriber = {
-      send: (data: string) => {
+    const sub: PanelSubscriber = {
+      get readyState() {
+        return ws.readyState;
+      },
+      send(data: string) {
         if (ws.readyState === WS_OPEN) ws.send(data);
       },
-      readyState: ws.readyState,
     };
-    Object.defineProperty(subscriber, 'readyState', {
-      get: () => ws.readyState,
-    });
+    browserManager.subscribe(sub, sessionId);
 
-    void browserManager.ensureContext().then(() => browserRTC.startForPanel(subscriber)).catch(() => undefined);
-    browserManager.subscribe(subscriber);
-
-    void (async () => {
-      try {
-        const page = await browserManager.getActivePage();
-        const url2 = page.url();
-        const title = await page.title().catch(() => '');
-        const tabs = await browserManager.listTabs();
+    try {
+      await browserManager.ensureContext(sessionId);
+    } catch (error) {
+      if (ws.readyState === WS_OPEN) {
         ws.send(
           JSON.stringify({
-            type: 'hello',
-            mode: browserManager.isTakeover() ? 'takeover' : 'agent',
-            url: url2,
-            title,
-            cursor: browserManager.getCursor(),
-            tabs: tabs.map((t) => ({ id: t.id, url: t.url, title: t.title, active: t.active })),
-            viewport: browserManager.getViewport(),
+            type: 'error',
+            message: error instanceof Error ? error.message : String(error),
           }),
         );
-      } catch {
       }
-    })();
+    }
 
-      ws.on('message', (raw) => {
-      if (browserManager.isWebAccessOn() === false) return;
+    if (ws.readyState !== WS_OPEN) {
+      browserManager.unsubscribe(sub, sessionId);
+      return;
+    }
+
+    const tabs = await browserManager.listTabs(sessionId).catch(() => []);
+    ws.send(
+      JSON.stringify({
+        type: 'hello',
+        sessionId,
+        mode: browserManager.isTakeover(sessionId) ? 'takeover' : 'agent',
+        handoverMessage: browserManager.getHandoverMessage(sessionId),
+        cursor: browserManager.getCursor(sessionId),
+        tabs,
+        activeTabId: tabs.find((t) => t.active)?.id ?? '',
+        viewport: browserManager.getViewport(sessionId),
+        pendingDialog: browserManager.getPendingDialog(sessionId),
+        pendingFileChooser: browserManager.getPendingFileChooser(sessionId),
+      }),
+    );
+
+    void browserRTC.startForPanel(sessionId, sub);
+
+    ws.on('message', (raw) => {
+      if (browserManager.isWebAccessOn(sessionId) === false) {
+        try {
+          ws.send(JSON.stringify({ type: 'shutdown', reason: 'web-access-off' }));
+        } catch {
+        }
+        ws.close(1000, 'web-access-off');
+        return;
+      }
       let msg: Record<string, unknown>;
       try {
-        msg = JSON.parse(String(raw)) as Record<string, unknown>;
+        msg = JSON.parse(raw.toString()) as Record<string, unknown>;
       } catch {
         return;
       }
-      void handlePanelMessage(ws, subscriber, msg).catch((error: unknown) => {
-        console.error(
-          '[browser-ws] panel message failed:',
-          String(msg.type),
-          error instanceof Error ? error.message : error,
-        );
-      });
+      void handlePanelMessage(sessionId, ws, sub, msg);
     });
 
     ws.on('close', () => {
-      browserManager.unsubscribe(subscriber);
-      void browserRTC.stopForPanel(subscriber);
+      browserManager.unsubscribe(sub, sessionId);
+      void browserRTC.stopForPanel(sessionId, sub);
+    });
+
+    ws.on('error', () => {
+      browserManager.unsubscribe(sub, sessionId);
+      void browserRTC.stopForPanel(sessionId, sub);
     });
   });
 }
 
-async function handlePanelMessage(ws: WebSocket, subscriber: { send: (data: string) => void; readyState: number }, msg: Record<string, unknown>): Promise<void> {
+async function handlePanelMessage(
+  sessionId: string,
+  ws: WebSocket,
+  sub: PanelSubscriber,
+  msg: Record<string, unknown>,
+): Promise<void> {
   const type = typeof msg.type === 'string' ? msg.type : '';
-  const numOr = (key: string): number | undefined => {
-    const v = msg[key];
-    return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
-  };
-
   switch (type) {
-    case 'ping':
+    case 'ping': {
       if (ws.readyState === WS_OPEN) ws.send(JSON.stringify({ type: 'pong' }));
       return;
-
-    case 'rtc-answer':
-      if (typeof msg.sdp === 'string') await browserRTC.answer(msg.sdp);
+    }
+    case 'rtc-answer': {
+      if (typeof msg.sdp === 'string') void browserRTC.answer(sessionId, msg.sdp);
       return;
-
-    case 'rtc-ice':
-      if (msg.candidate) await browserRTC.ice(msg.candidate);
+    }
+    case 'rtc-ice': {
+      if (msg.candidate) void browserRTC.ice(sessionId, msg.candidate);
       return;
-
-    case 'rtc-restart':
-      await browserRTC.startForPanel(subscriber);
+    }
+    case 'rtc-restart': {
+      void browserRTC.startForPanel(sessionId, sub);
       return;
-
-    case 'takeover':
-      browserManager.startTakeover('panel');
-      await pushStatus();
-      await pushTabs();
+    }
+    case 'takeover': {
+      browserManager.startTakeover('user:panel', '', sessionId);
+      await pushTabs(sessionId);
       return;
-
-    case 'release':
-      browserManager.endTakeover();
-      await pushStatus();
+    }
+    case 'release': {
+      browserManager.endTakeover(sessionId);
+      await pushTabs(sessionId);
       return;
-
+    }
     case 'screen-info': {
-      const w = numOr('width');
-      const h = numOr('height');
-      const dpr = numOr('dpr');
-      if (w !== undefined && h !== undefined && dpr !== undefined) {
-        browserManager.setScreenInfo({ width: w, height: h, dpr });
-        const vp = await browserManager.setViewport(w, h);
-        if (ws.readyState === WS_OPEN) {
-          ws.send(JSON.stringify({ type: 'viewport', ...vp }));
-        }
+      const width = Number(msg.width);
+      const height = Number(msg.height);
+      const dpr = Number(msg.dpr);
+      if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+        browserManager.setScreenInfo(
+          { width, height, dpr: Number.isFinite(dpr) && dpr > 0 ? dpr : 1 },
+          sessionId,
+        );
       }
       return;
     }
-
     case 'resize': {
-      const w = numOr('width');
-      const h = numOr('height');
-      if (w !== undefined && h !== undefined) {
-        const vp = await browserManager.setViewport(w, h);
-        if (ws.readyState === WS_OPEN) {
-          ws.send(JSON.stringify({ type: 'viewport', ...vp }));
-        }
-      }
+      const width = Number(msg.width);
+      const height = Number(msg.height);
+      if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return;
+      const vp = await browserManager.setViewport(width, height, sessionId);
+      if (ws.readyState === WS_OPEN) ws.send(JSON.stringify({ type: 'viewport', ...vp }));
       return;
     }
-
+    case 'new-tab': {
+      if (!browserManager.isTakeover(sessionId)) browserManager.startTakeover('user:new-tab', '', sessionId);
+      await browserManager.openInNewTab(sessionId);
+      await pushTabs(sessionId);
+      return;
+    }
+    case 'switch-tab': {
+      const tabId = typeof msg.tabId === 'string' ? msg.tabId : '';
+      if (!tabId) return;
+      if (!browserManager.isTakeover(sessionId)) browserManager.startTakeover('user:switch-tab', '', sessionId);
+      await browserManager.switchTo(tabId, sessionId).catch(() => undefined);
+      await pushTabs(sessionId);
+      return;
+    }
+    case 'close-tab': {
+      const tabId = typeof msg.tabId === 'string' ? msg.tabId : '';
+      if (!tabId) return;
+      if (!browserManager.isTakeover(sessionId)) browserManager.startTakeover('user:close-tab', '', sessionId);
+      await browserManager.closePage(tabId, sessionId);
+      await pushTabs(sessionId);
+      return;
+    }
+    case 'back': {
+      if (!browserManager.isTakeover(sessionId)) browserManager.startTakeover('user:nav', '', sessionId);
+      await browserManager.navigateBack(sessionId);
+      await pushTabs(sessionId);
+      return;
+    }
+    case 'forward': {
+      if (!browserManager.isTakeover(sessionId)) browserManager.startTakeover('user:nav', '', sessionId);
+      await browserManager.navigateForward(sessionId);
+      await pushTabs(sessionId);
+      return;
+    }
+    case 'reload': {
+      if (!browserManager.isTakeover(sessionId)) browserManager.startTakeover('user:nav', '', sessionId);
+      await browserManager.reloadPage(sessionId);
+      await pushTabs(sessionId);
+      return;
+    }
+    case 'stop': {
+      await browserManager.stopLoading(sessionId);
+      return;
+    }
     case 'goto': {
-      if (!browserManager.isTakeover()) return;
-      const raw = typeof msg.url === 'string' ? msg.url.trim() : '';
-      if (!raw) return;
+      const raw = typeof msg.url === 'string' ? msg.url : '';
+      if (!raw.trim()) return;
+      if (!browserManager.isTakeover(sessionId)) {
+        browserManager.startTakeover('user:omnibox', '', sessionId);
+      }
+      let target: URL;
       try {
-        const target = omniboxTarget(raw);
-        const page = await browserManager.getActivePage();
-        await page.goto(target.toString(), { waitUntil: 'commit', timeout: 30_000 });
-        await pushStatus();
-      } catch {
+        target = omniboxTarget(raw);
+      } catch (error) {
         if (ws.readyState === WS_OPEN) {
-          ws.send(JSON.stringify({ type: 'error', message: 'Could not open that URL (http(s) only).' }));
+          ws.send(
+            JSON.stringify({
+              type: 'error',
+              message: error instanceof Error ? error.message : 'Could not open that URL (http/https only).',
+            }),
+          );
         }
+        return;
+      }
+      try {
+        const page = await browserManager.getActivePage(sessionId);
+        await page.goto(target.toString(), { waitUntil: 'commit', timeout: 30_000 });
+        await page.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => undefined);
+      } catch (error) {
+        if (ws.readyState === WS_OPEN) {
+          ws.send(
+            JSON.stringify({
+              type: 'error',
+              message: `Navigation failed: ${error instanceof Error ? error.message : String(error)}`,
+            }),
+          );
+        }
+      }
+      await pushTabs(sessionId);
+      return;
+    }
+    case 'mouseMove': {
+      const x = Number(msg.x);
+      const y = Number(msg.y);
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        browserManager.forwardMouseMove(x, y, sessionId);
       }
       return;
     }
-
-    case 'mouseMove': {
-      const x = numOr('x');
-      const y = numOr('y');
-      if (x !== undefined && y !== undefined) browserManager.forwardMouseMove(x, y);
+    case 'mouseDown': {
+      const x = Number(msg.x);
+      const y = Number(msg.y);
+      const btn = msg.button === 'right' || msg.button === 'middle' ? msg.button : 'left';
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        void browserManager.forwardMouseDown(x, y, btn, sessionId);
+      }
       return;
     }
-    case 'userCursorMove': {
-      if (browserManager.isTakeover()) return;
-      const x = numOr('x');
-      const y = numOr('y');
-      if (x !== undefined && y !== undefined) browserManager.moveUserCursor(x, y);
-      return;
-    }
-    case 'annotation': {
-      const x = numOr('x');
-      const y = numOr('y');
-      const w = numOr('w');
-      const h = numOr('h');
-      if (x !== undefined && y !== undefined && w !== undefined && h !== undefined) {
-        browserManager.pushAnnotation({ x, y, w, h });
-        browserManager.broadcast({ type: 'annotation', shape: 'rect', x, y, w, h });
+    case 'mouseUp': {
+      const x = Number(msg.x);
+      const y = Number(msg.y);
+      const btn = msg.button === 'right' || msg.button === 'middle' ? msg.button : 'left';
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        void browserManager.forwardMouseUp(x, y, btn, sessionId);
       }
       return;
     }
     case 'mouseClick': {
-      const x = numOr('x');
-      const y = numOr('y');
-      const button = msg.button === 'right' ? 'right' : 'left';
-      if (x !== undefined && y !== undefined) await browserManager.forwardMouseClick(x, y, button);
+      const x = Number(msg.x);
+      const y = Number(msg.y);
+      const btn = msg.button === 'right' || msg.button === 'middle' ? msg.button : 'left';
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        void browserManager.forwardMouseClick(x, y, btn, sessionId);
+      }
       return;
     }
     case 'scroll': {
-      const dx = numOr('deltaX') ?? 0;
-      const dy = numOr('deltaY') ?? 0;
-      await browserManager.forwardScroll(dx, dy);
+      const dx = Number(msg.deltaX) || 0;
+      const dy = Number(msg.deltaY) || 0;
+      void browserManager.forwardScroll(dx, dy, sessionId);
       return;
     }
     case 'keyboardType': {
       const text = typeof msg.text === 'string' ? msg.text : '';
-      if (text) await browserManager.forwardKeyboardType(text);
+      if (text) void browserManager.forwardKeyboardType(text, sessionId);
       return;
     }
     case 'keyboardPress': {
       const key = typeof msg.key === 'string' ? msg.key : '';
-      if (key) await browserManager.forwardKeyboardPress(key);
+      if (!key) return;
+      const modifiers = {
+        ctrlKey: msg.ctrlKey === true,
+        altKey: msg.altKey === true,
+        shiftKey: msg.shiftKey === true,
+        metaKey: msg.metaKey === true,
+      };
+      void browserManager.forwardKeyboardPress(key, modifiers, sessionId);
+      return;
+    }
+    case 'paste': {
+      const text = typeof msg.text === 'string' ? msg.text : '';
+      if (text) void browserManager.forwardPaste(text, sessionId);
+      return;
+    }
+    case 'clipboard-copy-req': {
+      const text = await browserManager.copySelection(sessionId).catch(() => '');
+      if (ws.readyState === WS_OPEN) {
+        ws.send(JSON.stringify({ type: 'clipboard-copy', text }));
+      }
+      return;
+    }
+    case 'dialog-response': {
+      const id = typeof msg.id === 'string' ? msg.id : '';
+      const accept = msg.accept === true;
+      const promptText = typeof msg.promptText === 'string' ? msg.promptText : undefined;
+      browserManager.respondToDialog(id, accept, promptText, sessionId);
+      return;
+    }
+    case 'file-chooser-upload': {
+      const id = typeof msg.id === 'string' ? msg.id : '';
+      const rawFiles = Array.isArray(msg.files) ? msg.files : [];
+      const files = rawFiles
+        .filter(
+          (f): f is { name: string; mimeType?: string; bufferBase64: string } =>
+            Boolean(f) &&
+            typeof (f as { name?: unknown }).name === 'string' &&
+            typeof (f as { bufferBase64?: unknown }).bufferBase64 === 'string',
+        )
+        .slice(0, 10);
+      await browserManager.uploadFileChooser(id, files, sessionId);
+      return;
+    }
+    case 'file-chooser-cancel': {
+      const id = typeof msg.id === 'string' ? msg.id : '';
+      await browserManager.cancelFileChooser(id, sessionId);
+      return;
+    }
+    case 'userCursorMove': {
+      if (browserManager.isTakeover(sessionId)) return;
+      const x = Number(msg.x);
+      const y = Number(msg.y);
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        browserManager.moveUserCursor(x, y, sessionId);
+      }
+      return;
+    }
+    case 'annotation': {
+      if (browserManager.isTakeover(sessionId)) return;
+      const x = Number(msg.x);
+      const y = Number(msg.y);
+      const w = Number(msg.w);
+      const h = Number(msg.h);
+      if (
+        Number.isFinite(x) &&
+        Number.isFinite(y) &&
+        Number.isFinite(w) &&
+        Number.isFinite(h) &&
+        w > 2 &&
+        h > 2
+      ) {
+        browserManager.pushAnnotation({ x, y, w, h }, sessionId);
+        browserManager.broadcast({ type: 'annotation', shape: 'rect', x, y, w, h }, sessionId);
+      }
       return;
     }
     default:
@@ -234,29 +380,14 @@ async function handlePanelMessage(ws: WebSocket, subscriber: { send: (data: stri
   }
 }
 
-/** Pushes the current mode/url/title to every watcher. */
-async function pushStatus(): Promise<void> {
-  let url = '';
-  let title = '';
-  try {
-    const page = await browserManager.getActivePage();
-    url = page.url();
-    title = await page.title().catch(() => '');
-  } catch {
-  }
-  browserManager.broadcast({
-    type: 'statusChange',
-    mode: browserManager.isTakeover() ? 'takeover' : 'agent',
-    url,
-    title,
-  });
-}
-
-/** Pushes the tab list to every watcher. */
-async function pushTabs(): Promise<void> {
-  try {
-    const list = await browserManager.listTabs();
-    browserManager.broadcast({ type: 'tabList', tabs: list, activeTabId: list.find((t) => t.active)?.id ?? '' });
-  } catch {
-  }
+async function pushTabs(sessionId: string): Promise<void> {
+  const list = await browserManager.listTabs(sessionId).catch(() => []);
+  browserManager.broadcast(
+    {
+      type: 'tabList',
+      tabs: list,
+      activeTabId: list.find((t) => t.active)?.id ?? '',
+    },
+    sessionId,
+  );
 }

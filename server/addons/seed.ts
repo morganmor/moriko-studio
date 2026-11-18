@@ -1,13 +1,4 @@
-/**
- * Builtin addon seeding (Addon v2, A9) — closes A-21.
- *
- * `addons-src/<id>/` in the repo is the source of truth for BUILT-IN addons;
- * at boot each one is seeded into `~/.moriko-studio/addons/<id>/` when the
- * target does not exist yet. Existing installs are NEVER overwritten — an
- * addon the user edited stays theirs (version bumps ship by deleting the
- * folder or via the Hub's Remove + restart). Seeded addons are marked
- * `trust: "builtin"` (pre-granted permissions, still visible in the Hub).
- */
+
 
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -15,12 +6,12 @@ import path from 'node:path';
 import { morikoHome } from '../paths.js';
 import { markBuiltin } from './permissions.js';
 
-/** The repo's builtin addon sources (dev layout; absent in packaged builds). */
+
 function builtinSourceRoot(): string {
   return path.resolve(process.cwd(), 'addons-src');
 }
 
-/** The on-disk install directory for one addon. */
+
 function installDir(id: string): string {
   return path.join(morikoHome, 'addons', id);
 }
@@ -33,7 +24,7 @@ function readVersion(manifestPath: string): string {
   }
 }
 
-/** Minimal semver compare: true when `a` is strictly newer than `b`. */
+
 function isNewer(a: string, b: string): boolean {
   const pa = a.split('.').map((n) => Number.parseInt(n, 10) || 0);
   const pb = b.split('.').map((n) => Number.parseInt(n, 10) || 0);
@@ -44,7 +35,7 @@ function isNewer(a: string, b: string): boolean {
   return false;
 }
 
-/** Read a v2 manifest's declared permissions (empty for legacy addons). */
+
 function readPermissions(manifestPath: string): string[] {
   try {
     const raw = JSON.parse(readFileSync(manifestPath, 'utf-8')) as { permissions?: unknown };
@@ -59,7 +50,7 @@ export interface SeedReport {
   kept: string[];
 }
 
-/** The ids of the builtin addon sources in addons-src/ (empty in packaged builds). */
+
 export function builtinAddonIds(): string[] {
   const srcRoot = builtinSourceRoot();
   if (!existsSync(srcRoot) || !statSync(srcRoot).isDirectory()) return [];
@@ -73,13 +64,13 @@ export function builtinAddonIds(): string[] {
   return ids;
 }
 
-/** The source folder for one builtin addon (null when it is not a builtin). */
+
 function builtinSourceDir(id: string): string | null {
   const srcDir = path.join(builtinSourceRoot(), id);
   return existsSync(path.join(srcDir, 'addon.json')) ? srcDir : null;
 }
 
-/** The source folder for one builtin addon (null when it is not a builtin). */
+
 function readDisabledFlag(installPath: string): boolean {
   try {
     return (JSON.parse(readFileSync(installPath, 'utf-8')) as { enabled?: boolean }).enabled === false;
@@ -88,7 +79,7 @@ function readDisabledFlag(installPath: string): boolean {
   }
 }
 
-/** A reseed must not silently re-enable an addon the user disabled. */
+
 function keepDisabled(installPath: string): void {
   writeFileSync(installPath, JSON.stringify({ ...readJson(installPath), enabled: false }, null, 2), 'utf-8');
 }
@@ -101,14 +92,7 @@ function readJson(filePath: string): Record<string, unknown> {
   }
 }
 
-/**
- * Force-reseed one builtin addon: DELETE `~/.moriko-studio/addons/<id>/` and
- * replace it with the current `addons-src/<id>/` — plain replacement, no
- * backup copies. Called by the Addon Hub's disable/reload so the newest
- * shipped source is loaded without the user having to delete the install.
- *
- * Returns null when `<id>` is not a builtin addon (no `addons-src/<id>/`).
- */
+
 export function reseedBuiltin(id: string): string | null {
   if (id.startsWith('.') || id.includes('.bak')) return null;
   const srcDir = builtinSourceDir(id);
@@ -124,7 +108,7 @@ export function reseedBuiltin(id: string): string | null {
   return targetDir;
 }
 
-/** Force-reseed EVERY builtin addon. Returns the reseeded ids. */
+
 export function reseedAllBuiltins(): string[] {
   const srcRoot = builtinSourceRoot();
   if (!existsSync(srcRoot) || !statSync(srcRoot).isDirectory()) return [];
@@ -140,7 +124,7 @@ export function reseedAllBuiltins(): string[] {
   return ids;
 }
 
-/** Seed builtin addons + pre-grant their permissions. Idempotent. */
+
 export function seedBuiltinAddons(): SeedReport {
   const report: SeedReport = { seeded: [], kept: [] };
   const srcRoot = builtinSourceRoot();

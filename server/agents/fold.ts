@@ -1,63 +1,36 @@
-/**
- * FOLD SCANNER — reads a whole file and folds it into a block tree
- * (VSCode-style "fold all"), so a reader sees every block's SIGNATURE plus a
- * `⋯ N lines` body marker instead of the body itself.
- *
- * Scanners picked by file extension:
- *  - brace languages (JS/TS/Java/C/Go/Rust/JSON/CSS/PHP/C#/Kotlin/…): a
- *    single-pass state machine counting `{`/`}` depth, aware of line/block
- *    comments, `#` comments (Perl/PHP/Ruby family), string literals (incl.
- *    C# verbatim @"…" and Kotlin `"""`), template literals, regex literals
- *    and JSX-text apostrophes ("Don't" is prose, not a string opener).
- *    Braces inside strings or comments never skew the depth — the classic
- *    naive-scanner bug.
- *  - indent languages: Python(.py/.pyi) — and YAML reuses the same colon +
- *    indentation heuristic. The scan is string/comment-aware: triple-quoted
- *    docstrings are inert, and an opener only counts at bracket depth 0 (so
- *    dict labels and slices cannot open phantom blocks).
- *  - anything else: NO map (`scanned: 'none'`) — honest failure beats a
- *    wrong guess.
- *
- * Deliberately NOT tree-sitter: zero dependencies. The safety net for exotic
- * syntax is honest failure (`balanced: false`) — the caller then shows NO map
- * instead of a wrong one.
- */
+
 
 export interface FoldBlock {
-  /** Opening line(s), whitespace-collapsed — the signature. */
+  
   signature: string;
-  /** 1-based line where the signature starts (may precede the brace line). */
+  
   from: number;
-  /** 1-based closing line (inclusive). */
+  
   to: number;
-  /** Nesting depth: 0 = top level. */
+  
   depth: number;
   children: FoldBlock[];
 }
 
 export interface FoldResult {
-  /** Top-level blocks (depth 0). */
+  
   blocks: FoldBlock[];
-  /**
-   * false = the scan cannot be trusted (unbalanced braces, unterminated
-   * string/comment, broken file, exotic syntax, or no scanner for the type).
-   * The map must NOT be shown — it would be wrong.
-   */
+  
   balanced: boolean;
-  /** Which scanner produced the result ('none' = unsupported file type). */
+  
   scanned: 'brace' | 'indent' | 'none';
 }
 
-/** How many lines above the `{` a multi-line signature may span. */
+
 const SIGNATURE_LOOKBACK = 6;
-/** Render-time cap on shown blocks (the SCAN always builds the full tree). */
+
 export const FOLD_BLOCK_CAP = 600;
 const SIGNATURE_MAX_CHARS = 160;
 
 const INDENT_EXTENSIONS = new Set(['.py', '.pyi', '.gd']);
-/** Indent-heuristic reusers: `key:` + deeper indent matches the scanner. */
+
 const YAML_EXTENSIONS = new Set(['.yaml', '.yml']);
-/** Languages the brace scanner is allowed to touch. Anything else: no map. */
+
 const BRACE_EXTENSIONS = new Set([
   '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts',
   '.json', '.jsonc',
@@ -71,7 +44,7 @@ const BRACE_EXTENSIONS = new Set([
   '.glsl', '.vert', '.frag', '.geom', '.comp', '.wgsl', '.hlsl', '.fx',
   '.shader', '.compute', '.cginc', '.gdshader',
 ]);
-/** Brace-family languages where `#` opens a line comment. */
+
 const HASH_COMMENT_EXTENSIONS = new Set(['.php', '.phtml', '.pl', '.pm', '.rb']);
 
 function capSignature(text: string): string {
@@ -82,10 +55,7 @@ function isWordChar(ch: string): boolean {
   return /[A-Za-z0-9_$]/.test(ch);
 }
 
-/**
- * Fold a whole file into a block tree. Never throws — worst case is
- * `balanced: false`, which callers must treat as "no map".
- */
+
 export function foldContent(content: string, filename: string): FoldResult {
   const ext = filename.includes('.') ? filename.slice(filename.lastIndexOf('.')).toLowerCase() : '';
   const lines = content.split('\n');
@@ -97,13 +67,7 @@ export function foldContent(content: string, filename: string): FoldResult {
 }
 
 
-/**
- * Scan one char at a time with an explicit context stack. `code` frames carry
- * the brace depth they opened at; `template` frames are backtick literals and
- * `string` frames are double-quoted strings (Ruby `#{…}` interpolation pushes
- * a fresh code frame inside them). `${…}` in templates pushes one too, so
- * interpolation still balances while the surrounding text stays literal.
- */
+
 function scanBrace(lines: string[], opts: { hashComment: boolean } = { hashComment: false }): FoldResult {
   type Frame = { kind: 'code'; base: number } | { kind: 'template' } | { kind: 'string'; quote: '"' };
   const frames: Frame[] = [{ kind: 'code', base: 0 }];
@@ -118,9 +82,9 @@ function scanBrace(lines: string[], opts: { hashComment: boolean } = { hashComme
     'new', 'do', 'else', 'yield', 'await', 'throw',
     'if', 'for', 'while', 'switch', 'with', 'catch',
   ]);
-  /** Control keywords — a `/` right after their `(…)` may open a regex. */
+  
   const REGEX_OK_AFTER_PAREN = new Set(['if', 'for', 'while', 'switch', 'with', 'catch']);
-  /** The last completed word before each `(`, restored when the `)` closes. */
+  
   const parenOwners: string[] = [];
   let prevChar = '';
   let lastWord = '';
@@ -352,13 +316,13 @@ function scanBrace(lines: string[], opts: { hashComment: boolean } = { hashComme
   return { blocks: roots, balanced, scanned: 'brace' };
 }
 
-/** A statement keyword starting a line — the signature walk must stop there. */
+
 const STATEMENT_START =
   /^(const|let|var|import|export|class|function|type|interface|enum|namespace|return|throw|try|catch|do|if|for|while|switch)\b/;
-/** A line ending mid-expression — the signature above it is still open. */
+
 const CONTINUES_LINE = /(?:[,([{=?:&|+\-*/\\]|=>)$/;
 
-/** Walk upward from the brace line to collect a multi-line signature. */
+
 function signatureStart(lines: string[], braceLine: number): number {
   let start = braceLine;
   let steps = 0;
@@ -376,7 +340,7 @@ function signatureStart(lines: string[], braceLine: number): number {
   return start;
 }
 
-/** Join the signature lines and clamp their length. */
+
 function joinSignature(lines: string[], start: number, braceLine: number): string {
   const joined = lines
     .slice(start, braceLine + 1)
@@ -386,11 +350,7 @@ function joinSignature(lines: string[], start: number, braceLine: number): strin
   return capSignature(joined);
 }
 
-/**
- * Cheap post-scan invariant check: every block's window is sane and nests
- * inside its parent. A violated invariant means the scan misparsed — degrade
- * to `balanced: false` instead of shipping a wrong map.
- */
+
 function validateFoldTree(blocks: FoldBlock[]): boolean {
   const check = (b: FoldBlock, parent: FoldBlock | undefined): boolean => {
     if (b.from < 1 || b.to < b.from) return false;

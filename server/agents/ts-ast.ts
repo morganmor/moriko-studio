@@ -1,18 +1,15 @@
-/**
- * F2/F3 — Shared TypeScript AST helpers: find a symbol's NavigationTree node,
- * enclosing-symbol breadcrumbs, function metrics, exported names.
- */
+
 import * as ts from 'typescript';
 
 export interface SymbolSpan {
-  /** 1-based inclusive line range. */
+  
   startLine: number;
   endLine: number;
-  /** Breadcrumb, e.g. `Class › method`. */
+  
   breadcrumb: string;
   name: string;
   kind: string;
-  /** Text span offsets for LSP queries. */
+  
   startOffset: number;
   endOffset: number;
 }
@@ -29,7 +26,7 @@ interface FlatNode {
   parent: string[];
 }
 
-/** Flatten a NavigationTree into nodes with breadcrumb parents. */
+
 export function flattenNavigationTree(tree: ts.NavigationTree): FlatNode[] {
   const out: FlatNode[] = [];
   const walk = (node: ts.NavigationTree, parents: string[]): void => {
@@ -50,7 +47,7 @@ export function flattenNavigationTree(tree: ts.NavigationTree): FlatNode[] {
   return out;
 }
 
-/** Convert a 0-based offset to a 1-based line number. */
+
 export function offsetToLine(content: string, offset: number): number {
   let line = 1;
   for (let i = 0; i < offset && i < content.length; i += 1) {
@@ -59,7 +56,7 @@ export function offsetToLine(content: string, offset: number): number {
   return line;
 }
 
-/** Find symbol spans matching `name` (supports `Class.method` and overloads). */
+
 export function findSymbolSpans(content: string, fileName: string, symbol: string): SymbolSpan[] | null {
   const sourceFile = safeCreateSourceFile(content, fileName);
   if (!sourceFile) return null;
@@ -126,7 +123,7 @@ function safeCreateSourceFile(content: string, fileName: string): ts.SourceFile 
   }
 }
 
-/** Names exported by a source file (for dead-code analysis). */
+
 export function exportedNames(content: string, fileName: string): Array<{ name: string; line: number; kind: string }> {
   const sourceFile = safeCreateSourceFile(content, fileName);
   if (!sourceFile) return [];
@@ -171,7 +168,7 @@ export interface FunctionMetrics {
   params: number;
 }
 
-/** Per-function complexity metrics (F3.6). */
+
 export function functionMetrics(content: string, fileName: string): FunctionMetrics[] {
   const sourceFile = safeCreateSourceFile(content, fileName);
   if (!sourceFile) return [];
@@ -224,7 +221,7 @@ export function functionMetrics(content: string, fileName: string): FunctionMetr
   return out;
 }
 
-/** Enclosing symbol breadcrumb for a line (F2.3 grep annotation). */
+
 export function enclosingSymbol(content: string, fileName: string, line: number): string | null {
   const sourceFile = safeCreateSourceFile(content, fileName);
   if (!sourceFile) return null;

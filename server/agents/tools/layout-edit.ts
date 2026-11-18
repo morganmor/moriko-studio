@@ -1,16 +1,4 @@
-/**
- * agent__layout_edit — INTENT-based layout editing (F2).
- *
- * The model NEVER writes pixel coordinates here. It declares a relation —
- * move-right-of / move-below / swap / resize-relative / align — and the
- * deterministic compiler (applyLayoutIntent in ../spatial.ts) computes every
- * number from the CURRENT map, applies the text edit, vaults the file, and
- * runs a post-edit spatial diff so collision candidates surface IMMEDIATELY.
- *
- * This is the root-cause fix for P1: no guessed pixels, no blind edits.
- * Static tier contract: target + reference must be absolutely positioned
- * with complete px boxes (top/left/width/height) in the SAME file.
- */
+
 import { readFileSync, writeFileSync } from 'node:fs';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, num, truncateOutput, resolveWithPermission } from './shared.js';
@@ -103,8 +91,6 @@ export async function layoutEditTool(args: Record<string, unknown>, ctx: AgentTo
       text: `The compiled old text no longer matches ${relative} — the file changed since the map was built. Re-run agent__spatial {mode:"map"} and retry.`,
     };
   }
-  // POST-EDIT HEAL — layout edits are still edits: duplicates at the seam,
-  // delimiter balance and syntax are checked before the file is written.
   const heal = healEditedContent(src, next, absolute);
   const healNote = formatHealNotes(heal);
   next = heal.content;

@@ -1,35 +1,29 @@
-/**
- * SKILL.md parser — the open Agent Skills spec (agentskills.io): a skill is a
- * folder whose SKILL.md starts with YAML frontmatter (`name` + `description`
- * required) followed by Markdown instructions. This parser is deliberately
- * minimal: it covers the spec's field set (flat scalars, one nested `metadata`
- * map, `|`/`>` block scalars) without pulling in a YAML dependency.
- */
+
 
 export interface SkillFrontmatter {
-  /** Spec: 1-64 chars, lowercase alnum + hyphens, no leading/trailing/double hyphen. */
+  
   name: string;
-  /** Spec: 1-1024 chars — what the skill does + when to use it. */
+  
   description: string;
   license?: string;
   compatibility?: string;
-  /** Experimental space-separated pre-approved tool list, kept verbatim. */
+  
   allowedTools?: string;
   metadata?: Record<string, string>;
 }
 
 export interface ParsedSkill {
   frontmatter: SkillFrontmatter | null;
-  /** Markdown body AFTER the frontmatter (what the agent actually follows). */
+  
   body: string;
   valid: boolean;
   problem?: string;
 }
 
-/** Spec name rule: lowercase alnum segments joined by single hyphens. */
+
 const NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
-/** Parses one `key: value` line; returns null for blank/comment lines. */
+
 function scalarLine(line: string): { key: string; value: string; indent: number } | null {
   if (!line.trim() || line.trim().startsWith('#')) return null;
   const match = /^(\s*)([A-Za-z][\w-]*)\s*:\s*([\s\S]*)$/.exec(line);
@@ -37,10 +31,7 @@ function scalarLine(line: string): { key: string; value: string; indent: number 
   return { key: match[2], indent: match[1].length, value: match[3].trim() };
 }
 
-/**
- * Collects a block scalar (`|`, `|-`, `>`, `>-`) — the indented lines that
- * follow. Joined with newlines for `|`, spaces for `>`.
- */
+
 function collectBlock(lines: string[], from: number, folded: boolean): { text: string; next: number } {
   const collected: string[] = [];
   let i = from;
@@ -85,7 +76,7 @@ export function parseSkillMd(raw: string): ParsedSkill {
     if ((line.value === '|' || line.value === '|-' || line.value === '>' || line.value === '>-') && line.indent === 0) {
       const block = collectBlock(fmLines, i + 1, line.value.startsWith('>'));
       i = block.next - 1;
-      if (line.key === 'metadata') continue; // block metadata is not supported — ignore
+      if (line.key === 'metadata') continue;
       values[line.key] = block.text;
       continue;
     }

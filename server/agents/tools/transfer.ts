@@ -1,13 +1,4 @@
-/**
- * agent__rename / agent__move / agent__copy / agent__delete — file operations.
- *
- * Safety posture:
- *  - Move/copy/rename NEVER overwrite (destination must not exist).
- *  - The workspace root itself can never be deleted or moved.
- *  - Deletes snapshot to the vault FIRST, so they are recoverable.
- *  - Everything outside the root resolves through the permission gate.
- *  - Long copies stream progress to the tool card.
- */
+
 import { copyFileSync, cpSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
@@ -21,11 +12,7 @@ import { snapshotFile, snapshotTree } from '../vault.js';
 import { fuzzyHint } from '../fuzzy.js';
 import { recordFsChange } from '../read-policy.js';
 
-/**
- * Shared move/copy core. Both source and destination resolve through the
- * permission gate (ONE approval request when they are outside the root);
- * the destination must not exist. `mode` picks rename vs copy semantics.
- */
+
 async function transferTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
@@ -141,9 +128,9 @@ export async function renameTool(args: Record<string, unknown>, ctx: AgentToolCo
   const source = await resolveWithPermission('rename', inputPath, ctx, 'write');
   const destination = path.join(path.dirname(source.absolute), name);
   if (source.outside) {
-    const granted = await requestApproval({ tool: 'rename', paths: [destination], root: requireWorkspace(ctx).root }, ctx);
+    const { granted, reason } = await requestApproval({ tool: 'rename', paths: [destination], root: requireWorkspace(ctx).root }, ctx);
     if (!granted) {
-      throw new Error(`Permission denied: rename target "${destination}" is outside the workspace and was not approved.`);
+      throw new Error(`Permission denied: rename target "${destination}" is outside the workspace and was not approved.${reason ? ` Their reason: "${reason}".` : ''}`);
     }
   }
 
@@ -223,12 +210,12 @@ export async function deleteTool(args: Record<string, unknown>, ctx: AgentToolCo
   }
 
   if (ctx.confirmDeletes) {
-    const granted = await requestApproval(
+    const { granted, reason } = await requestApproval(
       { tool: 'delete', paths: [absolute], root },
       ctx,
     );
     if (!granted) {
-      return { ok: false, isError: true, text: `The user did not approve deleting ${relative}.` };
+      return { ok: false, isError: true, text: `The user did not approve deleting ${relative}.${reason ? ` Their reason: "${reason}".` : ''}` };
     }
   }
 

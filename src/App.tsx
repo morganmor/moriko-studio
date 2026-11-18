@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, lazy, Suspense } from 'react';
 import { AgentPermissionDialog } from './components/AgentPermissionDialog';
 import { AgentAskUserDialog } from './components/AgentAskUserDialog';
+import { AgentOperatorGateDialog } from './components/AgentOperatorGateDialog';
 import { CheckpointRail } from './components/CheckpointRail';
 import { Composer } from './components/Composer';
 import { AddonWidgetHost } from './components/AddonWidgetHost';
@@ -63,12 +64,7 @@ const LazyAddonDockShortcut = lazy(() =>
   import('./components/AddonDockPanel').then((m) => ({ default: m.AddonDockPanel })),
 );
 
-/**
- * Drag-to-resize handle between two layout columns. A 6px hit zone (1px
- * visible line, wider on hover) — pointer events with setPointerCapture so a
- * drag that leaves the strip keeps tracking. Widths persist to the device
- * ui-state on release. Double-click resets to the default.
- */
+
 function ResizeHandle({
   side,
   value,
@@ -152,14 +148,7 @@ function ResizeHandle({
   );
 }
 
-/**
- * Application shell.
- *
- * Layout is a three-column desktop workspace (rail, workspace, run settings).
- * Below `md` the rail becomes a left drawer and below `lg` the settings panel
- * becomes a right drawer, so both stay reachable on phones instead of being
- * hidden with the thread left squeezed.
- */
+
 export default function App() {
   const loadProviders = useStore((state) => state.loadProviders);
   const view = useStore((state) => state.view);
@@ -245,20 +234,7 @@ export default function App() {
 
   const { send, stop, stopRun, regenerate, regenerateFrom, compactNow } = useChatController();
 
-  /**
-   * RSA/T DISPATCH (agent identity feature): an addon panel asks the host to
-   * spawn a NEW conversation bound to a named agent and auto-send the task.
-   * Flow: newConversation(provider/model of the agent) → title → bind the
-   * conversation to the agent's registry id (rpc bindAgentSession) → send the
-   * prompt. The board then attributes that session's claims/guard/memory to
-    * the agent identity — two sessions on the same model stay two agents.
-    *
-    * COUNCIL: when the ACTIVE conversation is a council, the dispatched agent
-    * lands in a SUB SESSION of that council instead of a new top-level chat —
-    * one RSAT project stays one sidebar row, each agent keeps its own context.
-    * Re-dispatching an agent that already owns a sub session of this council
-    * REUSES it (sends into the existing session) rather than opening another.
-    */
+  
   useEffect(() => {
     const onDispatchAgent = async (event: Event) => {
       const detail = (event as CustomEvent).detail as {
@@ -289,7 +265,7 @@ export default function App() {
     return () => window.removeEventListener('moriko:dispatch-agent', onDispatchAgent as EventListener);
   }, [send]);
 
-  /** COUNCIL: create (or reuse) this agent's sub session inside the ACTIVE council. */
+  
   function ensureCouncilSubSession(agent: {
     agentId: string; agentName: string; providerId: string; model: string; questId?: string;
   }): string | null {
@@ -313,7 +289,7 @@ export default function App() {
     return subId;
   }
 
-  /** COUNCIL/RSAT: dispatched sessions run as agents with the agent's effort. */
+  
   function applyAgentSessionSettings(conversationId: string, thinkingLevel?: string): void {
     const fresh = useStore.getState().conversations.find((entry) => entry.id === conversationId);
     if (!fresh) return;
@@ -326,7 +302,7 @@ export default function App() {
     });
   }
 
-  /** RSAT registry bind — await it: the identity fragment builds on first request. */
+  
   async function bindAgentSessionRpc(agentId: string, sessionId: string, questId: string): Promise<void> {
     try {
       const res = await fetch('/api/addons/rsat/rpc/bindAgentSession', {
@@ -342,16 +318,7 @@ export default function App() {
       console.warn('[rsat] agent bind request failed:', error);
     }
   }
-  /**
-   * COUNCIL (Council Agent addon) — the panel asks the host to (a) turn the
-   * ACTIVE conversation into a council container, (b) add a sub session to
-   * the active conversation's council and switch to it, (c) delete a sub
-   * session, or (d) DISPATCH an RSAT agent into a sub session as pure CONTEXT
-   * injection: the directive is queued server-side (council rpc `dispatch`)
-   * and rides the council prompt fragment at the sub session's first fetch —
-   * no user message, no auto-started round. Creation/deletion stays host-owned:
-   * only the store writes conversations; the addon owns membership/policy.
-   */
+  
   useEffect(() => {
     const onCreateCouncil = () => {
       const store = useStore.getState();
@@ -410,12 +377,7 @@ export default function App() {
         useStore.getState().selectConversation(subId);
       })();
     };
-    /**
-     * ORCHESTRATOR (poin 1): user designates an RSAT agent as the orchestrator
-     * of the active council. The main session is bound to that agent's identity
-     * (provider/model/agentMode/thinkingLevel) so speaking to the main session =
-     * speaking to the orchestrator. The council doc records orchestratorAgentId.
-     */
+    
     const onSetOrchestrator = (event: Event) => {
       const detail = (event as CustomEvent).detail as {
         agentId: string; agentName: string; providerId: string; model: string;
@@ -442,12 +404,7 @@ export default function App() {
         body: JSON.stringify({ sessionId: active.id, councilId: active.councilId, orchestratorAgentId: detail.agentId }),
       }).catch(() => undefined);
     };
-    /**
-     * COUNCIL STOP (poin 3): the orchestrator's council_stop tool (via bus →
-     * panel → this event) asks the host to abort a sub-agent's running stream.
-     * Server-side abort already happened via api.sessions.abort; this mirrors
-     * the client-side cleanup that stop() does for the active conversation.
-     */
+    
     const onCouncilStop = (event: Event) => {
       const detail = (event as CustomEvent).detail as { id?: string } | undefined;
       if (!detail?.id) return;
@@ -469,15 +426,7 @@ export default function App() {
     };
   }, [stopRun]);
 
-  /**
-   * COUNCIL BUS BRIDGE — the always-mounted host side of two orchestrator
-   * powers that need a client-side run:
-   *  · 'council:stopped' → mirror the client-side cleanup (abort stream).
-   *  · 'council:wake'    → an IDLE sub-session has no running adapter to drain
-   *    an injected message, so a message to it would sit queued forever (the
-   *    "orchestrator message never arrives" bug). The council addon publishes
-   *    the targets here; this bridge starts their run with the instruction.
-   */
+  
   useEffect(() => {
     const onStop = (frame: { id?: number; payload?: Record<string, unknown> }) => {
       const seen = (window as unknown as { __councilSeenStop?: number }).__councilSeenStop ?? 0;
@@ -555,19 +504,13 @@ export default function App() {
   const [goalsOpen, setGoalsOpen] = useState(false);
   const [todosOpen, setTodosOpen] = useState(false);
 
-  /** TURN NAVIGATION — the composer band's arrows call INTO the thread's
-   *  pin/glide owner (via onNavigationReady) instead of scrolling raw DOM. */
+  
   const [turnNavigation, setTurnNavigation] = useState<ThreadNavigation | null>(null);
   const handleNavigationReady = useCallback((navigation: ThreadNavigation | null) => {
     setTurnNavigation(navigation);
   }, []);
 
-  /**
-   * NATIVE workspace pick: clicking the composer's folder button opens the
-   * DEVICE'S OWN dialog (Windows Explorer via the local proxy's PowerShell)
-   * and registers the selected folder as the active agent workspace. The
-   * in-app explorer was removed — the native dialog is the only path.
-   */
+  
   const addAgentWorkspace = useStore((state) => state.addAgentWorkspace);
   const setActiveAgentWorkspace = useStore((state) => state.setActiveAgentWorkspace);
   const activeIdForPick = useStore((state) => state.activeId);
@@ -625,10 +568,7 @@ export default function App() {
     void loadGallery();
   }, [loadGallery]);
 
-  /** agent__image appends results server-side and broadcasts on the bus.
-   *  TWO refresh paths, because the SSE frame can race the tool_result that
-   *  carries the images: the optimistic push (instant, local) and the bus
-   *  refetch (authoritative, reaches every browser). */
+  
   const addonEvent = useStore((state) => state.addonEvent);
   useEffect(() => {
     if (addonEvent?.topic === 'moriko:gallery-added') void loadGallery();
@@ -798,12 +738,7 @@ export default function App() {
     [send, compactNow],
   );
 
-  /**
-   * STEER: while a generation runs, the composer's button becomes Steer and
-   * hands the draft to the LIVE stream's context instead of opening a new
-   * turn. `false` means the run ended in the gap between typing and pressing
-   * — the Composer keeps the text and the user is told, so nothing is lost.
-   */
+  
   const handleSteer = useCallback(
     (text: string, attachments?: TurnAttachment[]) => {
       const slash = /^\/compact\b/i.exec(text.trim());
@@ -845,11 +780,7 @@ export default function App() {
     [activeConversation],
   );
 
-  /**
-   * SEND REMINDER — the user manually pushes the server-owned Writing-Rules
-   * reminder into the running generation's context. The bubble shows a fixed
-   * label, not the full text.
-   */
+  
   const handleSendReminder = useCallback((): Promise<
     { id: string | null } | import('./lib/api').SteerFailure
   > => {
@@ -879,10 +810,7 @@ export default function App() {
   const turns = activeConversation?.turns ?? [];
   const hasThread = turns.length > 0;
 
-  /** ONE COMPOSER — a single <Composer/> instance serves both states: the
-   *  landing view (centered under the Explore hero) and the thread dock
-   *  (bottom). It is mounted once in the playground column; the first send
-   *  only re-flows it from center to dock, and FLIP animates that drop. */
+  
   const composerSlotRef = useRef<HTMLDivElement | null>(null);
   const slotRectRef = useRef<DOMRect | null>(null);
   const slotRef = useCallback((node: HTMLDivElement | null) => {
@@ -910,15 +838,13 @@ export default function App() {
     );
   }, [hasThread]);
 
-  /** THREAD SCROLLER + TURN RAIL — ref scroller thread & state rail checkpoint:
-   *  turnNumbers/activeTurn diukur dari baris turn di scroller ini. */
+  
   const threadScrollerRef = useRef<HTMLDivElement | null>(null);
   const [scrollbarWidth, setScrollbarWidth] = useState(0);
   const [turnNumbers, setTurnNumbers] = useState<number[]>([]);
   const [activeTurn, setActiveTurn] = useState(1);
 
-  /** Checkpoint rail: pin it at the native scrollbar's left edge. Measuring
-   *  (offsetWidth - clientWidth) keeps the overlay exact across browsers/zoom. */
+  
   useEffect(() => {
     const el = threadScrollerRef.current;
     if (!el) return;
@@ -928,8 +854,7 @@ export default function App() {
     return () => window.removeEventListener('resize', sync);
   }, [view, hasThread]);
 
-  /** Rail measurement: read the turn rows straight off the thread scroller
-   *  (raf-throttled) so markers and arrows share one source of truth. */
+  
   useEffect(() => {
     const scroller = threadScrollerRef.current;
     if (!scroller || !hasThread) {
@@ -1342,6 +1267,7 @@ export default function App() {
       ) : null}
       <AgentPermissionDialog />
       <AgentAskUserDialog />
+      <AgentOperatorGateDialog />
       <AddonNotificationHost />
       {}
       <AddonWidgetHost site="floating" streaming={streaming} />

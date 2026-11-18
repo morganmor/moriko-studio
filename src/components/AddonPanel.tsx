@@ -1,7 +1,4 @@
-/**
- * AddonPanel — management panel for installed addons.
- * Shown as a tab in the right dock (next to Config / Tree).
- */
+
 
 import { memo, useEffect, useState } from 'react';
 import { RightDockCloseButton, RightDockSlot, cx } from './ui';

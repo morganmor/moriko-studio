@@ -1,8 +1,4 @@
-/**
- * F5.2 — agent__game_probe: run a LOCAL game/3D app headless and report
- * runtime facts (fps, WebGL, errors, canvas blank detection, screenshots).
- * Localhost/private ONLY — deliberately NOT gated by Web Access (B10).
- */
+
 import { readFileSync } from 'node:fs';
 import type { AgentToolContext, HarnessToolResult } from './shared.js';
 import { str, num, truncateOutput } from './shared.js';

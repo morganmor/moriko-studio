@@ -1,10 +1,4 @@
-/**
- * cloudflared.ts — binary manager + Quick Tunnel lifecycle for Mobile Watching.
- *
- * Download target is ALWAYS explicit (user-picked platform/arch); host
- * detection only pre-fills the UI. A non-host binary is download-only: only a
- * host-compatible `cloudflared` may run the tunnel.
- */
+
 import { spawn, execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -18,7 +12,7 @@ export interface PlatformTarget {
   id: string;
   label: string;
   asset: string;
-  /** File name once installed. */
+  
   binName: string;
   kind: 'binary' | 'tgz';
   runsHere: boolean;
@@ -79,7 +73,7 @@ function writeState(state: TunnelState): void {
   atomicWriteJson(STATE_FILE, state);
 }
 
-/** Download progress, readable while POST /install runs. */
+
 export const installState: {
   phase: 'idle' | 'downloading' | 'extracting' | 'error';
   targetId: string | null;
@@ -102,10 +96,7 @@ async function extractTgz(archive: string, target: PlatformTarget): Promise<void
   fs.rmSync(outDir, { recursive: true, force: true });
 }
 
-/**
- * Download the selected asset (skipped when already installed). Streams to a
- * .partial file, then renames atomically. Never guesses the target: pass it.
- */
+
 export async function ensureInstalled(targetId?: string, force = false): Promise<{ skipped: boolean; path: string }> {
   const target = targetById(targetId);
   const dest = binPath(target);
@@ -154,7 +145,7 @@ export async function ensureInstalled(targetId?: string, force = false): Promise
   }
 }
 
-/** `cloudflared version …` (cached in state once known). */
+
 export async function readVersion(target?: PlatformTarget): Promise<string | null> {
   const t = target ?? hostTarget();
   if (!isInstalled(t)) return null;
@@ -182,7 +173,7 @@ interface LiveTunnel {
   port: number | null;
   startedAt: string | null;
   pid: number | null;
-  /** True when adopted from a previous server run (no child handle). */
+  
   adopted: boolean;
 }
 
@@ -190,7 +181,7 @@ const live: LiveTunnel = { child: null, url: null, port: null, startedAt: null, 
 
 const URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
 
-/** Start a Quick Tunnel against `port`. Resolves once the public URL appears. */
+
 export async function startTunnel(port: number, targetId?: string): Promise<{ url: string }> {
   const target = targetById(targetId);
   if (!target.runsHere) {
@@ -280,10 +271,7 @@ export async function stopTunnel(): Promise<void> {
   writeState({});
 }
 
-/**
- * Boot recovery: the supervisor reloads the server (exit 75) without killing
- * the tunnel child. Re-adopt the recorded pid so status/stop keep working.
- */
+
 export function recoverTunnel(): void {
   const state = readState();
   if (!state.pid || !state.url) return;

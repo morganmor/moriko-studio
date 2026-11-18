@@ -31,15 +31,7 @@ const STATUS_STYLE: Record<Goal['status'], { border: string; background: string;
   done: { border: 'var(--line)', background: 'rgb(var(--c-elev))', color: 'var(--faint)' },
 };
 
-/**
- * GOALS & PLANS panel.
- *
- * Goals (with their plan and todo checklist) are created and progressed by
- * the AGENT through harness tools; this panel shows the live state and gives
- * the user control: pause, resume, edit, or delete a goal. Status is
- * bookkeeping only — nothing auto-continues the conversation; the user sends
- * the next message whenever they want the agent to keep working.
- */
+
 export function GoalsPanel({ open, onClose }: GoalsPanelProps) {
   const conversation = useStore((state) => state.activeConversation());
   const setConversationGoals = useStore((state) => state.setConversationGoals);

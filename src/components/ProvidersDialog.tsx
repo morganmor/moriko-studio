@@ -52,7 +52,7 @@ const EMPTY_DRAFT: ProviderDraft = {
   imageConfigText: '',
 };
 
-/** Image adapter choices; '' means the server auto-detects from the base URL. */
+
 const IMAGE_ADAPTER_OPTIONS = [
   { value: '', label: 'Auto-detect' },
   { value: 'openai-sync', label: 'OpenAI-compatible (sync)' },
@@ -68,7 +68,7 @@ const KIND_OPTIONS: Array<{ value: ProviderKind; label: string; hint: string }> 
   { value: 'mistral', label: 'Mistral AI', hint: '/chat/completions' },
 ];
 
-/** Starting points offered when adding a provider, so nothing is blank. */
+
 const QUICK_TEMPLATES: Array<{ label: string; draft: Partial<ProviderDraft> }> = [
   {
     label: 'OpenAI-compatible',
@@ -90,13 +90,7 @@ interface ProvidersDialogProps {
   onClose: () => void;
 }
 
-/**
- * Provider manager.
- *
- * Two panes: the catalogue on the left, the editor on the right. Built-in
- * providers are read-only and say where their key comes from; custom ones are
- * fully editable and persisted server-side.
- */
+
 export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
   const providers = useStore((state) => state.providers);
   const loadProviders = useStore((state) => state.loadProviders);
@@ -109,46 +103,36 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loadingModels, setLoadingModels] = useState(false);
-  /** True while a built-in's live /models fetch is in flight. */
+  
   const [fetchingModels, setFetchingModels] = useState(false);
   const [modelInput, setModelInput] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
-  /** Draft key for a BUILT-IN provider (saved via the dedicated endpoint). */
+  
   const [builtInKey, setBuiltInKey] = useState('');
-  /** Draft model ids for a BUILT-IN provider (comma-separated is fine). */
+  
   const [builtInModelInput, setBuiltInModelInput] = useState('');
-  /**
-   * LAYER-1 CAPABILITY TABLE for the provider being edited.
-   *
-   * Lives in component state until Save, exactly like the rest of the draft —
-   * the table is a form, not a live wire. Keyed by model id; a model with no
-   * row simply resolves through Layers 2/3.
-   */
+  
   const [modelConfigs, setModelConfigs] = useState<Record<string, ProviderModelConfig>>({});
-  /** LAYER-2 hints for the draft, filled by "Fetch from provider". */
+  
   const [draftHints, setDraftHints] = useState<Record<string, ProviderModelHint>>({});
   const modelMetaMap = useStore((state) => state.modelMeta);
-  /**
-   * Open model picker after a live fetch: the provider's /models list minus
-   * everything already in the catalogue, with search + checkboxes so the user
-   * decides what lands instead of the fetch dumping every id in at once.
-   */
+  
   const [modelPicker, setModelPicker] = useState<{ models: string[]; target: 'draft' | 'builtin' } | null>(null);
-  /** Left pane: provider search query ("Search provider"). */
+  
   const [query, setQuery] = useState('');
-  /** API key field reveal toggle (right pane). */
+  
   const [showKey, setShowKey] = useState(false);
-  /** "Test" connectivity probe result: Connected · N ms / Connection failed. */
+  
   const [testResult, setTestResult] = useState<{ ok: boolean; ms: number; error?: string } | null>(null);
   const [testing, setTesting] = useState(false);
-  /** Base-URL copy feedback (icon flips to a check briefly). */
+  
   const [copied, setCopied] = useState(false);
-  /** API-key copy feedback (icon flips to a check briefly). */
+  
   const [keyCopied, setKeyCopied] = useState(false);
   const activeModel = useStore((state) => state.model);
 
   const selected = providers.find((entry) => entry.id === selectedId);
-  /** Key currently typed in the field (built-ins keep their own draft). */
+  
   const keyValue = selected ? (selected.builtIn ? builtInKey : draft.apiKey) : '';
 
   useEffect(() => {
@@ -165,7 +149,6 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
         ? JSON.stringify(selected.imageConfig, null, 2)
         : '',
     });
-    // The saved Layer-1 table + the last captured Layer-2 hints seed the matrix.
     setModelConfigs(selected.modelConfigs ?? {});
     setDraftHints(selected.modelHints ?? {});
     setEditing(false);
@@ -179,10 +162,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
     await loadProviders();
   };
 
-  /**
-   * Connectivity "Test": round-trips /models through the server proxy and
-   * measures the wall time — the right pane's "Connected · N ms" line.
-   */
+  
   const runTest = async () => {
     if (!selected) return;
     setTesting(true);
@@ -202,7 +182,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
     }
   };
 
-  /** Copies the selected provider's base URL; check icon for 1.6s. */
+  
   const copyUrl = async () => {
     if (!selected) return;
     try {
@@ -214,7 +194,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
     }
   };
 
-  /** Copies the typed API key; check icon for 1.6s. */
+  
   const copyKey = async () => {
     if (!keyValue) return;
     try {
@@ -226,7 +206,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
     }
   };
 
-  /** Saves (or clears) the UI-supplied key, or edits model ids, for a built-in. */
+  
   const patchBuiltIn = async (
     patch: { apiKey?: string; addModels?: string[]; removeModels?: string[]; setModels?: string[] },
     successMessage: string,
@@ -246,14 +226,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
     }
   };
 
-  /**
-   * Pulls the provider's LIVE /models list through the server proxy and opens
-   * the model picker: the user chooses which ids land in the built-in's
-   * catalogue (already-present ids are hidden and untouched — no more
-   * replace-everything fetches, and no re-adding stale curated defaults by
-   * accident). Non-chat entries (embeddings, image, audio, moderation) are
-   * filtered out so the chat picker stays usable.
-   */
+  
   const fetchLiveModels = async () => {
     if (!selected || !selected.builtIn) return;
     setFetchingModels(true);
@@ -279,11 +252,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
     }
   };
 
-  /**
-   * Merges fetched Layer-2 hints into the draft and pre-fills rows for every
-   * id that has none. Pinned fields survive untouched — a re-fetch improves the
-   * rows the user never spoke about and cannot reverse the ones they did.
-   */
+  
   const seedHints = (
     hints: Record<string, ProviderModelHint>,
     ids: readonly string[],
@@ -349,17 +318,11 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
         imageConfig,
       });
 
-      // The table is persisted through its OWN endpoint so that a partial save
-      // (or a built-in, which has no provider record) still lands the grid.
-      // `createProvider` already echoed it for custom providers; this keeps a
-      // single code path and refreshes provenance server-side.
       let savedConfigs = saved.modelConfigs ?? modelConfigs;
       if (Object.keys(modelConfigs).length > 0) {
         try {
           savedConfigs = await saveModelConfigs(saved.id, modelConfigs);
         } catch {
-          // The provider itself saved; a grid failure must not look like a
-          // provider failure — the notice below reports the provider outcome.
         }
       }
       setModelConfigs(savedConfigs);
@@ -375,19 +338,13 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
     }
   };
 
-  /**
-   * Saves the LAYER-1 table alone — the built-in path (no provider record) and
-   * the "only the grid changed" case, so the user never has to re-save a whole
-   * provider just to persist a checkbox.
-   */
+  
   const saveTable = async () => {
     if (!selected) return;
     setSaving(true);
     try {
       const next = await saveModelConfigs(selected.id, modelConfigs);
       setModelConfigs(next);
-      // Layer-2 hints ride the built-in key route (custom providers store them
-      // server-side on every fetch already).
       if (selected.builtIn && Object.keys(draftHints).length > 0) {
         await updateBuiltInProvider(selected.id, { modelHints: draftHints });
       }
@@ -402,7 +359,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
     }
   };
 
-  /** Removes a stored credential without touching the rest of the record. */
+  
   const clearStoredKey = async () => {
     if (!selected || selected.builtIn) return;
     try {
@@ -453,9 +410,6 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
         showNotice('provider.saveFirst');
         return;
       }
-      // LAYER 2 lands in the draft: every fetched id gets a pre-filled row from
-      // whatever the endpoint published, and ids the user already pinned keep
-      // their pins (buildModelConfig never invents a user decision).
       if (listing) seedHints(listing.hints, listing.models);
       const fresh = models.filter((id) => !draft.models.includes(id));
       if (models.length === 0) {
@@ -474,7 +428,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
     }
   };
 
-  /** Applies the picker's selection to the draft (custom) or the built-in catalogue. */
+  
   const applyPicked = (picked: string[]) => {
     const target = modelPicker?.target ?? 'draft';
     setModelPicker(null);
@@ -1309,12 +1263,7 @@ export function ProvidersDialog({ open, onClose }: ProvidersDialogProps) {
   );
 }
 
-/**
- * Post-fetch model chooser: the provider's live /models list (already-added
- * ids excluded by the caller) with search, per-model checkboxes and
- * select/deselect-all — the user decides what lands in the catalogue instead
- * of the fetch dumping every id in at once.
- */
+
 function ModelPickerOverlay({
   models,
   busy,

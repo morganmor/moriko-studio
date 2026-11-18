@@ -1,21 +1,12 @@
 import type { ProviderKind, ProviderPublic } from './contracts.js';
 
-/**
- * Built-in provider catalogue.
- *
- * OpenAI is the chat workhorse. The user supplies the API key from the UI —
- * it is stored per built-in id (see `ProviderStore.setBuiltInKey`); an env
- * var override is also honored for headless setups. Anything else the user
- * adds as a custom provider (stored in `.data`): any OpenAI-compatible vendor
- * via `kind: 'openai'`, while `gemini` / `anthropic` / `mistral` keep their
- * own adapters.
- */
+
 export interface ProviderDefinition extends Omit<ProviderPublic, 'hasServerKey' | 'userSuppliedKey' | 'builtIn'> {
-  /** Environment variable holding the credential, if any. */
+  
   envKey?: string;
-  /** Environment variable overriding the base URL. */
+  
   envBaseUrl?: string;
-  /** True when the provider works without a credential (local runtimes). */
+  
   keyOptional?: boolean;
 }
 

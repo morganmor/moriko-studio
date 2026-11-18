@@ -1,21 +1,6 @@
-/**
- * agent__spatial — Layout IR map / collision check / semantic diff (F1).
- *
- * Tier-1 static spatial harness (docs/plans/PLAN-SPATIAL-HARNESS.md). Three modes:
- *   map   — the workspace layout IR: absolutely positioned regions + collision
- *           candidates + warnings. Call BEFORE editing UI files: this is the
- *           "inilah medannya" context that stops blind coordinate edits (P1).
- *   check — same, but exit-shaped for gates: ok=false when collision
- *           candidates exist (after-edit verification, F3 feeds on this).
- *   diff  — semantic before/after: pass baselines captured via mode "map"
- *           (snapshot: true) or inline {before, after} JSON paths.
- *
- * Static honesty: overlaps are CANDIDATES (severity "soft") because static
- * coordinates are parent-relative; overlays (modal/tooltip/...) are exempt;
- * %/var()/calc() sizes are flagged, never faked into rects.
- */
+
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
-import { str, truncateOutput, requireWorkspace, resolveWithPermission } from './shared.js';
+import { str, truncateOutput, requireWorkspace, resolveWithPermission, checkWebAccessUrl } from './shared.js';
 import { callVisionModel, resolveImageSource } from '../vision.js';
 import { getVisionConfig } from '../../visionConfig.js';
 import { resolveCredentials } from '../../credentials.js';
@@ -30,7 +15,7 @@ import {
   type SpatialMap,
 } from '../spatial.js';
 
-/** Snapshot the CURRENT map as a diff baseline (returns the renderable IR). */
+
 function snapshotPayload(map: SpatialMap): string {
   return JSON.stringify(
     {
@@ -73,7 +58,8 @@ export async function spatialTool(args: Record<string, unknown>, ctx: AgentToolC
       text: `Unknown mode "${mode}". Use mode: "map" (layout IR), "check" (collision gate), "diff" (before/after), or "runtime" (browser ground truth).`,
     };
   }
-  const workspace = mode === 'diff' ? null : requireWorkspace(ctx);
+  const needsWorkspaceUpfront = mode === 'map' || mode === 'check';
+  const workspace = needsWorkspaceUpfront ? requireWorkspace(ctx) : null;
   const root = workspace === null ? '' : workspace.root;
 
   if (mode === 'runtime') {
@@ -85,9 +71,13 @@ export async function spatialTool(args: Record<string, unknown>, ctx: AgentToolC
         text: 'runtime mode needs a "url" — the local dev server to measure, e.g. http://localhost:5173/.',
       };
     }
+    const blocked = checkWebAccessUrl(url, ctx, 'agent__spatial');
+    if (blocked) {
+      return { ok: false, isError: true, errorCode: 'web_access_off', text: blocked };
+    }
     try {
       const { captureRuntime, compareWithRuntime, renderRuntimeReport, readBaseline } = await import('../spatial-runtime.js');
-      const allowPublic = args.allowPublic === true;
+      const allowPublic = ctx.webAccess !== false && args.allowPublic === true;
       const capture = await captureRuntime(url, {
         allowPublic,
         saveScreenshot: args.screenshot === false ? false : true,
@@ -95,7 +85,7 @@ export async function spatialTool(args: Record<string, unknown>, ctx: AgentToolC
       });
       let comparison;
       if (args.compareStatic === true) {
-        const staticMap = spatialMapForRoot(root);
+        const staticMap = spatialMapForRoot(requireWorkspace(ctx).root);
         comparison = compareWithRuntime(staticMap, capture.map);
       }
       const header = renderRuntimeReport(capture, comparison);
@@ -145,6 +135,12 @@ export async function spatialTool(args: Record<string, unknown>, ctx: AgentToolC
         }
         resolvedSource = out;
       } else {
+        if (url) {
+          const blocked = checkWebAccessUrl(url, ctx, 'agent__spatial');
+          if (blocked) {
+            return { ok: false, isError: true, errorCode: 'web_access_off', text: blocked };
+          }
+        }
         const out = await resolveImageSource(url || dataUrl, fetchPublicImage);
         if (!out) {
           return { ok: false, isError: true, text: 'The given url/dataUrl is not a supported image (expected an image content type).' };

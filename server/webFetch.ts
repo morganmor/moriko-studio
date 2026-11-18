@@ -1,22 +1,7 @@
 import type { ChatMessage } from './contracts.js';
 import { deadline, isAbortLike } from './liveness.js';
 
-/**
- * Built-in Fetch Web tool.
- *
- * When enabled, the LOCAL PROXY scans the newest user message for URLs,
- * downloads each page, strips it to readable text, and appends the content
- * to that message's wire payload. The stored conversation never changes —
- * the injected text exists only on the request to the provider, so the chat
- * history stays clean while every model (not just tool-aware ones) can read
- * the page.
- *
- * Safety rails: http/https only, private/loopback hosts are refused
- * (a user-pasted link must never be able to probe the local network),
- * 15 s timeout, 512 KB download cap, 12 k chars injected per page,
- * at most 3 links per message. Fetch failures degrade to a short note
- * instead of failing the whole generation.
- */
+
 
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_DOWNLOAD_BYTES = 512 * 1024;
@@ -25,7 +10,7 @@ const MAX_LINKS_PER_MESSAGE = 3;
 
 const URL_PATTERN = /https?:\/\/[^\s<>"')\]]+/g;
 
-/** Hosts a pasted link should never reach: loopback and RFC1918/link-local. */
+
 function isPrivateHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
   if (host === 'localhost' || host.endsWith('.local') || host.endsWith('.internal')) return true;
@@ -43,10 +28,9 @@ function isPrivateHost(hostname: string): boolean {
 }
 
 export interface UrlScan {
-  /** URLs the fetch may attempt. */
+  
   allowed: string[];
-  /** URLs refused by the safety gate — reported EXPLICITLY so the model
-   *  learns a fetch was blocked instead of hallucinating the page content. */
+  
   blocked: Array<{ url: string; reason: string }>;
 }
 
@@ -86,7 +70,7 @@ export function extractUrls(text: string): UrlScan {
   };
 }
 
-/** Strips HTML down to readable text without pulling in a DOM dependency. */
+
 function htmlToText(html: string): string {
   return html
     .replace(/<script\b[\s\S]*?<\/script>/gi, ' ')
@@ -110,7 +94,7 @@ function htmlToText(html: string): string {
     .trim();
 }
 
-/** Downloads one page and returns its text, or a short failure reason. */
+
 async function fetchPageText(url: string): Promise<string> {
   const bound = deadline(undefined, FETCH_TIMEOUT_MS, 'WEB_FETCH_TIMEOUT');
   try {
@@ -150,7 +134,7 @@ async function fetchPageText(url: string): Promise<string> {
   }
 }
 
-/** The text of one message, whatever shape the wire content takes. */
+
 function messageText(message: ChatMessage): string {
   if (typeof message.content === 'string') return message.content;
   return (message.content ?? [])
@@ -158,11 +142,7 @@ function messageText(message: ChatMessage): string {
     .join('\n');
 }
 
-/**
- * Scans the LAST user message for links and, when Fetch Web is enabled,
- * returns the history with the fetched page texts appended to that message.
- * Resolves fast when nothing matches; never rejects.
- */
+
 export async function augmentWithWebContent(
   messages: ChatMessage[],
   enabled: boolean,

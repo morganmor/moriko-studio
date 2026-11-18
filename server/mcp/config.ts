@@ -4,27 +4,13 @@ import { randomUUID } from 'node:crypto';
 import { atomicWriteJson } from '../atomicWrite.js';
 import { mcpFile } from '../paths.js';
 
-/**
- * Persisted configuration for MCP servers the user registered in Settings.
- *
- * Two transports (MCP spec 2026-07-28):
- *  - `stdio`  — LOCAL server: the proxy spawns `command args…` and speaks
- *               JSON-RPC over the process's stdin/stdout.
- *  - `http`   — REMOTE server: Streamable HTTP (POST JSON-RPC, optional
- *               session id, SSE or JSON responses), auth via static headers.
- *
- * `headers` may hold secrets; everything that leaves the server is masked
- * (see `maskServers`) — full values are used internally only.
- *
- * Stored at `~/.moriko/mcp.json` (see paths.ts) — machine-level config that
- * survives a fresh checkout of the repo.
- */
+
 
 const CONFIG_FILE = mcpFile;
 
 export type McpTransport = 'stdio' | 'http';
 
-/** Named auth profiles for remote servers — currently only Figma OAuth. */
+
 export type McpAuthProfile = 'figma';
 
 export interface McpServerConfig {
@@ -32,21 +18,18 @@ export interface McpServerConfig {
   name: string;
   transport: McpTransport;
   enabled: boolean;
-  /** stdio only: executable and arguments. */
+  
   command?: string;
   args?: string[];
-  /** stdio only: extra environment variables for the child process. */
+  
   env?: Record<string, string>;
-  /** http only: the endpoint URL. */
+  
   url?: string;
-  /** http only: static auth headers (may contain secrets). */
+  
   headers?: Record<string, string>;
-  /** http only: named OAuth profile — headers are resolved per request. */
+  
   auth?: McpAuthProfile;
-  /**
-   * Tool names the user switched OFF for this server — they are filtered out
-   * of the catalogue offered to the model entirely.
-   */
+  
   disabledTools?: string[];
   createdAt: string;
 }
@@ -90,10 +73,7 @@ export function getServer(id: string): McpServerConfig | undefined {
   return load().servers.find((server) => server.id === id);
 }
 
-/**
- * Merges user-submitted env/headers with the stored ones: masked sentinel
- * values ('***' from a GET) mean "unchanged" and keep the real secret.
- */
+
 function mergeSecrets(
   incoming: Record<string, string> | undefined,
   existing: Record<string, string> | undefined,
@@ -148,7 +128,7 @@ export function removeServer(id: string): boolean {
   return true;
 }
 
-/** Secrets never reach the browser: header values render as masked stubs. */
+
 function maskServers(servers: McpServerConfig[]): McpServerConfig[] {
   return servers.map((server) => ({
     ...server,

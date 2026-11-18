@@ -1,22 +1,4 @@
-/**
- * BACKEND HARNESS (F5) — conditional backend layer: ephemeral SQLite,
- * deterministic seeding, OpenAPI contract enforcement.
- *
- * Design contract (docs/plans/PLAN-SPATIAL-HARNESS.md F5 "backend as-is"):
- *  - The layer is INERT unless asked. It never touches the workspace, never
- *    runs migrations on its own, and adds zero runtime dependencies.
- *  - SQLite comes from Node's built-in `node:sqlite` (no native build step,
- *    no supply-chain surface). Databases opened WITHOUT a file are
- *    EPHEMERAL: they live in this process only and die with it.
- *  - Registries are per-agent-session, LRU-capped: an agent cannot leak an
- *    unbounded number of databases across a long conversation.
- *
- * Three capabilities, each fail-loud with actionable errors:
- *   db      — open / exec / query / fork / discard named databases
- *   seed    — deterministic row generation (same seed → same rows)
- *   contract— lint an OpenAPI (JSON) spec + validate request bodies against
- *             it — the subset a frontend/backend contract needs daily
- */
+
 
 import { DatabaseSync } from 'node:sqlite';
 
@@ -27,7 +9,7 @@ const FORK_MAX_ROWS_PER_TABLE = 50_000;
 interface BackendDb {
   name: string;
   db: DatabaseSync;
-  /** false = backed by a file on disk (survives the process) */
+  
   ephemeral: boolean;
   createdAt: number;
   lastUsed: number;
@@ -49,7 +31,7 @@ function touch(entry: BackendDb): void {
   entry.lastUsed = Date.now();
 }
 
-/** Evict the least-recently-used database when the session cap is hit. */
+
 function evictIfNeeded(registry: Map<string, BackendDb>): void {
   while (registry.size >= MAX_DBS_PER_SESSION) {
     let oldestKey: string | null = null;
@@ -73,7 +55,7 @@ function evictIfNeeded(registry: Map<string, BackendDb>): void {
 export interface DbOpenOptions {
   sessionId: string | undefined;
   name: string;
-  /** absolute path — when given, the DB is FILE-BACKED (not ephemeral) */
+  
   filePath?: string;
 }
 
@@ -116,7 +98,7 @@ export interface SqlOutcome {
   lastInsertRowid: number | bigint | undefined;
 }
 
-/** Execute a write statement (CREATE/INSERT/UPDATE/DELETE…). */
+
 export function execDb(
   sessionId: string | undefined,
   name: string,
@@ -130,7 +112,7 @@ export function execDb(
   return { changes: info.changes, lastInsertRowid: info.lastInsertRowid };
 }
 
-/** The value types node:sqlite binds natively. */
+
 type SqlValue = null | number | bigint | string | Uint8Array;
 
 function toSqlValue(value: unknown): SqlValue {
@@ -155,7 +137,7 @@ export interface QueryRows {
 
 const MAX_QUERY_ROWS = 500;
 
-/** Run a read query, returning at most 500 rows. */
+
 export function queryDb(
   sessionId: string | undefined,
   name: string,
@@ -173,7 +155,7 @@ export function queryDb(
   };
 }
 
-/** Close and forget one database (in-memory data is gone — that is the point). */
+
 export function discardDb(sessionId: string | undefined, name: string): boolean {
   const registry = registryFor(sessionId);
   const entry = registry.get(name);
@@ -212,12 +194,7 @@ export function listDbs(sessionId: string | undefined): DbInfo[] {
 }
 
 
-/**
- * Branch `sourceName` into a new database `forkName`: same schema, same data
- * (bounded), fully independent. This is the "try a migration on a copy"
- * move — the original is untouched, the fork dies with the session unless
- * explicitly persisted later.
- */
+
 export function forkDb(
   sessionId: string | undefined,
   sourceName: string,
@@ -269,7 +246,7 @@ function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
 
-/** Side-channel for non-fatal notes (fork truncations) — drained by the tool. */
+
 const warningsBuffer: string[] = [];
 
 export function drainWarnings(): string[] {
@@ -279,7 +256,7 @@ export function drainWarnings(): string[] {
 }
 
 
-/** Deterministic 32-bit PRNG (mulberry32) — no Math.random anywhere. */
+
 export function makeRng(seed: number): () => number {
   let state = seed >>> 0;
   return () => {
@@ -294,7 +271,7 @@ export function makeRng(seed: number): () => number {
 export interface SeedTableSpec {
   table: string;
   count: number;
-  /** column → value generator spec */
+  
   columns: Record<string, SeedColumnSpec>;
 }
 
@@ -408,12 +385,7 @@ export interface ContractLint {
   schemas: number;
 }
 
-/**
- * Lint an OpenAPI 3.x spec (as a parsed object): every operation must have
- * responses; every referenced $ref must resolve; request bodies / response
- * schemas that the FE renders must actually exist. This catches the classic
- * "the API changed and the UI silently renders nothing" class of P2.
- */
+
 export function lintContract(spec: unknown): ContractLint {
   const issues: ContractIssue[] = [];
   const root = spec as {
@@ -487,11 +459,7 @@ export interface ContractValidation {
   errors: string[];
 }
 
-/**
- * Validate a request body against a schema node — structural subset: types,
- * required fields, enums, and item types for arrays. Not a full JSON-Schema
- * engine; it catches the contract drift a frontend actually hits.
- */
+
 export function validateAgainstSchema(
   body: unknown,
   schema: unknown,

@@ -1,9 +1,4 @@
-/**
- * RSA/T Create Agent panel (view 'create') — seperti membuat karakter game:
- * nama, logo custom (upload gambar), provider/model (bisa di-swap kapan saja
- * tanpa ganti identitas), catatan pembuka → memory terstruktur.
- * API key TIDAK disentuh di sini — tetap di konfigurasi host (backend).
- */
+
 import { useEffect, useRef, useState } from 'react';
 import { getProviders } from '@moriko/host';
 import { Ic } from './icon.tsx';
@@ -16,7 +11,7 @@ type Prov = { id: string; label: string; models: string[] };
 
 const LOGO_MAX = 128; // px — preview & storage sanity
 
-/** Baca file gambar → data URL (dipakai sebagai logo agent, disimpan server). */
+
 function readLogo(file: File, cb: (url: string) => void) {
   if (!/^image\//.test(file.type) || file.size > 200_000) {
     toast('error', 'Logo rejected', 'Use an image under 200 KB.');
@@ -39,15 +34,14 @@ function readLogo(file: File, cb: (url: string) => void) {
   rd.readAsDataURL(file);
 }
 
-/** Seed hash sederhana (djb2) — logo generator deterministik dari string. */
+
 function seedOf(text: string): number {
   let h = 5381;
   for (let i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
   return Math.abs(h);
 }
 
-/** Logo generator prosedural: blok 4×4 (identicon pixel-art, ala skin Minecraft)
- *  deterministik dari nama agent — tidak ada upload pun tetap punya wajah unik. */
+
 function generateLogo(seed: string, palette: number): string {
   const P = ['#c0392b', '#d35400', '#e6a919', '#27ae60', '#16a085', '#2980b9', '#8e44ad', '#7f5539'];
   const h = seedOf(seed);
@@ -78,7 +72,7 @@ function generateLogo(seed: string, palette: number): string {
   return c.toDataURL('image/png');
 }
 
-/** Tombol logo: upload gambar ATAU generate prosedural (cycle palet per klik). */
+
 function LogoPicker({ name, logo, onPick }: { name: string; logo: string | null; onPick: (url: string | null) => void }) {
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [gen, setGen] = useState(0);
@@ -111,7 +105,7 @@ function LogoPicker({ name, logo, onPick }: { name: string; logo: string | null;
   );
 }
 
-/** Form create (fieldset pixel) — juga dipakai edit via prop edit. */
+
 function AgentForm({ providers, edit, onDone }: {
   providers: Prov[];
   edit?: AgentRec | null;
@@ -207,7 +201,7 @@ function AgentForm({ providers, edit, onDone }: {
   );
 }
 
-/** Provider + model + reasoning effort — satu baris (dipakai form create & edit). */
+
 function RuntimeRow({ providers, models, providerId, model, effort, onProvider, onModel, onEffort }: {
   providers: Prov[]; models: string[]; providerId: string; model: string; effort: string;
   onProvider: (v: string) => void; onModel: (v: string) => void; onEffort: (v: string) => void;
@@ -242,8 +236,7 @@ function RuntimeRow({ providers, models, providerId, model, effort, onProvider, 
   );
 }
 
-/** Baris roster: logo, nama, model (pill), memory count, edit/delete two-step.
- *  Agent yang sedang diedit TETAP tampil di sini — diberi pill "editing". */
+
 function AgentRow({ a, editing, onEdit }: { a: AgentRec; editing: boolean; onEdit: () => void }) {
   const [armed, setArmed] = useState(false);
   return (

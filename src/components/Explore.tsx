@@ -5,15 +5,7 @@ import { MorikoCatMark } from './MorikoCatMark';
 import { useStore } from '../store/useStore';
 import { isMotionReduced } from '../lib/appearance';
 
-/**
- * Landing view before a thread exists — ported from moriko-design-1.html.
- *
- * Layout: breathing-halo pixel cat, dithered wordmark, time-based greeting,
- * hint copy (kbd chips), then the composer (`children`) mid-screen. The
- * 2×2 suggestion grid was dropped — the canvas stays minimal.
- *
- * The mode status line stays Composer-owned (single source — no doubling).
- */
+
 const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
 
 function greeting(): string {
@@ -29,7 +21,7 @@ export function Explore({
   children?: ReactNode;
 }) {
 
-  /** Canvas-chat design: pressing the pet cat gives only the squishy boop. */
+  
   const petCat = (event: React.MouseEvent<HTMLButtonElement>): void => {
     const cat = event.currentTarget;
     if (isMotionReduced(useStore.getState().reduceMotion)) return;

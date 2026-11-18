@@ -1,30 +1,17 @@
-/**
- * LAYER 2 — what a provider's OWN model-list endpoint publishes, extracted
- * without loss.
- *
- * The old code did `(payload.data ?? []).map(m => m.id)` — it read the id and
- * threw the rest of the JSON away, which is why every capability decision had
- * to fall back to models.dev. This module keeps what the endpoint actually
- * said, per endpoint family, and reports NOTHING when an endpoint says nothing
- * (bare `{ id }` payloads are the common case and stay hint-free on purpose).
- *
- * Every extractor is field-optional: a missing field means "this endpoint is
- * silent about it", never "false". That distinction is what lets Layer 3 act
- * as a hint rather than a verdict.
- */
+
 
 import type { ProviderModelEntry, ProviderModelHint } from './contracts.js';
 
 const TIMEOUT_MS = 12_000;
 
-/** A provider's model list plus the endpoint family that answered. */
+
 export interface ProviderModelListing {
   entries: ProviderModelEntry[];
-  /** Which extractor produced the hints (also recorded per entry). */
+  
   family: NonNullable<ProviderModelHint['from']>;
 }
 
-/** Loose JSON object reader — every provider payload is untrusted. */
+
 type Json = Record<string, unknown>;
 
 function asObject(value: unknown): Json | null {
@@ -39,7 +26,7 @@ function asString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
-/** Positive finite number, or null. Guards against strings, NaN, 0, negatives. */
+
 function asCount(value: unknown): number | null {
   const numeric = typeof value === 'string' ? Number(value) : value;
   if (typeof numeric !== 'number' || !Number.isFinite(numeric) || numeric <= 0) return null;
@@ -50,7 +37,7 @@ function asBoolean(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined;
 }
 
-/** Reads a dotted path ("top_provider.context_length") out of a payload. */
+
 function pick(source: Json | null, path: string): unknown {
   if (!source) return undefined;
   let cursor: unknown = source;
@@ -62,17 +49,11 @@ function pick(source: Json | null, path: string): unknown {
   return cursor;
 }
 
-/**
- * Maps an `architecture.input_modalities` list (OpenRouter) to capability
- * bits. The vocabulary is small and documented: text, image, audio, video,
- * file. `file` is what OpenRouter calls a document/PDF part.
- */
+
 function fromModalities(values: readonly string[]): ProviderModelHint {
   const set = new Set(values.map((value) => value.trim().toLowerCase()));
   const hint: ProviderModelHint = {};
   if (set.size === 0) return hint;
-  // A list that arrived means the endpoint DID speak: record every bit,
-  // including the negatives, because absence from the list is authoritative.
   hint.imageIn = set.has('image');
   hint.audioIn = set.has('audio');
   hint.videoIn = set.has('video');
@@ -80,11 +61,7 @@ function fromModalities(values: readonly string[]): ProviderModelHint {
   return hint;
 }
 
-/**
- * Reads `supported_parameters`-style capability lists (OpenRouter ships
- * `["tools","reasoning","include_reasoning",…]`). Returns undefined for a
- * missing list so "no list" never becomes "no tools".
- */
+
 function fromSupportedParameters(values: unknown): ProviderModelHint {
   const list = asArray(values).map((value) => asString(value)).filter((v): v is string => !!v);
   if (list.length === 0) return {};
@@ -99,14 +76,7 @@ function fromSupportedParameters(values: unknown): ProviderModelHint {
   };
 }
 
-/**
- * OPENROUTER / GATEWAY-COMPATIBLE `/v1/models`.
- *
- * Reads `context_length`, `top_provider.context_length`,
- * `architecture.input_modalities`, `architecture.output_modalities` and
- * `supported_parameters` — the fields that make OpenRouter's list far richer
- * than a bare id, and the reason routing it through models.dev was redundant.
- */
+
 export function readOpenRouterEntry(raw: unknown): ProviderModelEntry | null {
   const entry = asObject(raw);
   const id = asString(entry?.id) ?? asString(entry?.name);
@@ -144,20 +114,13 @@ export function readOpenRouterEntry(raw: unknown): ProviderModelEntry | null {
   return { id, hint: prune(hint) };
 }
 
-/**
- * LM STUDIO `/api/v0/models` — the richest local endpoint: `max_context_length`
- * (the model's ceiling), `loaded_context_length` (what is loaded NOW, which is
- * the honest number to respect), `type === 'vlm'` for vision, plus tool and
- * reasoning flags.
- */
+
 export function readLmStudioEntry(raw: unknown): ProviderModelEntry | null {
   const entry = asObject(raw);
   const id = asString(entry?.id) ?? asString(entry?.model_key);
   if (!entry || !id) return null;
 
   const hint: ProviderModelHint = { from: 'lmstudio' };
-  // `loaded_context_length` wins when present: it is the window the server will
-  // actually serve, which is smaller than the model's theoretical maximum.
   const context = asCount(entry.loaded_context_length) ?? asCount(entry.max_context_length);
   if (context) hint.context = context;
 
@@ -175,10 +138,7 @@ export function readLmStudioEntry(raw: unknown): ProviderModelEntry | null {
   return { id, hint: prune(hint) };
 }
 
-/**
- * vLLM `/v1/models` — publishes `max_model_len` (the served window) and, on
- * newer builds, `capabilities` / modality hints. Everything else is bare.
- */
+
 export function readVllmEntry(raw: unknown): ProviderModelEntry | null {
   const entry = asObject(raw);
   const id = asString(entry?.id);
@@ -194,7 +154,7 @@ export function readVllmEntry(raw: unknown): ProviderModelEntry | null {
   return { id, hint: prune(hint) };
 }
 
-/** GOOGLE GEMINI `/v1beta/models` — `inputTokenLimit` / `outputTokenLimit`. */
+
 export function readGeminiEntry(raw: unknown): ProviderModelEntry | null {
   const entry = asObject(raw);
   const id = asString(entry?.name)?.replace(/^models\//, '');
@@ -214,8 +174,6 @@ export function readGeminiEntry(raw: unknown): ProviderModelEntry | null {
   const displayName = asString(entry.displayName);
   if (displayName) hint.label = displayName;
 
-  // Gemini's multimodal flags are not published per model on this endpoint;
-  // only the output modality for image models is stated.
   if (asArray(entry.outputModalities).length > 0) {
     const output = asArray(entry.outputModalities)
       .map((value) => asString(value))
@@ -227,7 +185,7 @@ export function readGeminiEntry(raw: unknown): ProviderModelEntry | null {
   return { id, hint: prune(hint) };
 }
 
-/** ANTHROPIC `/v1/models` — id, display_name, created_at. No capability data. */
+
 export function readAnthropicEntry(raw: unknown): ProviderModelEntry | null {
   const entry = asObject(raw);
   const id = asString(entry?.id);
@@ -238,18 +196,13 @@ export function readAnthropicEntry(raw: unknown): ProviderModelEntry | null {
   return { id, hint };
 }
 
-/** Whether a `/v1/models` row carries Mistral's `capabilities` object. */
+
 function isMistralModelObject(entry: Json): boolean {
   const caps = asObject(entry.capabilities);
   return caps !== null && ('completion_chat' in caps || 'function_calling' in caps);
 }
 
-/**
- * MISTRAL `/v1/models` — publishes `max_context_length` and `capabilities`
- * (`completion_chat`, `function_calling`, `vision`, `audio_transcription`).
- * Rows that explicitly set `completion_chat: false` or `archived: true` are
- * non-chat models (embeddings, OCR, moderation) and are filtered out.
- */
+
 export function readMistralEntry(raw: unknown): ProviderModelEntry | null {
   const entry = asObject(raw);
   const id = asString(entry?.id);
@@ -282,11 +235,7 @@ export function readMistralEntry(raw: unknown): ProviderModelEntry | null {
   return { id, hint: prune(hint) };
 }
 
-/**
- * llama.cpp `/props` describes ONE loaded model, not a list — used to fill the
- * `n_ctx` (served context) and modality flags of whatever ids the server
- * reports. Returned separately from the listing because it is server-wide.
- */
+
 export function readLlamaCppProps(raw: unknown): ProviderModelHint {
   const props = asObject(raw);
   if (!props) return {};
@@ -300,7 +249,7 @@ export function readLlamaCppProps(raw: unknown): ProviderModelHint {
   return prune(hint);
 }
 
-/** OLLAMA `/api/tags` + `/api/show` — family-level modality and context. */
+
 export function readOllamaEntry(raw: unknown): ProviderModelEntry | null {
   const entry = asObject(raw);
   const id = asString(entry?.name) ?? asString(entry?.model);
@@ -322,10 +271,7 @@ export function readOllamaEntry(raw: unknown): ProviderModelEntry | null {
   return { id, hint: prune(hint) };
 }
 
-/**
- * OLLAMA `/api/show` payload for ONE model — `model_info` carries the real
- * context length under an architecture-prefixed key.
- */
+
 export function readOllamaShow(raw: unknown): ProviderModelHint {
   const show = asObject(raw);
   if (!show) return {};
@@ -348,12 +294,7 @@ export function readOllamaShow(raw: unknown): ProviderModelHint {
   return prune(hint);
 }
 
-/**
- * FALLBACK for an unknown OpenAI-compatible payload: walk `data[]`, keep the
- * ids, and harvest any of the well-known field names that happen to be there.
- * This is how a vendor we have never profiled still contributes when it
- * chooses to publish something.
- */
+
 export function readOpaqueEntry(raw: unknown): ProviderModelEntry | null {
   const entry = asObject(raw);
   const id = asString(entry?.id) ?? asString(entry?.name) ?? asString(entry?.model);
@@ -380,7 +321,7 @@ export function readOpaqueEntry(raw: unknown): ProviderModelEntry | null {
   return { id, hint: prune(hint) };
 }
 
-/** Drops undefined/empty so a hint object only ever carries real claims. */
+
 function prune(hint: ProviderModelHint): ProviderModelHint {
   const out: ProviderModelHint = {};
   for (const [key, value] of Object.entries(hint)) {
@@ -391,11 +332,7 @@ function prune(hint: ProviderModelHint): ProviderModelHint {
   return out;
 }
 
-/**
- * Normalizes ONE raw list entry, trying the richest extractor the payload
- * shape allows and falling back outward. Order matters: an LM Studio payload
- * also has `id`, so the fields are checked before the bare-opaque branch.
- */
+
 export function readModelEntry(raw: unknown): ProviderModelEntry | null {
   const entry = asObject(raw);
   if (!entry) return null;
@@ -412,10 +349,7 @@ export function readModelEntry(raw: unknown): ProviderModelEntry | null {
   return readOpaqueEntry(entry);
 }
 
-/**
- * Builds a listing from an already-parsed `/models` payload plus the endpoint
- * family hint. Used by the route once it knows which URL answered.
- */
+
 export function listingFromPayload(
   payload: unknown,
   family: ProviderModelListing['family'],
@@ -449,11 +383,7 @@ export function listingFromPayload(
   return { entries, family };
 }
 
-/**
- * Merges a server-wide hint (llama.cpp `/props`) into every entry that did not
- * state its own context. Per-entry evidence always wins over the server-wide
- * default, because a proxy can serve several windows at once.
- */
+
 export function applyServerWideHint(
   listing: ProviderModelListing,
   hint: ProviderModelHint,
@@ -468,7 +398,7 @@ export function applyServerWideHint(
   };
 }
 
-/** GET helper with a bounded timeout; the caller turns !ok into an HttpError. */
+
 export async function fetchJson(
   url: string,
   headers: Record<string, string>,
@@ -483,21 +413,19 @@ export async function fetchJson(
   }
 }
 
-/** Turns a listing into the sparse map the store persists (Layer 2 table). */
+
 export function hintsFromListing(
   listing: ProviderModelListing,
 ): Record<string, ProviderModelHint> {
   const out: Record<string, ProviderModelHint> = {};
   for (const entry of listing.entries) {
-    // A family-only hint ("from: opaque") carries no claim — storing it would
-    // make the UI badge claim provider provenance for zero information.
     if (Object.keys(entry.hint).every((key) => key === 'from')) continue;
     out[entry.id] = entry.hint;
   }
   return out;
 }
 
-/** Which family answered — decides headers, paths and the extractor. */
+
 export type ProbeKind = 'openai' | 'gemini' | 'anthropic' | 'mistral';
 
 export interface ProbeTarget {
@@ -507,13 +435,13 @@ export interface ProbeTarget {
 }
 
 export interface ProbeResult extends ProviderModelListing {
-  /** Opaque ids from `${base}/image-models` (image-only gateways). */
+  
   imageModels: string[];
-  /** True when the endpoint answered, false when it rejected (for the Test button). */
+  
   answered: boolean;
 }
 
-/** Rejects the promise on a non-2xx so callers keep their HttpError surface. */
+
 export class ProbeError extends Error {
   readonly status: number;
   constructor(message: string, status: number) {
@@ -527,15 +455,7 @@ function trimBase(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, '');
 }
 
-/**
- * Reads the provider's OWN model list, keeping the metadata it publishes
- * (Layer 2). This is the single implementation behind both "Fetch from
- * provider" entry points — the saved-provider route and the draft probe.
- *
- * Local runtimes are detected by the payload shape rather than a hardcoded
- * vendor list, so LM Studio / vLLM / llama.cpp / Ollama all work on a plain
- * `kind: 'openai'` provider without the user picking a family.
- */
+
 export async function probeProviderModels(target: ProbeTarget): Promise<ProbeResult> {
   const base = trimBase(target.baseUrl);
 
@@ -578,7 +498,6 @@ export async function probeProviderModels(target: ProbeTarget): Promise<ProbeRes
 
   let listing = listingFromPayload(main.payload, detectFamily(main.payload));
 
-  // llama.cpp publishes its served window once, server-wide, at /props.
   if (listing.family === 'llamacpp') {
     const props = await fetchJson(`${base}/props`, headers);
     if (props.ok && props.payload) {
@@ -586,19 +505,12 @@ export async function probeProviderModels(target: ProbeTarget): Promise<ProbeRes
     }
   }
 
-  // Ollama's /api/tags carries no context window, and /api/show requires the
-  // model name in a POST body — so the list alone is what we get here. The
-  // names it publishes still resolve through Layer 3 as hints.
 
   const imageModels = await probeImageModels(base, headers);
   return { ...listing, imageModels, answered: true };
 }
 
-/**
- * Decides which extractor fits a `/v1/models` payload by inspecting the FIRST
- * entry. Shape sniffing beats a vendor table: a gateway we have never seen gets
- * its context length picked up if it publishes one in a known field name.
- */
+
 export function detectFamily(payload: unknown): NonNullable<ProviderModelHint['from']> {
   const root = asObject(payload);
   const rows = asArray(root?.data ?? root?.models ?? root?.results ?? payload);
@@ -611,14 +523,13 @@ export function detectFamily(payload: unknown): NonNullable<ProviderModelHint['f
     return 'lmstudio';
   }
   if ('max_model_len' in first) return 'vllm';
-  // llama.cpp older builds answer /props with `default_generation_settings`.
   if ('default_generation_settings' in first) return 'llamacpp';
   if ('supported_parameters' in first || 'architecture' in first) return 'openrouter';
   if ('details' in first && 'digest' in first) return 'ollama';
   return 'opaque';
 }
 
-/** Image-only model ids some gateways expose on a sibling route. */
+
 async function probeImageModels(
   base: string,
   headers: Record<string, string>,

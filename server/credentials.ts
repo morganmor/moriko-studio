@@ -1,13 +1,4 @@
-/**
- * Credential resolution shared by the chat stream, the vision tool and any
- * other server-side path that must speak a provider's API.
- *
- * Extracted from index.ts so the agent tools can use it without a circular
- * import (index → agents/routes → agents/tools). Resolution order is
- * IDENTICAL to what the chat stream uses: .env override → a key the user
- * saved from the UI (the ~/.moriko/api-keys.json vault, custom and built-in
- * alike, each entry carrying its provider endpoint) → a browser-supplied key.
- */
+
 
 import { findBuiltIn } from './providers.js';
 import { ProviderStore } from './store.js';

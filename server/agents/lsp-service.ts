@@ -1,19 +1,4 @@
-/**
- * F1.2 — Shared TypeScript LanguageService factory (per closest tsconfig),
- * reused by lsp_symbols (lsp.ts), read_symbol / context_pack / diagnostics /
- * refactor (F2/F3).
- *
- * Fixes:
- *  - B2: script versions keyed by mtime so edits invalidate snapshots.
- *  - Solution tsconfig: a root `tsconfig.json` that only lists `references`
- *    (with `files: []` and no `compilerOptions`) parses to EMPTY options and
- *    no root files — the old code fed that to the LanguageService, so the
- *    program had no jsx/module/lib settings and no members, and every consumer
- *    failed with "Could not find source file". The closest REFERENCED project
- *    that actually contains the file is used instead (tsconfig.app.json for
- *    src/, tsconfig.node.json for server/), so diagnostics see real settings.
- *  - ESM: the directory walk uses the imported `readdirSync` (no `require()`).
- */
+
 import * as ts from 'typescript';
 import { readFileSync, existsSync, statSync, readdirSync, type Dirent } from 'node:fs';
 import path from 'node:path';
@@ -23,22 +8,22 @@ interface ServiceEntry {
   files: Set<string>;
 }
 
-/** LRU of at most 3 services (bounded RAM, see plan §10). */
+
 const services: Array<{ root: string; entry: ServiceEntry }> = [];
 const MAX_SERVICES = 3;
 
 interface ResolvedProject {
-  /** Unique cache key: the tsconfig file path, or the workspace root when none. */
+  
   key: string;
-  /** Working directory the LanguageService host uses (current dir). */
+  
   dir: string;
-  /** Parsed compile options. */
+  
   options: ts.CompilerOptions;
-  /** Authoritative root files from the tsconfig include; null = walk fallback. */
+  
   rootFiles: string[] | null;
 }
 
-/** Empty (undefined/null/[]/{}) — used to tell a solution config from a real one. */
+
 function isEmpty(value: unknown): boolean {
   if (value === undefined || value === null) return true;
   if (Array.isArray(value)) return value.length === 0;
@@ -46,7 +31,7 @@ function isEmpty(value: unknown): boolean {
   return false;
 }
 
-/** True when a tsconfig is a solution file: references only, no code settings. */
+
 function isSolutionConfig(config: Record<string, unknown>): boolean {
   return (
     Array.isArray(config.references) &&
@@ -58,7 +43,7 @@ function isSolutionConfig(config: Record<string, unknown>): boolean {
   );
 }
 
-/** Sensible defaults used when no tsconfig (or no project) is found. */
+
 function fallbackCompilerOptions(): ts.CompilerOptions {
   return {
     allowJs: true,
@@ -72,7 +57,7 @@ function fallbackCompilerOptions(): ts.CompilerOptions {
   };
 }
 
-/** Resolve the project that owns `absFile`: a real tsconfig, or a safe fallback. */
+
 function projectFor(absFile: string, root: string): ResolvedProject {
   const fallback = (): ResolvedProject => ({
     key: root,
@@ -159,7 +144,7 @@ function collectScriptFiles(dir: string, limit = 4000): string[] {
   return out;
 }
 
-/** LanguageService scoped to the tsconfig nearest `absFile` (root = workspace). */
+
 export function getLanguageService(absFile: string, root: string): ts.LanguageService & { __files?: Set<string> } {
   const project = projectFor(absFile, root);
   const existing = services.find((s) => s.root === project.key);
@@ -206,7 +191,7 @@ export function getLanguageService(absFile: string, root: string): ts.LanguageSe
   return service;
 }
 
-/** Drop the service cached for the project containing absFile (cheap invalidation). */
+
 export function invalidateFile(absFile: string, root: string): void {
   const project = projectFor(absFile, root);
   const idx = services.findIndex((s) => s.root === project.key);

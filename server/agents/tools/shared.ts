@@ -1,33 +1,17 @@
-/**
- * Shared foundation for the agent harness tool modules.
- *
- * All public types, output caps, walk/skip constants, and the small
- * argument/text helpers that every tool implementation needs live here.
- * This is the ONLY module the tool files import from each other — there are
- * no cross-dependencies between individual tool modules, which keeps the
- * blast radius of any change contained.
- */
+
 import path from 'node:path';
 import type { AgentPermissionRequest } from '../permissions.js';
 import { requestApproval } from '../permissions.js';
 import type { ResolvedModelCapability } from '../../modelCapability.js';
 import { addonsSrcRoot, assertSelfHostAccess, getActiveWorkspace, isInsideRoot, isInsideAllowedDir, isAttachmentPath } from '../workspace.js';
 
-/**
- * ADDON MANAGER — builtin addon sources. `addons-src/` in the repo is the
- * source of truth for builtin addons and is ALWAYS agent-accessible: no
- * workspace needs to point at it (the user never has to repoint their main
- * workspace). Tool paths with the `addons-src/` prefix — or absolute paths
- * inside it — resolve against that root even when NO workspace is active.
- * Deletes are refused there (only the user removes addons, via the Hub).
- * The canonical root lives in workspace.ts (`addonsSrcRoot`).
- */
+
 export function isInsideAddonsSrc(absolute: string): boolean {
   const root = addonsSrcRoot();
   return root !== null && isInsideRoot(path.resolve(absolute), root);
 }
 
-/** Resolve an `addons-src/…` (or absolute in-root) path; null when not one. */
+
 function resolveAddonsSrcPath(raw: string): { absolute: string; relative: string } | null {
   const root = addonsSrcRoot();
   if (!root) return null;
@@ -38,7 +22,8 @@ function resolveAddonsSrcPath(raw: string): { absolute: string; relative: string
     absolute = path.resolve(trimmed);
     if (!isInsideRoot(absolute, root)) return null;
   } else if (normalized === 'addons-src' || normalized.startsWith('addons-src/')) {
-    absolute = path.resolve(root, normalized.slice('addons-src'.length));
+    const sub = normalized.slice('addons-src'.length).replace(/^\/+/, '');
+    absolute = sub ? path.resolve(root, sub) : path.resolve(root);
     if (!isInsideRoot(absolute, root)) return null;
   } else {
     return null;
@@ -47,8 +32,7 @@ function resolveAddonsSrcPath(raw: string): { absolute: string; relative: string
   return { absolute, relative: rel ? `addons-src/${rel}` : 'addons-src' };
 }
 
-/** Public form for tools that resolve paths manually (deps, patch, …):
- *  an addons-src target, or null when the input is not one. */
+
 export function resolveAddonsSrcTarget(raw: string): { absolute: string; relative: string } | null {
   return resolveAddonsSrcPath(raw);
 }
@@ -60,10 +44,10 @@ export interface AgentToolDef {
   inputSchema: Record<string, unknown>;
 }
 
-/** One inline image riding a tool result (native vision for multimodal models). */
+
 export interface ToolImage {
   mime: string;
-  /** Full data: URL (base64 payload) — ready for an image_url content part. */
+  
   dataUrl: string;
 }
 
@@ -71,24 +55,13 @@ export interface HarnessToolResult {
   ok: boolean;
   text: string;
   isError: boolean;
-  /**
-   * STABLE failure code for classification (audit + loop-containment):
-   * `schema_error` for boundary-denied calls, `tool_exception` for thrown
-   * errors. Tools may add their own codes; unknown codes fall back to
-   * 'failure' downstream. Never change a code's meaning once shipped.
-   */
+  
   errorCode?: string;
-  /** Unified diff (before → after) for edits/restores — rendered by the UI. */
+  
   diff?: string;
-  /** Line counts computed from the same ops the diff renders (see diff.ts). */
+  
   diffstat?: { added: number; removed: number };
-  /**
-   * FASE D — a rendered visual (agent__render_visual): a standalone HTML
-   * payload the CLIENT renders in a sandboxed iframe. Never sent to the
-   * model — the tool's text summary is what the model sees. VISUAL v2:
-   * `replaces` marks an edit-in-place; `variants` carries 1..3 frontend
-   * preview candidates (one card, the user picks one).
-   */
+  
   visual?: {
     id: string;
     html: string;
@@ -97,75 +70,61 @@ export interface HarnessToolResult {
     replaces?: true;
     variants?: Array<{ id: string; html: string; title: string; height: number }>;
   };
-  /**
-   * Inline images the RUNNING model should SEE directly (native image input).
-   * Only read_file on an image file produces these — the text stays the
-   * authoritative fallback for text-only models and for transports that cannot
-   * carry images (e.g. Gemini functionResponse).
-   */
+  
   images?: ToolImage[];
-  /**
-   * PHASE 3 — browser panel: when present, the SPA opens the live browser
-   * panel (a separate tab/window) so the user can watch the agent drive.
-   * Never sent to the model — it is a client-side side effect hint.
-   */
+  
   panelUrl?: string;
 }
 
-/** Plumb-through for the sandbox permission gate (stream + abort). */
+
+export interface HarnessFreezeState {
+  continueCount: number;
+  continueSeized: boolean;
+  
+  seizedReason?: string;
+  lastReasoning?: string;
+}
+
+
 export interface AgentToolContext {
   signal?: AbortSignal;
   onRequest?: (request: AgentPermissionRequest) => void;
-  onResolved?: (id: string, granted: boolean) => void;
-  /** Conversation session id — keys the goal + vault stores for this chat. */
+  onResolved?: (id: string, decision: import('../permissions.js').PermissionDecision) => void;
+  
   sessionId?: string;
-  /** Notifies the UI that the goal state changed (goals_state event). */
+  
   onGoalsChanged?: (sessionId: string) => void;
-  /** Notifies the UI that the standalone todo state changed (todos_state event). */
+  
   onTodosChanged?: (sessionId: string) => void;
-  /** Ask-user channel: the model asked the user a question (ask_user_request event). */
+  
   onAskUser?: (request: import('../tools/ask.js').AskUserRequest) => void;
-  /** Reports the user's answers (or the timeout/abort) back to the stream. */
+  
   onQuestionResolved?: (result: { id: string; answers: Array<{ id: string; answer?: string; skipped?: boolean }>; timedOut: boolean }) => void;
-  /** Terminal execution mode from harness settings ('off' | 'ask' | 'auto'). */
+  
+  onGateRequest?: (request: import('../operatorGates.js').OperatorGateRequest) => void;
+  
+  onGateResolved?: (id: string, decision: import('../operatorGates.js').OperatorGateDecision) => void;
+  
   terminalMode?: 'off' | 'ask' | 'auto';
-  /** Granular confirmation: deletes inside the workspace ask first. */
+  
   confirmDeletes?: boolean;
-  /** Live progress text for long operations (streamed to the tool card). */
+  
   onProgress?: (message: string) => void;
-  /**
-   * The running model's id (provider-qualified or bare). Drives capability
-   * gates — the strict vision policy rejects agent__vision from image-capable
-   * models that have not read the image themselves first (see visionPolicy).
-   */
+  
   modelId?: string;
-  /**
-   * The running model's RESOLVED 3-layer capability (server/modelCapability).
-   * Present for chat runs, where the route resolved it once; absent for
-   * one-shot/debug paths, which fall back to the catalogue-only view.
-   */
+  
   capability?: ResolvedModelCapability;
-  /**
-   * ENFORCEMENT: the level (3–5) and the user's typed reason, armed by the
-   * route when the enforcement catalogue replaces the real one.
-   * agent__harness_lockdown reads these and delivers the notice as a
-   * tool_result — the wire's authority channel. `reason` '' or undefined = no
-   * reason given (the model learns the state, never why).
-   */
+  
   enforcementLevel?: 3 | 4 | 5;
   enforcementReason?: string;
-  /**
-   * WEB ACCESS KILL-SWITCH (settings.webAccess, default off). When false the
-   * dispatcher refuses every isWebTool() call — including NESTED agent__exec
-   * calls that share this ctx — with a stable refusal the model can read.
-   * Undefined = no information (debug /call route): the catalogue gate alone
-   * decides; the guard never fires on a bare ctx.
-   */
+  
+  freeze?: HarnessFreezeState;
+  
   webAccess?: boolean;
 }
 
 
-/** Heavy/generated trees the recursive walker never descends into. */
+
 export const SKIP_DIRS = new Set([
   'node_modules',
   '.git',
@@ -183,21 +142,20 @@ export const SKIP_DIRS = new Set([
   '.turbo',
   '.zvec-grep',
   '.attachments',
+  '.chuze',
 ]);
 
 export const MAX_WALK_FILES = 2000;
 export const MAX_WALK_DEPTH = 12;
 export const MAX_SCAN_BYTES = 1_000_000;
-export const MAX_MATCHES = 100;
-export const MAX_MATCH_FILES = 50;
 export const MAX_LIST_ENTRIES = 1000;
 export const MAX_READ_BYTES = 5_000_000;
 export const MAX_EDIT_BYTES = 5_000_000;
 export const MAX_LINE_CHARS = 240;
 
-/** Cap for reading a whole image to attach inline (matches vision's 20 MB upload cap). */
+
 export const MAX_IMAGE_READ_BYTES = 20_000_000;
-/** Bytes sniffed from the file head for magic-byte detection (every supported format needs ≤ 16). */
+
 export const SNIFF_HEADER_BYTES = 32;
 
 export const MAX_MATCHES_PER_FILE = 20;
@@ -205,10 +163,7 @@ export const MAX_MATCHES_PER_FILE = 20;
 export const OUTLINE_SYMBOL_CAP = 400;
 
 
-/**
- * Magic-byte sniffing — extension-independent image detection. An image renamed
- * to .dat still reads inline; a text file renamed .png does NOT fool the sniff.
- */
+
 export function sniffImageMime(buffer: Buffer): string | null {
   if (buffer.length >= 4 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) return 'image/png';
   if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return 'image/jpeg';
@@ -222,7 +177,7 @@ export function sniffImageMime(buffer: Buffer): string | null {
   return null;
 }
 
-/** Image extensions for the route messages (detection itself is magic-byte). */
+
 export const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.tif']);
 
 
@@ -244,7 +199,7 @@ export function bool(args: Record<string, unknown>, key: string): boolean {
   return args[key] === true || args[key] === 'true';
 }
 
-/** Reads a finite number field out of an arbitrary object argument. */
+
 export function numField(source: unknown, key: string): number | undefined {
   if (!source || typeof source !== 'object') return undefined;
   const value = (source as Record<string, unknown>)[key];
@@ -253,19 +208,31 @@ export function numField(source: unknown, key: string): number | undefined {
 }
 
 
-/**
- * Accepts both a bare pattern ("useMcp") and an escaped literal
- * ("/pattern/flags"), merging the explicit flags with the default ones.
- */
+
 export function compilePattern(rawPattern: string, caseSensitive: boolean): RegExp {
-  let pattern = rawPattern.trim();
-  let extraFlags = '';
-  if (pattern.length > 1 && pattern.startsWith('/') && pattern.lastIndexOf('/') > 0) {
-    const last = pattern.lastIndexOf('/');
-    extraFlags = pattern.slice(last + 1);
-    pattern = pattern.slice(1, last);
+  const trimmed = rawPattern.trim();
+  let pattern = trimmed;
+  let declaredFlags = '';
+
+  if (trimmed.length > 2 && trimmed[0] === '/' && trimmed[1] !== '/') {
+    const lastSlash = trimmed.lastIndexOf('/');
+    if (lastSlash > 1 && trimmed[lastSlash - 1] !== '\\') {
+      const tail = trimmed.slice(lastSlash + 1);
+      if (/^[dgimsuvy]*$/.test(tail)) {
+        pattern = trimmed.slice(1, lastSlash);
+        declaredFlags = tail;
+      }
+    }
   }
-  const flags = `${caseSensitive ? '' : 'i'}${extraFlags}`.replace(/[^gimsuy]/g, '');
+
+  const flagSet = new Set<string>();
+  if (!caseSensitive) flagSet.add('i');
+  for (const ch of declaredFlags) {
+    if (ch === 'g' || ch === 'y') continue;
+    flagSet.add(ch);
+  }
+  const flags = [...flagSet].join('');
+
   const redos = detectRedos(pattern);
   if (redos) {
     throw new Error(
@@ -276,20 +243,11 @@ export function compilePattern(rawPattern: string, caseSensitive: boolean): RegE
   try {
     return new RegExp(pattern, flags);
   } catch (error) {
-    throw new Error(
-      `Invalid regular expression: ${error instanceof Error ? error.message : 'parse failed'}`,
-    );
+    throw new Error(`Invalid regular expression: ${error instanceof Error ? error.message : 'parse failed'}`);
   }
 }
 
-/**
- * Static ReDoS guard. Grep runs regex.test() per line SYNCHRONOUSLY, so a
- * catastrophic-backtracking pattern (e.g. (a+)+, (\w+)*, (x|y+)+ against a
- * non-matching line) freezes the whole event loop. Refusing to compile such
- * shapes is the only reliable protection — timeouts cannot interrupt sync code.
- *
- * Returns a human-readable reason, or null when the pattern looks safe.
- */
+
 export function detectRedos(source: string): string | null {
   const stack: boolean[] = [];
   let i = 0;
@@ -343,7 +301,42 @@ export function detectRedos(source: string): string | null {
 }
 
 
-export function globToRegExp(glob: string): RegExp {
+
+export function expandBraces(glob: string): string[] {
+  const open = glob.indexOf('{');
+  if (open < 0) return [glob];
+  let depth = 0;
+  let hasComma = false;
+  const alts: string[] = [];
+  let start = open + 1;
+  for (let i = open; i < glob.length; i += 1) {
+    const ch = glob[i];
+    if (ch === '\\') {
+      i += 1;
+      continue;
+    }
+    if (ch === '{') {
+      depth += 1;
+    } else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        if (!hasComma) return [glob];
+        alts.push(glob.slice(start, i));
+        const prefix = glob.slice(0, open);
+        const suffix = glob.slice(i + 1);
+        return alts.flatMap((alt) => expandBraces(`${prefix}${alt}${suffix}`));
+      }
+    } else if (ch === ',' && depth === 1) {
+      hasComma = true;
+      alts.push(glob.slice(start, i));
+      start = i + 1;
+    }
+  }
+  return [glob];
+}
+
+
+function singleGlobToBody(glob: string): string {
   let re = '';
   for (let i = 0; i < glob.length; i += 1) {
     const char = glob[i];
@@ -365,14 +358,16 @@ export function globToRegExp(glob: string): RegExp {
       re += char.replace(/[.+^${}()|[\]\\]/g, '\\$&');
     }
   }
-  return new RegExp(`^${re}$`, 'i');
+  return re;
 }
 
-/**
- * No hardcoded output ceiling exists (owner directive 2026-10-22): the harness
- * must never silently cut a tool result. Callers that genuinely need a ceiling
- * pass maxChars EXPLICITLY; without it the text passes through untouched.
- */
+export function globToRegExp(glob: string): RegExp {
+  const bodies = expandBraces(glob.trim()).map(singleGlobToBody);
+  const combined = bodies.length === 1 ? bodies[0] : bodies.map((b) => `(?:${b})`).join('|');
+  return new RegExp(`^(?:${combined})$`, 'i');
+}
+
+
 export function truncateOutput(text: string, maxChars?: number): string {
   if (maxChars === undefined || text.length <= maxChars) return text;
   return `${text.slice(0, maxChars)}\n…(output truncated at ${maxChars} chars)`;
@@ -384,13 +379,7 @@ export function formatSize(bytes: number): string {
   return `${bytes} B`;
 }
 
-/**
- * SHOW-WHITESPACE annotation: the line body stays verbatim (safe to copy as
- * an edit anchor); only a compact suffix reports invisible hazards — tab
- * count anywhere in the line and trailing-space runs at its end. Failure to
- * reproduce whitespace is the #1 anchor killer, so read_file can surface it
- * BEFORE the failed edit instead of only diagnosing afterwards.
- */
+
 export function whitespaceAnnotation(line: string): string {
   const tabs = (line.match(/\t/g) ?? []).length;
   const trailing = line.length - line.replace(/[ ]+$/, '').length;
@@ -401,11 +390,7 @@ export function whitespaceAnnotation(line: string): string {
   return ` ⟨ws: ${parts.join(', ')}⟩`;
 }
 
-/**
- * One-line symbol extractor for OUTLINE mode (regex-first, no parser
- * dependency). Returns a compact label like "function boot" / "class Foo" /
- * "method handle", or null when the line declares nothing.
- */
+
 export function outlineEntry(line: string): string | null {
   const text = line.trim();
   if (!text) return null;
@@ -439,18 +424,7 @@ export function requireWorkspace(ctx?: { sessionId?: string }): { root: string }
   return { root: workspace.path };
 }
 
-/**
- * Resolves one path against the workspace root. Inside → resolved normally.
- * Inside a USER-WHITELISTED folder → also free (no approval, item 4 of the
- * capability audit). OUTSIDE everything → paused until the user approves
- * the exact operation; denial (or timeout / abort) raises a readable error.
- *
- * SELF-HOST GUARD runs before every branch: protected paths of a registered
- * self-hosted workspace (.env*, .data/, and — for writes — node_modules/,
- * .git/) plus the app's own ~/.moriko stores are refused even when some
- * allowlist or approval would let them through. `intent` distinguishes reads
- * from mutations.
- */
+
 export async function resolveWithPermission(
   tool: string,
   rawPath: string,
@@ -468,6 +442,23 @@ export async function resolveWithPermission(
   const addonsSrc = resolveAddonsSrcPath(raw);
   if (addonsSrc) {
     assertSelfHostAccess(addonsSrc.absolute, intent);
+    if (intent === 'write') {
+      const { granted, reason } = await requestApproval(
+        {
+          tool,
+          paths: [addonsSrc.absolute],
+          root: path.dirname(addonsSrc.absolute),
+          intent: 'write',
+        },
+        ctx,
+      );
+      if (!granted) {
+        throw new Error(
+          `Permission denied: writing "${addonsSrc.relative}" in addons-src requires user approval.` +
+            (reason ? ` Their reason: "${reason}".` : ''),
+        );
+      }
+    }
     return { absolute: addonsSrc.absolute, relative: addonsSrc.relative, outside: false };
   }
   const { root } = requireWorkspace(ctx);
@@ -476,16 +467,17 @@ export async function resolveWithPermission(
   if (isInsideRoot(absolute, root) || isInsideAllowedDir(absolute)) {
     return { absolute, relative: isInsideRoot(absolute, root) ? path.relative(root, absolute) || '.' : absolute, outside: false };
   }
-  const granted = await requestApproval({ tool, paths: [absolute], root }, ctx);
+  const { granted, reason } = await requestApproval({ tool, paths: [absolute], root, intent }, ctx);
   if (!granted) {
     throw new Error(
-      `Permission denied: "${absolute}" is outside the workspace (${root}) and the user did not approve this operation.`,
+      `Permission denied: "${absolute}" is outside the workspace (${root}) and the user did not approve this operation.` +
+        (reason ? ` Their reason: "${reason}".` : ''),
     );
   }
   return { absolute, relative: absolute, outside: true };
 }
 
-/** Resolves several paths so all OUTSIDE targets land in ONE approval request. */
+
 export async function resolveManyWithPermission(
   tool: string,
   rawPaths: Array<{ key: string; value: string }>,
@@ -493,6 +485,7 @@ export async function resolveManyWithPermission(
   intent: 'read' | 'write' = 'read',
 ): Promise<Record<string, { absolute: string; relative: string; outside: boolean }>> {
   const exempted: Record<string, { absolute: string; relative: string; outside: boolean }> = {};
+  const addonsWritePaths: string[] = [];
   const workspacePaths: Array<{ key: string; value: string }> = [];
   for (const entry of rawPaths) {
     const raw = entry.value.trim();
@@ -506,10 +499,23 @@ export async function resolveManyWithPermission(
       const addonsSrc = resolveAddonsSrcPath(raw);
       if (addonsSrc) {
         assertSelfHostAccess(addonsSrc.absolute, intent);
+        if (intent === 'write') addonsWritePaths.push(addonsSrc.absolute);
         exempted[entry.key] = { absolute: addonsSrc.absolute, relative: addonsSrc.relative, outside: false };
       } else {
         workspacePaths.push(entry);
       }
+    }
+  }
+  if (addonsWritePaths.length > 0) {
+    const { granted, reason } = await requestApproval(
+      { tool, paths: addonsWritePaths, root: path.dirname(addonsWritePaths[0]), intent: 'write' },
+      ctx,
+    );
+    if (!granted) {
+      throw new Error(
+        `Permission denied: writing to addons-src requires user approval.` +
+          (reason ? ` Their reason: "${reason}".` : ''),
+      );
     }
   }
   if (workspacePaths.length === 0) return exempted;
@@ -534,11 +540,11 @@ export async function resolveManyWithPermission(
   }
 
   if (outside.length > 0) {
-    const granted = await requestApproval({ tool, paths: outside, root }, ctx);
+    const { granted, reason } = await requestApproval({ tool, paths: outside, root, intent }, ctx);
     if (!granted) {
       throw new Error(
         `Permission denied: the operation targets path(s) outside the workspace (${root}) — ` +
-          `${outside.join(', ')} — and the user did not approve it.`,
+          `${outside.join(', ')} — and the user did not approve it.` + (reason ? ` Their reason: "${reason}".` : ''),
       );
     }
   }
@@ -551,4 +557,32 @@ export function requireGoalSession(ctx: AgentToolContext): string {
     throw new Error('Goal tools need an active conversation session (none was provided).');
   }
   return ctx.sessionId;
+}
+
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0']);
+
+export function isLoopbackUrl(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (/^data:/i.test(trimmed)) return true;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    const host = parsed.hostname.toLowerCase();
+    return LOOPBACK_HOSTS.has(host) || host.endsWith('.localhost');
+  } catch {
+    return false;
+  }
+}
+
+export function checkWebAccessUrl(
+  raw: string,
+  ctx: AgentToolContext,
+  toolLabel: string,
+): string | null {
+  if (ctx.webAccess !== false) return null;
+  if (isLoopbackUrl(raw)) return null;
+  return (
+    `${toolLabel} refused external URL "${raw.slice(0, 140)}": Web access is OFF in Configuration → Tools → Web Access. ` +
+    'Only localhost/loopback URLs are allowed while Web Access is disabled.'
+  );
 }

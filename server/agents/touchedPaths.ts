@@ -1,16 +1,10 @@
-/**
- * touchedPaths (Addon v2, A3) — the OFFICIAL path extractor for tool calls.
- *
- * The guard (RSA/T R3) and the fs ledger need to know which files a call
- * touches, WITHOUT guessing: shell commands return {unknown: true} and the
- * UI states honestly that they are not path-checked.
- */
+
 
 export interface TouchedPath {
   path?: string;
   from?: string;
   to?: string;
-  /** True when the tool's effects cannot be determined (run/git/exec). */
+  
   unknown: boolean;
 }
 
@@ -19,7 +13,7 @@ function strArg(args: Record<string, unknown>, key: string): string | undefined 
   return typeof v === 'string' && v.trim() !== '' ? v : undefined;
 }
 
-/** Parse the file paths out of a unified diff header (*** / +++ lines). */
+
 function pathsFromPatch(patch: string): string[] {
   const out: string[] = [];
   for (const line of patch.split('\n')) {
@@ -29,7 +23,7 @@ function pathsFromPatch(patch: string): string[] {
   return [...new Set(out)];
 }
 
-/** Args whose paths are "obvious" per tool: which files will be touched? */
+
 export function touchedPaths(tool: string, args: Record<string, unknown>): TouchedPath[] {
   const name = tool.replace(/^agent__/, '');
 
@@ -53,6 +47,7 @@ export function touchedPaths(tool: string, args: Record<string, unknown>): Touch
     case 'edit_between':
     case 'insert_at_line':
     case 'write':
+    case 'overwrite':
     case 'read_file':
     case 'delete':
     case 'read_all':
@@ -81,7 +76,7 @@ export function touchedPaths(tool: string, args: Record<string, unknown>): Touch
   }
 }
 
-/** Convenience: does this call touch ANY known path? */
+
 export function touchesFiles(tool: string, args: Record<string, unknown>): boolean {
   const touched = touchedPaths(tool, args);
   return touched.some((t) => !t.unknown);

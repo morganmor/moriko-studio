@@ -1,43 +1,4 @@
-/**
- * VisualCard (Fase D + VISUAL v2) — the LIVE VISUAL renderer for agent__render_visual.
- *
- * SECURITY MODEL (the prove of D.2):
- *   <iframe sandbox="allow-scripts" srcDoc={html} csp="…">
- *
- *  - sandbox="allow-scripts" WITHOUT allow-same-origin → the document runs in
- *    an OPAQUE origin: `window.parent`, `document.domain`, localStorage and
- *    cookies are all unreachable. `allow-top-navigation` is absent, so the
- *    frame cannot redirect the host page; `allow-popups` is absent too.
- *  - csp="default-src 'none'; script-src 'unsafe-inline'; style-src
- *    'unsafe-inline'; img-src data: blob:; font-src data:" → NOTHING may be
- *    fetched from the network (every remote URL fails closed), while inline
- *    <style>/<script> and data:/blob: assets stay alive — the whole point of
- *    the feature: CSS animations and JS interactivity run at full power.
- *  - referrerPolicy="no-referrer" + the opaque origin strip any identity.
- *
- * The payload persists on the turn segment, so a reload re-renders it from
- * storage — nothing is "live" in the volatile sense.
- *
- * VISUAL v2:
- *  - EDIT-IN-PLACE: `visual.replaces` re-binds THIS card to the new payload;
- *    the parent thread has already folded it into the newest segment. The
- *    frame's key includes the payload ref so React swaps the document, and
- *    a live SSE update can arrive through `refreshToken` without a remount.
- *  - FRONTEND PREVIEW: `visual.variants` (1..3 candidates) renders ALL of
- *    them side by side (stacked below md). The user picks one → the pick is
- *    posted to the server (broadcast + steer back to the model) and the
- *    card shows the chosen candidate enlarged, others as history.
- *
- * SIZING (dynamic + windowed): the sandboxed document CANNOT be measured
- * directly (opaque origin), so a tiny reporter script is injected into it —
- * the ONE sanctioned bridge: it measures the document and postMessages its
- * height; the card validates the source window and clamps hard. Auto-fit is
- * the DEFAULT (card = exactly as tall as its content — no blind stretching),
- * and the card carries real window edges: drag the bottom edge (height),
- * the sides (width), or the bottom corners (both). Manual sizing takes
- * control from auto-fit until "Fit" is pressed again (lit when active).
- * Fullscreen (pola ImageLightbox) stays fill-the-overlay.
- */
+
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Check,
@@ -56,23 +17,15 @@ import { storage } from '../lib/storage';
 import { useStore } from '../store/useStore';
 import { Tip, cx } from './ui';
 
-/** The sandbox+CSP pair every render of a visual uses. Proven inert: no
- *  network source exists in the policy and the origin is opaque.
- *  The `csp` IFRAME ATTRIBUTE is Firefox-only (Chrome ignores it), so the
- *  policy is ALSO injected as a <meta http-equiv> tag at the TOP of the
- *  document — the cross-browser enforcement point. A document that already
- *  carries its own CSP meta keeps BOTH (the strictest wins per directive). */
+
 const VISUAL_SANDBOX = 'allow-scripts';
 const VISUAL_CSP =
   "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'";
 
-/** React 18 iframe typings belum punya atribut `csp` — dipakai lewat spread
- *  (pola yang sama dengan VisualFrame). */
+
 const CSP_ATTR = { csp: VISUAL_CSP } as Record<string, string>;
 
-/** Injects the CSP meta as the FIRST head child (before any <style>/<script>).
- *  No <head>? The meta itself creates one when parsed. This is what makes the
- *  policy effective in Chrome/Edge/Safari, not just Firefox. */
+
 function enforceCsp(html: string): string {
   if (/<meta[^>]+http-equiv=["']?Content-Security-Policy/i.test(html)) return html;
   const meta = `<meta http-equiv="Content-Security-Policy" content="${VISUAL_CSP.replace(/"/g, '&quot;')}">`;
@@ -90,10 +43,7 @@ const VISUAL_MAX_H = 2000;
 const clampVisualHeight = (value: number): number =>
   Math.round(Math.max(VISUAL_MIN_H, Math.min(VISUAL_MAX_H, value)));
 
-/** Window-style resize handles: bottom edge (height), side edges (width),
- *  bottom corners (both). Top handles are deliberately absent — the card
- *  lives in document flow, so growing "upward" would shove everything above
- *  it; the windowed metaphor applies where it makes sense. */
+
 const RESIZE_HANDLES: Array<{ dir: string; style: React.CSSProperties }> = [
   { dir: 's', style: { left: 8, right: 8, bottom: 0, height: 6, cursor: 's-resize' } },
   { dir: 'e', style: { top: 4, bottom: 4, right: 0, width: 6, cursor: 'e-resize' } },
@@ -102,22 +52,7 @@ const RESIZE_HANDLES: Array<{ dir: string; style: React.CSSProperties }> = [
   { dir: 'sw', style: { bottom: 0, left: 0, height: 14, width: 14, cursor: 'sw-resize' } },
 ];
 
-/**
- * Injects the VISUAL RUNTIME before </body>: a normalization style + the
- * height reporter.
- *
- * - `html,body{min-height:0!important}` — models LOVE min-height:100vh, but
- *   inside an iframe "vh" is circular (the iframe IS the viewport): the
- *   document would always report exactly its current frame height and
- *   auto-fit could never shrink the card. Neutralized so the report is the
- *   TRUE content height (the style is injected last, so an author rule that
- *   also uses !important still wins over it).
- * - The reporter is the ONE sanctioned bridge across the sandbox boundary:
- *   the child measures its own document and postMessages the number. The
- *   parent validates the source window and clamps. Inline script → allowed
- *   by our CSP ('unsafe-inline'); an author CSP that blocks inline scripts
- *   simply degrades the card to fixed height.
- */
+
 function injectVisualRuntime(html: string, id: string): string {
   const style = '<style>html,body{min-height:0!important}</style>';
   const script =
@@ -137,15 +72,15 @@ function injectVisualRuntime(html: string, id: string): string {
 
 export interface VisualSpec {
   id: string;
-  /** Inline payload (small visuals, or re-inlined by the detail route). */
+  
   html?: string;
-  /** P2 EXTERNALIZATION: the payload lives in the byte store — fetch on mount. */
+  
   htmlRef?: { hash: string; byteSize: number };
   title: string;
   height: number;
-  /** VISUAL v2: true = this payload is an edit-in-place replacement. */
+  
   replaces?: true;
-  /** VISUAL v2: frontend-preview candidates (1..3), the user picks one. */
+  
   variants?: Array<{
     id: string;
     html?: string;
@@ -155,20 +90,10 @@ export interface VisualSpec {
   }>;
 }
 
-/**
- * P2: module-level cache for byte-store visual payloads — a hash always maps
- * to the same document, so one fetch per session per visual, shared by the
- * inline card AND the fullscreen view.
- */
+
 const visualHtmlCache = new Map<string, Promise<string>>();
 
-/**
- * F5.1 — vendor lib bundles: fetched ONCE per lib per session from the
- * harness origin (in-memory cache only; never persisted to the chat), then
- * injected as an inline <script> at the top of <head> before the srcDoc is
- * set. The iframe itself stays sandboxed with CSP default-src 'none' +
- * script-src 'unsafe-inline' — the bundle text rides the srcDoc.
- */
+
 const vendorCache = new Map<string, Promise<string>>();
 
 function loadVendorBundle(lib: string): Promise<string> {
@@ -184,13 +109,13 @@ function loadVendorBundle(lib: string): Promise<string> {
   return cached;
 }
 
-/** Resolves a visual's lib list (payload-provided, best-effort). */
+
 function visualLibs(visual: VisualSpec): string[] {
   const libs = (visual as VisualSpec & { libs?: string[] }).libs;
   return Array.isArray(libs) ? libs.filter((l) => typeof l === 'string' && /^[a-z0-9-]+$/.test(l)) : [];
 }
 
-/** Injects the vendor bundles at the top of <head> (or before the document). */
+
 async function injectVendorLibs(html: string, libs: string[]): Promise<string> {
   if (libs.length === 0) return html;
   const parts = await Promise.all(
@@ -217,12 +142,7 @@ function loadVisualHtml(visual: VisualSpec): Promise<string> {
   return cached;
 }
 
-/**
- * VISUAL v2: the LIVE re-bind channel — publishBusEvent rides the addon SSE
- * to every browser. An edit-in-place/pick arrives as a topic event; this hook
- * returns a token that changes whenever the card's id was touched, so the
- * frame re-reads its (mutated) conversation segment.
- */
+
 function useVisualLiveToken(visualId: string): number {
   const addonEvent = useStore((state) => state.addonEvent);
   return useMemo(() => {
@@ -234,12 +154,7 @@ function useVisualLiveToken(visualId: string): number {
   }, [addonEvent, visualId]);
 }
 
-/** The sandboxed iframe. Shared by the inline card and the fullscreen view.
- *  The `csp` attribute (Firefox-only enforcement, Chrome uses the meta) is
- *  set via spread so React's strict iframe typings stay honest.
- *  `fill` mode: fullscreen stretches the frame to its container (height 100%)
- *  instead of a bogus pixel value. `srcDoc`/`frameRef` let the inline card
- *  attach its reporter-injected document + measurement plumbing. */
+
 function VisualFrame({
   visual,
   height,
@@ -251,7 +166,7 @@ function VisualFrame({
   height: number;
   fill?: boolean;
   frameRef?: React.Ref<HTMLIFrameElement>;
-  /** P2: pre-resolved document (inline or fetched) — required, never undefined. */
+  
   srcDoc: string;
 }) {
   const cspAttr = { csp: VISUAL_CSP } as Record<string, string>;
@@ -268,7 +183,7 @@ function VisualFrame({
   );
 }
 
-/** Resolves one variant spec to its document (inline or byte-store fetch). */
+
 function useVariantHtml(variant: { html?: string; htmlRef?: { hash: string; byteSize: number } } | undefined): string | undefined {
   const [html, setHtml] = useState<string | undefined>(variant?.html);
   useEffect(() => {
@@ -294,7 +209,7 @@ function useVariantHtml(variant: { html?: string; htmlRef?: { hash: string; byte
   return html;
 }
 
-/** One preview candidate: its own sandboxed frame + Pick control. */
+
 function VariantFrame({
   variant,
   index,
@@ -362,28 +277,8 @@ function VariantFrame({
   );
 }
 
-/**
- * The inline card under the tool call — CONTENT-SIZED + WINDOWED.
- *
- * Sizing model:
- *  - AUTO-FIT (default): the sandboxed document reports its own height via
- *    the injected reporter; the card follows the content (clamped), so the
- *    panel is exactly as tall as what it shows.
- *  - WINDOWED RESIZE: real window edges — drag the bottom edge (height), the
- *    side edges (width), or the bottom corners (both). Any manual height
- *    switch takes control AWAY from auto-fit until "Fit" is pressed again
- *    (the button is lit while auto-fit is active).
- *  - Width only becomes fixed once the user drags a side; until then the
- *    card spans the thread column like every other block.
- *  - GEOMETRY SCOPE (VISUAL v2): manual geometry keys on the ACTIVE id —
- *    an edit-in-place (same id) keeps the user's size; a NEW visual id
- *    starts fresh at auto-fit.
- */
-/**
- * DOWNLOAD — the payload is a COMPLETE standalone HTML document (vendor libs
- * already inlined), so saving it as a .html file gives the user a portable,
- * offline artifact of exactly what the card renders. Blob URL, no network.
- */
+
+
 function useVisualDownload() {
   const [downloaded, setDownloaded] = useState(false);
   const download = (visual: VisualSpec, html: string | null) => {
@@ -411,8 +306,7 @@ export function VisualCard({
   onFullscreen: (visual: VisualSpec) => void;
 }) {
   const activeId = useStore((state) => state.activeId);
-  /** VISUAL v2: re-read the conversation record when a live update touches
-   *  this card's id (edit-in-place / pick from another browser). */
+  
   const liveToken = useVisualLiveToken(visual.id);
   const [activeVariantId, setActiveVariantId] = useState<string | null>(null);
   const [pickedVariantId, setPickedVariantId] = useState<string | null>(null);
@@ -423,14 +317,12 @@ export function VisualCard({
   const savedGeometry = storage.loadVisualGeometry(visual.id);
   const [height, setHeight] = useState(savedGeometry?.height ?? visual.height);
   const [width, setWidth] = useState<number | null>(savedGeometry?.width ?? null);
-  /** Height follows the reported content height until the user takes over. */
+  
   const [autoFit, setAutoFit] = useState(savedGeometry?.autoFit ?? true);
   const autoFitRef = useRef(savedGeometry?.autoFit ?? true);
   const lastReportedRef = useRef(visual.height);
 
-  /** VISUAL v2: an external update re-fits ONLY auto-fit cards — a card the
-   *  user sized manually keeps its window across edits (that is the point of
-   *  editing in place); auto-fit follows the new payload's height intent. */
+  
   useEffect(() => {
     if (liveToken === 0) return;
     if (!autoFitRef.current) return;
@@ -464,7 +356,7 @@ export function VisualCard({
     maxW: number;
   } | null>(null);
 
-  /** Persist manual sizing (any user takeover) — device store, debounced. */
+  
   const persistGeometry = (
     next: Partial<{ width: number | null; height: number; autoFit: boolean }>,
   ) => {
@@ -498,7 +390,7 @@ export function VisualCard({
     return () => window.removeEventListener('message', onMessage);
   }, []);
 
-  /** Manual height (resize handles + nudge buttons) — disables auto-fit. */
+  
   const takeManualHeight = (value: number) => {
     const next = clampVisualHeight(value);
     autoFitRef.current = false;
@@ -507,7 +399,7 @@ export function VisualCard({
     persistGeometry({ height: next, autoFit: false });
   };
 
-  /** Back to content-driven height — clears the persisted takeover. */
+  
   const fitContent = () => {
     autoFitRef.current = true;
     setAutoFit(true);
@@ -552,8 +444,7 @@ export function VisualCard({
     resizeRef.current = null;
   };
 
-  /** COLLAPSE (pola pill): body/frame disembunyikan dengan grid-rows animasi
-   *  0fr↔1fr; judul bar tetap terlihat sebagai baris satu (header pill). */
+  
   const [bodyOpen, setBodyOpen] = useState(true);
 
   const srcDoc = useMemo(
@@ -571,7 +462,7 @@ export function VisualCard({
     );
   }
 
-  /** ── FRONTEND PREVIEW mode ─────────────────────────────────────────── */
+  
   if (visual.variants && visual.variants.length > 0) {
     const variants = visual.variants;
     const chosen = pickedVariantId ?? activeVariantId;
@@ -637,7 +528,7 @@ export function VisualCard({
       className="card"
       style={{ position: 'relative', marginTop: 4, maxWidth: '100%', overflow: 'hidden', padding: 0, width: width ?? '100%' }}
     >
-      {/** The title bar; VISUAL v2 shows the edit-in-place badge. */}
+      {}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid var(--line)', background: 'rgb(var(--c-elev))', padding: '6px 12px' }}>
         <button
           type="button"
@@ -714,16 +605,13 @@ export function VisualCard({
           </button>
         </Tip>
       </div>
-      {/** The payload frame; the copy affordance lives in fullscreen.
-          COLLAPSE: grid-rows 0fr↔1fr (pola CollapsePanel) — tinggi kartu
-          dianimasikan mulus dua arah; resize handles ikut hilang saat
-          tertutup (separator tanpa konten membingungkan). */}
+      {}
       <div className={cx('col', !bodyOpen && 'shut')} aria-hidden={!bodyOpen}>
         <div className="col-in">
           <div style={{ background: '#fff' }}>
             <VisualFrame visual={visual} height={height} frameRef={frameRef} srcDoc={srcDoc ?? ''} />
           </div>
-          {/** Windowed resize handles (see RESIZE_HANDLES). */}
+          {}
           {bodyOpen ? (
             RESIZE_HANDLES.map((handle) => (
               <div
@@ -744,10 +632,7 @@ export function VisualCard({
   );
 }
 
-/** Fullscreen overlay (pola ImageLightbox): fixed, z-50, Escape/×/backdrop.
- *  VISUAL v2: adds a device-width preview row (Fill / 1280 / 768 / 390) —
- *  the design review view a real frontend needs; the scaled frame keeps its
- *  true layout width and the host scales it to fit the overlay. */
+
 const FULLSCREEN_WIDTHS = [
   { id: 'fill', label: 'Fill', width: 0 },
   { id: 'desktop', label: '1280', width: 1280 },

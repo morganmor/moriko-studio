@@ -1,23 +1,10 @@
-/**
- * AGENTS.md loader (V1: global + workspace root — hierarchical nested files
- * are a documented follow-up) — the standards-research pick: agents.md files
- * are plain Markdown, discovered hierarchically, merged top-down (Codex,
- * Amp, the agents.md spec). V1 scope:
- *
- *   global : ~/.moriko-studio/AGENTS.md  (fallback AGENT.md)
- *   root   : <workspace>/AGENTS.md      (fallback AGENT.md, then CLAUDE.md —
- *            the common aliases other harnesses accept)
- *
- * EFFICIENCY: stat-based cache — a hit costs two stat() calls, a re-read only
- * happens when mtime/size changed. Total payload capped (64 KB) so a giant
- * file cannot silently eat the context window.
- */
+
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import { morikoHome } from '../paths.js';
 
-/** Total cap across all sources — beyond this the tail is truncated. */
+
 const MAX_TOTAL = 64 * 1024;
 
 interface CacheEntry {
@@ -25,7 +12,7 @@ interface CacheEntry {
   size: number;
   content: string;
 }
-/** path → fresh entry. In-process; the dev server restarts on edit anyway. */
+
 const cache = new Map<string, CacheEntry>();
 
 function readFresh(file: string): string | null {
@@ -41,7 +28,7 @@ function readFresh(file: string): string | null {
   }
 }
 
-/** First existing candidate, Codex-style preference order. */
+
 function pick(candidates: string[]): string | null {
   for (const file of candidates) {
     if (existsSync(file)) return file;
@@ -50,9 +37,9 @@ function pick(candidates: string[]): string | null {
 }
 
 export interface AgentsMdResult {
-  /** Merged Markdown (global first, workspace last = most specific wins). */
+  
   content: string;
-  /** Absolute paths actually loaded, in order. */
+  
   sources: string[];
 }
 

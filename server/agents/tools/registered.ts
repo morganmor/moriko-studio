@@ -1,8 +1,4 @@
-/**
- * Side-effect import list: every tool module that calls defineTool() must be
- * imported here ONCE so the registry is populated before listAgentToolDefs()
- * or the dispatcher run. (F0)
- */
+
 import './read-symbol.js';
 import './context-pack.js';
 import './diagnostics.js';

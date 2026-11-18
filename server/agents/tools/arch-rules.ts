@@ -1,7 +1,4 @@
-/**
- * F4.2 — agent__arch_rules: init (propose .moriko/architecture.json from the
- * arch map) and check (report layer/cycle/size violations).
- */
+
 import path from 'node:path';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import type { AgentToolContext, HarnessToolResult } from './shared.js';

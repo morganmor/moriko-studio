@@ -1,8 +1,4 @@
-/**
- * F2.2 — agent__context_pack: one call → minimal context to change a symbol
- * safely: body (with receipt), referenced type signatures, callers, callees,
- * and mentioning tests — packed greedily up to budgetChars.
- */
+
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AgentToolContext, HarnessToolResult } from './shared.js';

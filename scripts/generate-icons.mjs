@@ -1,29 +1,4 @@
-/**
- * ICON GATEWAY GENERATOR — P4 spike "deep-import per-ikon".
- *
- * Problem: every component imported icons from the `lucide-react` BARREL. In
- * dev, Vite's dep pre-bundler materializes the whole barrel — all ~1,700 icon
- * modules (measured ~934 KB in the audit's waterfall) — into one dependency
- * chunk the browser parses on every boot, even though this app uses 102 icons.
- * In prod, Rollup's tree-shaking mostly saved us; the DEV bottleneck is what
- * this kills.
- *
- * This script:
- *   1. scans src/** for the named imports from 'lucide-react' (the exact set
- *      of icons the app uses);
- *   2. maps each exported name to its real per-icon file via the barrel's own
- *      `export { default as X } from './icons/...'` lines (aliases included —
- *      CheckCircle2 → circle-check.js, Loader2 → loader-circle.js);
- *   3. (re)generates src/components/icons.ts — one typed re-export per icon,
- *      deep-imported, so bundlers only ever touch ~102 tiny modules;
- *   4. rewrites every `from 'lucide-react'` in src/ to `from './icons'`
- *      (named imports stay byte-identical — icons.ts exports the same names).
- *
- * Type safety: lucide ships no per-icon declarations (no exports map in this
- * version), so src/types/lucide-deep.d.ts declares the wildcard module shape.
- *
- * Run: node scripts/generate-icons.mjs
- */
+
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -39,7 +14,7 @@ if (!fs.existsSync(BARREL)) {
 }
 
 
-/** Recursively collects every .ts/.tsx file under src/ (node_modules-free). */
+
 function collectFiles(dir, out = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);

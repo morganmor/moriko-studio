@@ -1,11 +1,4 @@
-/**
- * Active session registry (Addon v2, A3) — which agent sessions are RUNNING
- * right now, with workspace + model. The piece multi-agent coordination
- * (RSA/T) needs: sessions.list(), presence heartbeats, and message injection.
- *
- * This sits BESIDE agents/reload.ts's activeStreams counter — that stays the
- * source for "is any stream live"; this adds identity and detail.
- */
+
 
 export interface SessionInfo {
   sessionId: string;

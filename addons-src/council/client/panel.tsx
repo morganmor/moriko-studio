@@ -1,15 +1,4 @@
-/**
- * Council panel — the sidebar view (addon:council/panel).
- *
- * Reads the active council from the host store (useCouncil), pushes a
- * membership projection to the server (so agent tools + the prompt fragment
- * know the roster), edits the shared brief, and lets the user turn the active
- * chat into a council, add a sub session, or dispatch an RSA/T agent into one.
- *
- * Creation of conversations is HOST-OWNED (the store is the only writer), so
- * the panel dispatches DOM events (moriko:council-create / -sub-create) that
- * App.tsx handles; it never touches the store directly.
- */
+
 import { useEffect, useState } from 'react';
 import { useCouncil, openConversation, createCouncil, createSubSession, deleteSubSession, useAddonBus, invoke, notify, navigate } from '@moriko/host';
 
@@ -85,10 +74,7 @@ export default function Panel() {
     setTask('');
   };
 
-  /** User designates an RSAT agent as this council's ORCHESTRATOR: the main
-   *  session gets bound to that agent's identity and the council doc records
-   *  the id — that binding is what the council_dispatch/council_stop gate
-   *  checks server-side. */
+  
   const onDesignateOrchestrator = () => {
     const ag = agents.find((a) => a.id === pickOrchestrator);
     if (!ag) return;

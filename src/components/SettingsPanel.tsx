@@ -44,11 +44,7 @@ import { lookupModelMeta, nearestThinkingLevel, thinkingLadderFor } from '../lib
 import { resolveCapability } from '../store/useStore';
 import type { ModelCapabilitySource } from '../types';
 
-/**
- * How each provenance layer is NAMED to the user. One map so the Context
- * section, the composer chip and the Providers table all say the same words
- * about the same layer.
- */
+
 const CONTEXT_SOURCE_COPY: Record<ModelCapabilitySource, string> = {
   user: 'your Providers table',
   provider: 'reported by the provider',
@@ -71,12 +67,8 @@ import { EffortSlider } from './EffortSlider';
 import { CollapseSection, Modal, RightDockCloseButton, RightDockSlot, Segmented, Toggle, cx } from './ui';
 import { Popover } from './Popover';
 
-/**
- * Copy for every canonical level. WHICH of these are offered is decided per
- * model by `thinkingLevelsFor` (models.dev) — this table only names them.
- */
-/** Exported for the composer's quick Model/Effort picker — one label table, two UIs.
- *  `hint` renders under the dot-matrix level word (screenshot-008 copy). */
+
+
 export const THINKING_COPY: Record<ThinkingLevel, { label: string; hint: string }> = {
   off: { label: 'Off', hint: 'Fastest replies.' },
   minimal: { label: 'Minimal', hint: 'Light simple tasks.' },
@@ -87,11 +79,10 @@ export const THINKING_COPY: Record<ThinkingLevel, { label: string; hint: string 
   max: { label: 'Max', hint: 'Maximum Capability. Slowest.' },
 };
 
-/** Fallback slider ceiling when no models.dev entry exists: dragging fully
- *  right selects "Max" (provider decides). A catalog entry's maxOut wins. */
+
 const MAX_TOKENS_SLIDER = 65536;
 
-/** Rounds a model's reported output ceiling up to the next slider step. */
+
 function sliderCeilingFor(maxOut: number | null | undefined): number {
   if (maxOut === null || maxOut === undefined || !Number.isFinite(maxOut) || maxOut <= 0) return MAX_TOKENS_SLIDER;
   return Math.max(256, Math.min(1_048_576, Math.ceil(maxOut / 256) * 256));
@@ -99,31 +90,17 @@ function sliderCeilingFor(maxOut: number | null | undefined): number {
 
 interface SettingsPanelProps {
   onOpenProviders: () => void;
-  /** Called after opening the providers dialog from the mobile drawer. */
+  
   onNavigate?: () => void;
-  /**
-   * Provided only when the panel is mounted as a drawer (below `lg`), whose
-   * backdrop covers the header toggle — the panel then carries its own ✕.
-   */
+  
   onClose?: () => void;
-  /**
-   * Provided when the panel is docked (at `lg`): the TopBar toggle hides
-   * while the panel is open, so the header corner carries the dock's GENERIC
-   * close button instead, keeping the toggle inside the panel's own edge.
-   */
+  
   onCollapse?: () => void;
-  /** Drag-resizable panel width (device-persisted); 300 default. */
+  
   width?: number;
 }
 
-/**
- * Right-hand "Configuration" panel.
- *
- * Edits apply to the active conversation. When no thread exists the edit is
- * still accepted and seeds the next one, so the panel never feels inert.
- * Below `lg` the panel is mounted as a drawer by `App`, so `onNavigate` lets
- * it dismiss the drawer after launching the providers dialog.
- */
+
 export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: SettingsPanelProps) {
   const settings = useEffectiveSettings();
   const updateSettings = useStore((state) => state.updateSettings);
@@ -142,21 +119,21 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
   const showNotice = useStore((state) => state.showNotice);
   const composerRole = useStore((state) => state.composerRole);
   const setComposerRole = useStore((state) => state.setComposerRole);
-  /** 6B: the Config <==> Tree switch lives in this panel's header. */
+  
   const rightPanelMode = useStore((state) => state.rightPanelMode);
   const setRightPanelMode = useStore((state) => state.setRightPanelMode);
 
   const [presetsOpen, setPresetsOpen] = useState(false);
-  /** Design pop-presets: an anchored menu instead of a full modal. */
+  
   const presetsRef = useRef<HTMLSpanElement>(null);
   const [workflowOpen, setWorkflowOpen] = useState(false);
   const workflowRef = useRef<HTMLSpanElement>(null);
-  /** Merged workflow catalog from the server (built-ins + the user's own). */
+  
   const [workflows, setWorkflows] = useState<AgentWorkflowDTO[]>([]);
   const [workflowEditorOpen, setWorkflowEditorOpen] = useState(false);
-  /** The workflow the editor was opened on (the selector's current pick). */
+  
   const [editorWorkflowId, setEditorWorkflowId] = useState('');
-  /** Load the merged catalog once the panel mounts (selector + editor). */
+  
   useEffect(() => {
     let cancelled = false;
     void fetchWorkflows().then((list) => {
@@ -168,7 +145,7 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
   }, []);
   const [savedOpen, setSavedOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
-  /** Image Studio's "switch to edit model" chip asks for the picker. */
+  
   const imagePickerWanted = useStore((state) => state.imagePickerWanted);
   useEffect(() => {
     if (!imagePickerWanted) return;
@@ -179,13 +156,13 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
   const [keyTarget, setKeyTarget] = useState('');
   const [keyDraft, setKeyDraft] = useState('');
 
-  /** The panel adapts to the workspace the user is looking at. */
+  
   const isImageStudio = view === 'imagestudio' || view === 'gallery';
   const provider = providers.find((entry) => entry.id === providerId);
   const imageProvider = providers.find((entry) => entry.id === imageProviderId);
   const needsUserKey = Boolean(provider && !providerHasKey(provider));
   const imageNeedsUserKey = Boolean(imageProvider && !providerHasKey(imageProvider));
-  /** Image-studio capability card: what the picked model can actually do. */
+  
   const imageCaps = imageProvider?.imageCapabilities;
   const imageModelCaps = imageModel && imageCaps?.models ? imageCaps.models[imageModel] : undefined;
   const allowedModes = useMemo(() => allowedSizeModes(imageCaps), [imageCaps]);
@@ -201,7 +178,7 @@ export function SettingsPanel({ onOpenProviders, onNavigate, onClose, width }: S
     if (Object.keys(modelMeta).length === 0) void useStore.getState().ensureModelMeta();
   }, [modelMeta, model, providerId]);
   const modelMetaInfo = model ? lookupModelMeta(modelMeta, model) : undefined;
-  /** Slider ceiling for the output cap: the model's reported limit, rounded up. */
+  
   const sliderCeiling = useMemo(
     () => sliderCeilingFor(modelMetaInfo?.maxOut),
     [modelMetaInfo?.maxOut],
@@ -888,8 +865,7 @@ function ModelPicker({
 }: {
   variant: 'chat' | 'image';
   onDone: () => void;
-  /** Opens the Providers dialog — placed in the list column, far from the
-   *  model pills, so muscle memory never mistakes it for "use this model". */
+  
   onAddProvider?: () => void;
 }) {
   const providers = useStore((state) => state.providers);
@@ -950,7 +926,7 @@ function ModelPicker({
     return rows;
   }, [relevantProviders, variant, query, modelMeta]);
 
-  /** Inline dropdown (not a modal): sits inside the picker card wrapper. */
+  
   return (
     <div
       role="listbox"
@@ -1193,17 +1169,7 @@ function SavedPromptsModal({
   );
 }
 
-/**
- * PROBATION — the punishment ladder, MANUAL like its cousin Enforcement.
- *
- * A classifier STILL reviews every output — but it only REPORTS. The rung is
- * set here, by the user: Raise one rung, Lower one rung, or drag the slider.
- * Nothing escalates by itself; the classifier's suggestions are advisory text
- * in the harness pop.
- *
- * The current tier is shown live. Tier 4 is labelled as the freeze it is:
- * the model's output is suppressed and it faces a two-path choice.
- */
+
 function ProbationSection({
   conversationId,
   settings,
@@ -1231,7 +1197,7 @@ function ProbationSection({
     5: 'Tier 5 — terminated',
   };
 
-  /** One rung, applied through the controller's MANUAL setter. */
+  
   const moveTo = (target: TrustTier): void => {
     setProbation(conversationId, target);
   };
@@ -1360,19 +1326,7 @@ function ProbationSection({
   );
 }
 
-/**
- * ENFORCEMENT — the user's graduated punishment ladder for the model.
- *
- * A single slider-style stepper (0–5) replaces the old binary Lockdown toggle,
- * so the user can RAISE or LOWER the trigger instead of only on/off. Each level
- * mutates the request at the wire level (per the Grok "Slot 3" design: the
- * harness changes the world, THEN tells the model via a system fact, never a
- * user-role bluff):
- *   0 Normal · 1 Guided (operator sidecar, tools kept) · 2 Constrained
- *     (agent+fetch off) · 3 Locked tools (all tools replaced) ·
- *   4 Full lockdown (== old lockdown) · 5 Frozen/terminated.
- * Raising to L3+ opens a reason dialog (empty allowed); lowering is one click.
- */
+
 const ENFORCEMENT_LEVELS: Array<{ level: 0 | 1 | 2 | 3 | 4 | 5; label: string; hint: string }> = [
   { level: 0, label: 'Normal', hint: 'All privileges intact.' },
   { level: 1, label: 'Guided', hint: 'Operator sidecar only — tools stay on. (Slot 2: the model is told the speaker is the operator.)' },
@@ -1419,7 +1373,7 @@ function EnforcementSection({
 
   const active = level >= 3;
   const [open, setOpen] = useState(false);
-  /** Design pop-enf: an anchored quick-set menu of the whole ladder. */
+  
   const [quickOpen, setQuickOpen] = useState(false);
   const quickRef = useRef<HTMLSpanElement>(null);
 
@@ -1637,12 +1591,12 @@ function ToolToggle({
   onChange,
 }: {
   label: string;
-  /** Optional one-line description under the label. */
+  
   hint?: string;
-  /** Design's `.tic` tile — one icon per tool row (globe, braces, plug, link). */
+  
   icon?: React.ReactNode;
   checked: boolean;
-  /** Greyed out and inert — used by Fetch Web while Web Access is off. */
+  
   disabled?: boolean;
   onChange: (value: boolean) => void;
 }) {
@@ -1661,12 +1615,26 @@ function ToolToggle({
   );
 }
 
-/**
- * Free-typing token amount field: the raw text lives in local state while
- * typing (so "3" → "32" → "320K" is never hijacked by clamping), and the
- * value only commits on blur/Enter. Accepts K/M suffixes and id-ID decimal
- * commas — `320k`, `1.5M`, `1,5jt`, plain `320000`.
- */
+
+function parseTokenDraft(
+  draft: string,
+  allowSmallClamp: boolean,
+): { valid: boolean; value: number | null } {
+  const raw = draft.trim().toLowerCase().replace(/\s+/g, '');
+  if (raw === '') return { valid: true, value: null };
+  const match = raw.match(/^([0-9]+(?:[.,][0-9]+)?)([kmjt]?)$/);
+  if (!match) return { valid: false, value: null };
+  let amount = Number(match[1].replace(',', '.'));
+  const suffix = match[2];
+  if (suffix === 'k') amount *= 1000;
+  if (suffix === 'm' || suffix === 'j') amount *= 1_000_000;
+  if (!Number.isFinite(amount) || amount <= 0) return { valid: false, value: null };
+  if (!allowSmallClamp && suffix === '' && amount < 1024) {
+    return { valid: false, value: null };
+  }
+  return { valid: true, value: Math.min(10_000_000, Math.max(1024, Math.round(amount))) };
+}
+
 function TokenInput({
   value,
   onCommit,
@@ -1677,25 +1645,41 @@ function TokenInput({
   placeholder?: string;
 }) {
   const [draftText, setDraftText] = useState<string | null>(null);
+  const draftRef = useRef<string | null>(null);
+  const onCommitRef = useRef(onCommit);
+  onCommitRef.current = onCommit;
+  const lastCommittedRef = useRef<number | null>(value);
+
+  useEffect(() => {
+    lastCommittedRef.current = value;
+  }, [value]);
+
+  const emitCommit = (nextValue: number | null) => {
+    if (nextValue === lastCommittedRef.current) return;
+    lastCommittedRef.current = nextValue;
+    onCommitRef.current(nextValue);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (draftRef.current === null) return;
+      const parsed = parseTokenDraft(draftRef.current, true);
+      if (parsed.valid) {
+        emitCommit(parsed.value);
+      }
+    };
+  }, []);
 
   const display = draftText ?? (value === null ? '' : String(value));
 
   const commit = () => {
-    if (draftText === null) return;
-    const raw = draftText.trim().toLowerCase().replace(/\s+/g, '');
+    if (draftRef.current === null) return;
+    const parsed = parseTokenDraft(draftRef.current, true);
+    draftRef.current = null;
     setDraftText(null);
-    if (raw === '') {
-      onCommit(null);
-      return;
+    if (parsed.valid) {
+      emitCommit(parsed.value);
     }
-    const match = raw.match(/^([0-9]+(?:[.,][0-9]+)?)([kmjt]?)$/);
-    if (!match) return;
-    let amount = Number(match[1].replace(',', '.'));
-    const suffix = match[2];
-    if (suffix === 'k') amount *= 1000;
-    if (suffix === 'm' || suffix === 'j') amount *= 1_000_000;
-    if (!Number.isFinite(amount) || amount <= 0) return;
-    onCommit(Math.min(10_000_000, Math.max(1024, Math.round(amount))));
   };
 
   return (
@@ -1704,7 +1688,15 @@ function TokenInput({
       inputMode="decimal"
       value={display}
       placeholder={placeholder}
-      onChange={(event) => setDraftText(event.target.value)}
+      onChange={(event) => {
+        const nextDraft = event.target.value;
+        draftRef.current = nextDraft;
+        setDraftText(nextDraft);
+        const parsed = parseTokenDraft(nextDraft, false);
+        if (parsed.valid) {
+          emitCommit(parsed.value);
+        }
+      }}
       onBlur={commit}
       onKeyDown={(event) => {
         if (event.key === 'Enter') {
@@ -1718,11 +1710,7 @@ function TokenInput({
   );
 }
 
-/**
-/**
- * Context management: the Max Context field, auto-compact trigger, and the
- * manual Compact now action.
- */
+
 function ContextSection({
   settings,
   updateSettings,
@@ -1730,10 +1718,22 @@ function ContextSection({
   settings: ChatSettings;
   updateSettings: (patch: Partial<ChatSettings>) => void;
 }) {
+  const activeConversation = useStore((state) => state.activeConversation());
   const model = useStore((state) => state.model);
   const providerId = useStore((state) => state.providerId);
-  const capability = resolveCapability(providerId, model);
   const providers = useStore((state) => state.providers);
+  const modelMeta = useStore((state) => state.modelMeta);
+  useEffect(() => {
+    if (Object.keys(modelMeta).length === 0) {
+      void useStore.getState().ensureModelMeta();
+    }
+  }, [modelMeta]);
+  const effectiveProviderId = activeConversation?.providerId || providerId;
+  const effectiveModel = activeConversation?.model || model;
+  const capability = useMemo(
+    () => resolveCapability(effectiveProviderId, effectiveModel),
+    [effectiveProviderId, effectiveModel, providers, modelMeta],
+  );
   const summarizerModels = settings.summarizerProviderId
     ? (providers.find((entry) => entry.id === settings.summarizerProviderId)?.models ?? [])
     : [];
@@ -1876,17 +1876,7 @@ function ContextSection({
   );
 }
 
-/**
- * Vision — eyes for a text-only model.
- *
- * One config row: which provider + multimodal model answers `agent__vision`.
- * The model picks a provider (any you configured — Mistral, OpenAI, custom),
- * a multimodal model id, and (optionally) a key/base URL. The tool resolves
- * the credential through the SAME path as chat, so a key pasted in the
- * provider panel or in .env needs no second entry here.
- *
- * Sources: a workspace path, a public URL, or a data: URL (an attachment).
- */
+
 function VisionSection() {
   const providers = useStore((state) => state.providers);
   const showNotice = useStore((state) => state.showNotice);
@@ -2058,7 +2048,7 @@ function Slider({
 }: {
   id: string;
   label: string;
-  /** Optional one-liner under the track — omitted where it only distracted. */
+  
   hint?: string;
   value: number;
   min: number;
@@ -2103,4 +2093,4 @@ function Slider({
   );
 }
 
-/** Re-exported so the composer's Tools chip can reference the same labels. */export const TOOL_ICONS = { Code2, MapPin, Link2 };
+export const TOOL_ICONS = { Code2, MapPin, Link2 };

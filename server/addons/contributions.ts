@@ -1,8 +1,4 @@
-/**
- * Addon v2 contributions registry (A4) — views, status items and tool
- * renderers declared in `addon.json` (static) plus runtime status updates
- * pushed over SSE to the sidebar/Hub.
- */
+
 
 import type { AddonContributes, AddonViewContribution } from './manifest.js';
 import { publishBusEvent } from './bus.js';
@@ -24,7 +20,7 @@ const views: RegisteredView[] = [];
 const statusItems = new Map<string, StatusPatch & { addonId: string }>();
 const toolRenderers = new Map<string, { addonId: string; tool: string; component: string }>();
 
-/** Register the STATIC contributions from a validated manifest (on load). */
+
 export function registerContributions(addonId: string, contributes: AddonContributes | undefined): void {
   unregisterContributions(addonId);
   if (!contributes) return;
@@ -63,7 +59,7 @@ export function getToolRenderer(tool: string): { addonId: string; tool: string; 
   return toolRenderers.get(tool);
 }
 
-/** Runtime status update from an addon (`ui.status.set`) — pushed via SSE. */
+
 export function setStatus(addonId: string, patch: StatusPatch): void {
   const key = `${addonId}\u0000${patch.id}`;
   const prev = statusItems.get(key);

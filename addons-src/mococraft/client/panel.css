@@ -1,6 +1,3 @@
-/* Mococraft panel styles — addon-owned (per AGENTS.md: addon CSS stays in
-   the addon's own files, prefixed .moco-). Uses harness --c-* tokens where
-   available, falls back to neutrals. */
 .moco-root {
   padding: 12px;
   display: flex;

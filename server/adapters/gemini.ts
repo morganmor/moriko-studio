@@ -17,7 +17,6 @@ import { drainInjections, injectionText } from '../addons/inject.js';
 import { gateToolImages, imageCapableFor, separateImageParts, IMAGE_OMITTED_NOTE } from './visionGate.js';
 import {
   createLoopGuard,
-  estimateTokensFromChars,
   executeCalls,
   prepareTools,
   toolCallSignature,
@@ -25,33 +24,26 @@ import {
   type CatalogueTool,
   type LoopStopReason,
 } from '../mcp/loop.js';
-import { createContextMeter, type ContextMeter } from '../mcp/contextMeter.js';
+import { createContextMeter, createTurnUsageAccumulator, type ContextMeter, type RoundUsageInput } from '../mcp/contextMeter.js';
 import { geminiToolName, toGeminiDeclaration, toGeminiDeclarationLegacy } from './geminiSchema.js';
 
-/** Gemini inline part: plain text or base64 media (image/audio/video/pdf). */
+
 type GeminiRequestPart =
   | { text: string }
   | { inline_data: { mime_type: string; data: string } }
   | {
       functionCall: { name: string; args?: Record<string, unknown>; id?: string };
-      /**
-       * Opaque reasoning signature. Gemini 3+ REQUIRES it echoed back on the
-       * same functionCall part in the next request, or it drops reasoning
-       * continuity and answers an empty STOP.
-       */
+      
       thoughtSignature?: string;
     }
   | { functionResponse: { name: string; response: Record<string, unknown>; id?: string } };
 
-/**
- * Gemini 3 and later replaced `thinkingBudget` with `thinkingLevel`; sending
- * a budget to those models is an error, and sending a level to 2.5 is one too.
- */
+
 function usesThinkingLevel(model: string): boolean {
   return /gemini-(?:[3-9]|\d{2})(?:[.-]|$)/i.test(model) || /gemini-4/i.test(model);
 }
 
-/** The proto ladder, weakest → strongest, paired with the canonical levels. */
+
 const THINKING_LEVEL_WIRE: ReadonlyArray<
   [StreamParams['settings']['thinkingLevel'], string]
 > = [
@@ -61,26 +53,12 @@ const THINKING_LEVEL_WIRE: ReadonlyArray<
   ['high', 'HIGH'],
 ];
 
-/** Canonical order — used to clamp any level onto the proto ladder. */
+
 const CANONICAL: readonly StreamParams['settings']['thinkingLevel'][] = [
   'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max',
 ];
 
-/**
- * THINKING CONFIG for Gemini.
- *
- * `includeThoughts` IS NOT OPTIONAL. Per the Gemini thinking docs, thought
- * summaries are suppressed unless the request asks for them explicitly — the
- * model still burns its budget internally, but the response carries no part
- * with `thought: true`, so the adapter's (correct) parser has nothing to route
- * and the UI shows a plain answer with no reasoning. That was the whole bug:
- * the config sent a budget/level and never turned thoughts ON.
- *
- * `thinkingLevel` (Gemini 3+) and `thinkingBudget` (2.5 and earlier) are
- * mutually exclusive — sending the wrong one is an error — so the flag rides
- * alongside whichever the model accepts. `off` sends budget 0, which is itself
- * the documented way to disable thinking; no thoughts to include then.
- */
+
 function thinkingConfigFor(
   level: StreamParams['settings']['thinkingLevel'],
   model: string,
@@ -92,7 +70,6 @@ function thinkingConfigFor(
       ? { thinkingBudget: 0 }
       : { thinkingBudget: budget, includeThoughts: true };
   }
-  // `off`/`xhigh`/`max` have no proto equivalent: clamp to the nearest rung.
   const target = CANONICAL.indexOf(level);
   const resolved = THINKING_LEVEL_WIRE.reduce((best, entry) => {
     const distance = Math.abs(CANONICAL.indexOf(entry[0]) - target);
@@ -105,11 +82,7 @@ function thinkingConfigFor(
 }
 
 
-/**
- * Maps a generic message content into Gemini parts. Non-image files travel as
- * `inline_data` with the mime from their data URL — Gemini supports inline
- * audio, video, and PDF on models that accept them.
- */
+
 function toGeminiParts(content: ChatMessage['content']): GeminiRequestPart[] {
   if (content === null) return [{ text: '' }];
   if (typeof content === 'string') return [{ text: content }];
@@ -147,22 +120,11 @@ function toGeminiParts(content: ChatMessage['content']): GeminiRequestPart[] {
   return parts.length > 0 ? parts : [{ text: '' }];
 }
 
-/**
- * Google Gemini adapter using the native `streamGenerateContent` stream.
- *
- * Using the native endpoint (rather than Gemini's OpenAI shim) is what makes
- * thinking budgets expressible.
- *
- * Use MCP: `functionDeclarations` carry the aggregated MCP tools; `functionCall`
- * parts trigger execution and a `functionResponse` user turn continues the loop.
- */
+
 export async function streamGemini(params: StreamParams, onEvent: StreamHandler): Promise<void> {
   const { baseUrl, apiKey, model, messages, settings, signal } = params;
   const base = baseUrl.replace(/\/+$/, '');
-  /**
-   * THE PER-SECOND METER: prices the exact request with the SHARED estimator,
-   * then grows the buckets from every streamed delta.
-   */
+  
   const meter: ContextMeter = createContextMeter({
     systemInstruction: settings.systemInstruction ?? '',
     systemSegments: params.harnessInjections.map((injection) => injection.content),
@@ -170,18 +132,10 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
     messages,
   });
 
-  /**
-   * Tool declarations travel as `parametersJsonSchema` — the lossless JSON
-   * Schema field Google documents (its own example carries
-   * `additionalProperties`). The legacy `parameters` proto is a CLOSED field
-   * set: `additionalProperties`/`oneOf`/`$ref` there make protobuf parsing
-   * fail, and Gemini rejects the WHOLE request with HTTP 400 — one addon tool
-   * is enough to break every generation. It is kept only as a retry path for
-   * API surfaces that predate the JSON Schema field.
-   */
+  
   let catalogue: CatalogueTool[] = [];
   let losslessDeclarations = true;
-  /** Gemini-safe declaration name → the catalogue's real wire name. */
+  
   const declToWire = new Map<string, string>();
   const prepared = await prepareTools(settings, (tools) => {
     catalogue = tools;
@@ -194,13 +148,7 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
   });
 
   const convo: Array<{ role: 'user' | 'model'; parts: GeminiRequestPart[] }> = [];
-  /**
-   * `functionResponse` must carry the SAME name (and, on newer models, id) as
-   * the `functionCall` it answers — Google returns an empty STOP on mismatch.
-   * The wire's `tool` message only carries `tool_call_id`, so the name is
-   * recovered by scanning BACK through the already-mapped history for the
-   * assistant message whose `tool_calls` entry owns that id.
-   */
+  
   const wireNameById = new Map<string, string>();
   for (const message of messages) {
     for (const call of message.tool_calls ?? []) wireNameById.set(call.id, call.function.name);
@@ -252,9 +200,9 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
 
   const guard = createLoopGuard(params.contextLimit, params.compactGuard);
   let forcedStop: LoopStopReason | null = null;
-  /** In-run compaction handoff: the run resumes after the client compacts. */
+  
   let compactRequested = false;
-  /** One lifecycle for the whole run: block ids stay stable across rounds. */
+  
   const reasoningBlocks = createReasoningBlockEmitter(onEvent);
 
   if (prepared.count > 0 && prepared.defs) {
@@ -263,27 +211,28 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
     meter.addToolChars(defsChars);
   }
 
-  /** Summed across tool rounds — MUST share the cadence of sumCacheReadTokens. */
-  let sumPromptTokens = 0;
-  let sumCompletionTokens = 0;
-  let sumBilledTokens = 0;
-  let sumCacheReadTokens = 0;
-  let sawAnyUsage = false;
+  
+  const usageAcc = createTurnUsageAccumulator();
   const flushUsage = (): void => {
-    if (!sawAnyUsage) return;
-    onEvent({
-      type: 'usage',
-      promptTokens: sumPromptTokens > 0 ? sumPromptTokens : undefined,
-      completionTokens: sumCompletionTokens,
-      totalTokens: sumBilledTokens,
-      cacheReadTokens: sumCacheReadTokens > 0 ? sumCacheReadTokens : undefined,
-    });
+    usageAcc.flush(onEvent, meter);
   };
 
   const frozen = params.settings.trust?.outputFrozen === true;
   let choiceMade = false;
+  
+  const freeze = {
+    continueCount: params.settings.trust?.continueCount ?? 0,
+    continueSeized: params.settings.trust?.continueSeized === true,
+    lastReasoning: '',
+  };
 
   for (;;) {
+    if (signal?.aborted) {
+      if (meter.hasUsage()) meter.flush(onEvent);
+      flushUsage();
+      onEvent({ type: 'done', finishReason: 'aborted' });
+      return;
+    }
     const streamIdle = idle(signal, STREAM_IDLE_MS, 'STREAM_IDLE');
     try {
     const useTools = prepared.count > 0 && !forcedStop;
@@ -337,7 +286,6 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
       );
       await assertOk(response, 'Gemini');
     } catch (error) {
-      // A 400 on the JSON Schema field itself: retry once with the proto shape.
       const schemaRejection =
         error instanceof UpstreamError &&
         error.status === 400 &&
@@ -366,6 +314,7 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
         candidatesTokenCount?: number;
         totalTokenCount?: number;
         cachedContentTokenCount?: number;
+        thoughtsTokenCount?: number;
       };
       promptFeedback?: { blockReason?: string };
     }
@@ -379,7 +328,7 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
     }> = [];
     let usage: GeminiChunk['usageMetadata'] | undefined;
     const contentScrub = createThinkingScrubState();
-    /** Gemini's `thought` parts are the native reasoning channel. */
+    
     const nativeScrub = createThinkingScrubState('native');
 
     for await (const payload of iterateSse(response.body, () => streamIdle.reset())) {
@@ -405,7 +354,6 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
         if (part.functionCall) {
           reasoningBlocks.end();
           const declared = coerceText(part.functionCall.name) ?? part.functionCall.name;
-          // Gemini answers the DECLARED name; the catalogue knows the real one.
           const name = declToWire.get(declared) ?? declared;
           calls.push({
             id: part.functionCall.id ?? `${name}_${calls.length}`,
@@ -419,7 +367,6 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
         const textDelta = coerceText(part.text);
         if (textDelta === null || textDelta === '') continue;
         if (part.thought) {
-          // Native thought part: verbatim, never split on a tag it mentions.
           meter.addReasoningChars(textDelta.length);
           meter.maybeEmit(onEvent);
           const routed = scrubThinkingFragment(textDelta, nativeScrub);
@@ -442,23 +389,52 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
 
       if (chunk.usageMetadata) {
         usage = chunk.usageMetadata;
-        sawAnyUsage = true;
-        if (usage.promptTokenCount !== undefined) sumPromptTokens += usage.promptTokenCount;
-        sumCompletionTokens += usage.candidatesTokenCount ?? 0;
-        sumBilledTokens +=
-          usage.totalTokenCount ?? (usage.promptTokenCount ?? 0) + (usage.candidatesTokenCount ?? 0);
-        sumCacheReadTokens += usage.cachedContentTokenCount ?? 0;
       }
       if (candidate?.finishReason) finishReason = candidate.finishReason;
     }
 
     const nativeTail = flushNativeReasoning(nativeScrub);
-    if (nativeTail) reasoningBlocks.push(nativeTail);
+    if (nativeTail) {
+      meter.addReasoningChars(nativeTail.length);
+      reasoningBlocks.push(nativeTail);
+    }
     reasoningBlocks.end();
     const contentTail = flushThinkingScrub(contentScrub);
-    if (contentTail) onEvent({ type: 'text', delta: contentTail });
+    if (contentTail) {
+      meter.addOutputChars(contentTail.length);
+      onEvent({ type: 'text', delta: contentTail });
+    }
+
+    const roundUsage: RoundUsageInput | undefined = usage
+      ? (() => {
+          const promptTokens = usage.promptTokenCount;
+          const thoughts = usage.thoughtsTokenCount ?? 0;
+          const candidates = usage.candidatesTokenCount ?? 0;
+          const total = usage.totalTokenCount;
+          // On Gemini thinking models, totalTokenCount = prompt + candidates + thoughts when thoughts are billed separately.
+          const separateThoughts =
+            thoughts > 0 &&
+            typeof total === 'number' &&
+            typeof promptTokens === 'number' &&
+            total >= promptTokens + candidates + thoughts;
+          return {
+            promptTokens,
+            completionTokens: separateThoughts ? candidates + thoughts : candidates,
+            totalTokens: total,
+            cacheReadTokens: usage.cachedContentTokenCount,
+            reasoningTokens: thoughts > 0 ? thoughts : undefined,
+          };
+        })()
+      : undefined;
 
     if (calls.length === 0) {
+      if (roundUsage) {
+        guard.record([], roundUsage, 0);
+        meter.recordUsage(roundUsage);
+        usageAcc.record(roundUsage);
+        onEvent({ type: 'context_telemetry', ...guard.telemetry() });
+        meter.flush(onEvent);
+      }
       flushUsage();
       onEvent({ type: 'done', finishReason: forcedStop ?? (finishReason ?? 'stop') });
       return;
@@ -468,18 +444,24 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
       functionCall: { name: geminiToolName(call.name), args: call.args, id: call.id },
       ...(call.signature ? { thoughtSignature: call.signature } : {}),
     }));
-    // The tool CALLS the model just made ride the wire in `tools` too.
-    meter.addToolChars(
+    meter.addCompletionToolChars(
       calls.reduce((sum, call) => sum + call.name.length + JSON.stringify(call.args ?? {}).length, 0),
     );
+    if (roundUsage) {
+      meter.recordUsage(roundUsage);
+      usageAcc.record(roundUsage);
+    }
+    meter.advanceRound({ keepReasoning: false });
     convo.push({ role: 'model', parts: modelParts });
 
     if (signal?.aborted) {
+      if (meter.hasUsage()) meter.flush(onEvent);
       flushUsage();
       onEvent({ type: 'done', finishReason: 'aborted' });
       return;
     }
 
+    freeze.lastReasoning = reasoningBlocks.lastBlockText;
     const executed = await executeCalls(
       calls.map((call) => ({ id: call.id, wireName: call.name, rawArgs: JSON.stringify(call.args ?? {}) })),
       prepared.byName,
@@ -487,7 +469,7 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
       onEvent,
       params.sessionId,
       params.settings.terminalMode ?? 'auto',
-      params.settings.confirmDeletes === true,
+      params.settings.confirmDeletes !== false,
       params.model,
       params.settings.enforcement?.level && params.settings.enforcement.level >= 3
         ? (params.settings.enforcement.level as 3 | 4 | 5)
@@ -496,6 +478,7 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
       params.settings.webAccess,
       params.capability,
       params.settings.trust?.level,
+      freeze,
     );
     for (const event of executed.events) {
       if (event.__streamed) continue;
@@ -505,14 +488,22 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
     if (frozen) {
       for (const event of executed.events) {
         if (event.type === 'tool_call' && event.toolName === 'harness_choice') {
-          choiceMade = true;
           try {
             const parsed = JSON.parse(event.args || '{}') as { choice?: string };
             if (parsed.choice === 'apologize') {
-              flushUsage();
-              onEvent({ type: 'done', finishReason: 'harness_stopped' });
-              return;
+              const result = executed.events.find(
+                (entry) => entry.type === 'tool_result' && entry.toolCallId === event.toolCallId,
+              );
+              if (result && result.type === 'tool_result' && result.ok) {
+                choiceMade = true;
+                if (meter.hasUsage()) meter.flush(onEvent);
+                flushUsage();
+                onEvent({ type: 'done', finishReason: 'harness_stopped' });
+                return;
+              }
+              continue;
             }
+            choiceMade = true;
           } catch {
           }
         }
@@ -538,33 +529,27 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
 
     guard.record(
       calls.map((call) => toolCallSignature(call.name, JSON.stringify(call.args ?? {}))),
-      usage ? { promptTokens: usage.promptTokenCount, completionTokens: usage.candidatesTokenCount } : undefined,
-      estimateTokensFromChars(
-        executed.followUp.reduce((sum, output) => sum + String(output.text ?? '').length, 0),
-      ),
+      roundUsage,
+      0,
       executed.followUp.map((output) => ({
         wireName: output.wireName as string,
         errorCode: output.errorCode as string | undefined,
       })),
     );
-    // The round's tool outputs now ride the wire: price them into `tools`.
     meter.addToolChars(
       executed.followUp.reduce((sum, output) => sum + String(output.text ?? '').length, 0),
     );
-    meter.recordUsage(usage ? { promptTokens: usage.promptTokenCount, completionTokens: usage.candidatesTokenCount } : undefined);
     forcedStop = guard.stopReason();
 
-    // TELEMETRY: the guard's own arithmetic, so the chip cannot disagree.
     {
       const telemetry = guard.telemetry();
       onEvent({ type: 'context_telemetry', ...telemetry });
       meter.flush(onEvent);
       if (forcedStop === 'compact') {
-        const snap = meter.snapshot();
         onEvent({
           type: 'context_compaction_request',
-          liveContextTokens: snap.liveContextTokens,
-          contextLimit: null,
+          liveContextTokens: telemetry.liveContextTokens,
+          contextLimit: telemetry.contextLimit,
           trigger: 'context-limit',
         });
         forcedStop = null;
@@ -595,13 +580,16 @@ export async function streamGemini(params: StreamParams, onEvent: StreamHandler)
     }
 
     convo.push({ role: 'user', parts: responseParts });
-    // IN-RUN COMPACTION HANDOFF: end the stream, not the task.
     if (compactRequested) {
       flushUsage();
       meter.flush(onEvent);
       onEvent({ type: 'done', finishReason: 'context_compaction' });
       return;
     }
+    } catch (error) {
+      if (meter.hasUsage()) meter.flush(onEvent);
+      flushUsage();
+      throw error;
     } finally {
       streamIdle.clear();
     }

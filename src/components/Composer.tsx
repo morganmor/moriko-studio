@@ -49,7 +49,7 @@ import { Tip, Toggle, cx } from './ui';
 import { useIsPhone } from '../hooks/useIsPhone';
 import { THINKING_COPY } from './SettingsPanel';
 
-/** Hard caps so a base64 attachment stays a sane thing to sync to the device. */
+
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_ATTACHMENTS = 4;
 
@@ -115,12 +115,7 @@ interface ComposerProps {
   onToggleGoals?: () => void;
   goalsOpen?: boolean;
   onToggleTodos?: () => void;
-  /**
-   * STEER: inject the draft into a RUNNING generation's context. Called with
-   * the trimmed text; returns true when the server queued it (202). When the
-   * run already ended (409) the caller keeps the draft so the user can send
-   * it as a normal message instead.
-   */
+  
   onSteer?: (
     text: string,
     attachments?: TurnAttachment[],
@@ -128,15 +123,11 @@ interface ComposerProps {
   onSendReminder?: () => Promise<{ id: string | null } | import('../lib/api').SteerFailure>;
   onNavigateFirstTurn?: () => void;
   onNavigateLatest?: () => void;
-  /**
-   * ATTACHMENT DIRECTORY: the workspace paths of the picked attachments.
-   */
+  
   attachmentPaths?: string[];
 }
 
-/**
- * Composer.
- */
+
 export function Composer({
   onSend,
   onStop,
@@ -158,8 +149,7 @@ export function Composer({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [attachments, setAttachments] = useState<TurnAttachment[]>([]);
-  /** SLASH COMMAND INPUT (design Moriko-Design2): typing "/" opens the
-   *  command listbox above the textarea. See SlashMenu.tsx. */
+  
   const theme = useStore((state) => state.theme);
   const setTheme = useStore((state) => state.setTheme);
   const newConversation = useStore((state) => state.newConversation);
@@ -208,7 +198,6 @@ export function Composer({
           onSend(args ? `/compact ${args}` : '/compact');
           return;
         case '/plan':
-          // Toggle: /plan turns it on, /plan again turns it off.
           await togglePlanMode();
           return;
         default:
@@ -216,8 +205,6 @@ export function Composer({
       }
     }
     try {
-      // SKILLS — /skill-name goes to the agent AS TEXT; the harness detects it
-      // server-side and injects the skill body for this turn (no local run).
       if (command.skill) {
         onSend(args ? `${command.c} ${args}` : command.c);
         return;
@@ -238,7 +225,7 @@ export function Composer({
     }
   };
 
-  /** The built-in command list. `/plan` toggles the harness plan-mode gate. */
+  
   const slashBuiltins = useMemo<SlashCommand[]>(
     () => [
       { c: '/compact', h: 'Summarize older turns', builtin: true, argumentHint: '[focus]' },
@@ -277,11 +264,7 @@ export function Composer({
   const plusButtonRef = useRef<HTMLButtonElement>(null);
   const settings = useEffectiveSettings();
   const terminalMode = settings.terminalMode ?? 'auto';
-  /**
-   * PLAN MODE (6A) — the UI side of the same flag the pipeline gate reads.
-   * The state lives on the server (per session, in-memory); this mirrors it so
-   * the "+" row, the slash command and the indicator never disagree.
-   */
+  
   const [planMode, setPlanMode] = useState(false);
   const [planModeLock, setPlanModeLock] = useState<{ status: string; title: string } | null>(null);
   const bannerFull = settings.agentMode ? 'AGENT MODE ACTIVE' : 'CHAT MODE ONLY';
@@ -302,7 +285,7 @@ export function Composer({
   );
   const activeChatId = useStore((state) => state.activeId);
 
-  /** Reads the server posture (plan mode + RSA/T lock) for this chat. */
+  
   const refreshPlanMode = useCallback(async () => {
     if (!activeChatId) {
       setPlanMode(false);
@@ -330,23 +313,14 @@ export function Composer({
     void refreshPlanMode();
   }, [refreshPlanMode]);
 
-  /**
-   * The AGENT can enter or leave plan mode through its own tools. Re-reading
-   * the posture when a run finishes is what keeps the indicator honest —
-   * otherwise the chip would keep claiming "off" after the model engaged the
-   * gate.
-   */
+  
   const wasStreaming = useRef(streaming);
   useEffect(() => {
     if (wasStreaming.current && !streaming) void refreshPlanMode();
     wasStreaming.current = streaming;
   }, [streaming, refreshPlanMode]);
 
-  /**
-   * Toggles plan mode and reports the outcome honestly: an RSA/T lock is a
-   * separate gate that a toggle cannot lift, so the notice says so instead of
-   * letting the next edit fail with a surprise.
-   */
+  
   const togglePlanMode = useCallback(
     async (next?: boolean): Promise<void> => {
       if (!activeChatId) return;
@@ -404,7 +378,7 @@ export function Composer({
     return () => cancelAnimationFrame(frame);
   }, [draft]);
 
-  /** Plus menu actions — shared by the desktop popover and the phone sheet. */
+  
   const closePlus = () => setPlusOpen(false);
   const plusBody = (
     <PlusMenuBody
@@ -446,7 +420,7 @@ export function Composer({
     !streaming &&
     !blockedReason;
 
-  /** Paste support: screenshots (Ctrl+V) and copied files attach like picks. */
+  
   const onPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>): void => {
     const files = Array.from(event.clipboardData.files ?? []).filter((file) => file.size > 0);
     if (files.length === 0) return;
@@ -465,11 +439,7 @@ export function Composer({
     setAttachments([]);
   };
 
-  /**
-   * STEER : hand the draft PLUS the attached images/files to the
-   * running generation — the same content a normal send would carry, entering
-   * the model's context between tool rounds as an ordinary user message.
-   */
+  
   const submitSteer = async () => {
     if (!onSteer || steerBusy || (draft.trim().length === 0 && attachments.length === 0)) return;
     setSteerBusy(true);
@@ -520,19 +490,12 @@ export function Composer({
     const state = useStore.getState();
     const hasImage = picked.some((file) => file.type.startsWith('image/') && file.type !== 'image/svg+xml');
     if (hasImage) {
-      // The cascade decides — a model the user marked Vision-capable in the
-      // Providers table never triggers this warning, catalogued or not.
       const caps = resolveCapability(state.providerId, state.model);
       if (caps && !caps.imageIn) {
         showNotice('attachments.imageNotSupported', { model: state.model });
       }
     }
-    /**
-     * VIDEO GATE — a video rides the wire as a `video_url` part or not at all.
-     * Without video input the model would receive a PATH and reach for text
-     * tools on a binary file, so the upload is refused here with a reason
-     * instead of being handed over as a dead end.
-     */
+    
     const hasVideo = picked.some((file) => file.type.startsWith('video/'));
     if (hasVideo) {
       const caps = resolveCapability(state.providerId, state.model);
@@ -590,10 +553,7 @@ export function Composer({
     if (loaded.length > 0) setAttachments((prev) => [...prev, ...loaded]);
   };
 
-  /** TREE ATTACH (right-dock design): files picked in the project tree ride a
-   *  store queue into THIS pipeline, so they get the exact same caps, mime
-   *  checks, upload and dataRef handling as drag-dropped files. The ref keeps
-   *  the consumer on the latest closure (attachment count changes per render). */
+  
   const addFilesRef = useRef(addFiles);
   addFilesRef.current = addFiles;
   const queuedFiles = useStore((state) => state.composerQueuedFiles);
@@ -855,8 +815,7 @@ export function Composer({
                 <span style={{ flexShrink: 0, fontSize: 11, fontWeight: 500, color: 'rgb(var(--c-accent))' }}>Drop to attach</span>
               ) : null}
 
-              {/* PLAN MODE INDICATOR — the gate is invisible until a tool is
-                  refused, so the composer states it up front. */}
+              {}
               {planMode ? (
                 <Tip label="Plan mode: edits and commands are refused. Click to leave.">
                   <button
@@ -1099,15 +1058,7 @@ export function Composer({
   );
 }
 
-/**
- * Model + reasoning quick pick (DeepSeek-style): a pill reading
- * `model · effort`, opening a two-row popover (Model › / Effort ›) with the
- * option lists. NOT a second source of truth — it reads and writes the SAME
- * store fields the Configuration sidebar uses (`setProvider`,
- * `updateSettings({ thinkingLevel })`, the same `thinkingLadderFor` /
- * `nearestThinkingLevel` derivation and `THINKING_COPY` labels), so both
- * UIs always show and change one shared state.
- */
+
 function ModelEffortPicker() {
   const providers = useStore((state) => state.providers);
   const providerId = useStore((state) => state.providerId);
@@ -1328,7 +1279,7 @@ function ToolRow({
 interface PlusMenuBodyProps {
   onUpload: () => void;
   onPlanMode: () => void;
-  /** True while the session's plan-mode gate is engaged. */
+  
   planModeActive: boolean;
   onGoals: () => void;
   onTodos: () => void;
@@ -1423,9 +1374,7 @@ function PlusMenuRow({
 }
 
 
-/**
- * Context usage ring inside the input panel's toolbar.
- */
+
 function ContextChip({ streaming }: { streaming: boolean }) {
   const activeConversation = useStore((state) => state.activeConversation());
   const model = useStore((state) => state.model);
@@ -1446,18 +1395,23 @@ function ContextChip({ streaming }: { streaming: boolean }) {
       setThrottledConversation(activeConversation);
     }
   }, [activeConversation, open]);
-  const capability = useMemo(() => resolveCapability(providerId, model), [providerId, model]);
+  const providers = useStore((state) => state.providers);
+  const modelMeta = useStore((state) => state.modelMeta);
+  const effectiveProviderId = activeConversation?.providerId || providerId;
+  const effectiveModel = activeConversation?.model || model;
+  useEffect(() => {
+    if (Object.keys(modelMeta).length === 0) {
+      void useStore.getState().ensureModelMeta();
+    }
+  }, [modelMeta]);
+  const capability = useMemo(
+    () => resolveCapability(effectiveProviderId, effectiveModel),
+    [effectiveProviderId, effectiveModel, providers, modelMeta],
+  );
   const conversation = throttledConversation ?? activeConversation;
-  /**
-   * THE SERVER'S LIVE RECORD — the per-second meter buckets (`context_live`)
-   * plus the guard's total and its FROZEN gap. While a run streams this is the
-   * authoritative figure; when the run ends `settleLiveContext` keeps the
-   * buckets and only zeroes the in-flight tail, so the rows stay the server's
-   * own breakdown while idle. The local estimate fills in only before the
-   * first server frame and after the user edits turns.
-   */
+  
   const live = useStore((state) =>
-    conversation ? state.liveContext[conversation.id] : undefined,
+    conversation ? (state.liveContext[conversation.id] ?? conversation.liveContext) : undefined,
   );
   const breakdown = useMemo(
     () => (conversation ? contextBreakdown(conversation, capability, live) : null),

@@ -3,16 +3,10 @@ import { Check, Pencil, Plus, Route, Trash2 } from './icons';
 import { Modal, cx } from './ui';
 import { deleteWorkflow, saveWorkflow, type AgentWorkflowDTO } from '../lib/api';
 
-/**
- * AGENT WORKFLOW EDITOR — the "book" modal behind the Edit button on the
- * Agent workflow card. Left page: the merged catalog (built-ins + the user's
- * own) plus "Add or Make Workflow". Right page: name / hint / the doctrine
- * text itself. Saving a built-in stores the user's copy as an override;
- * deleting reverts a built-in override (or removes a custom workflow).
- */
+
 
 interface DraftState {
-  /** null = brand-new workflow (created on save). */
+  
   id: string | null;
   label: string;
   hint: string;
@@ -25,7 +19,7 @@ interface WorkflowEditorProps {
   open: boolean;
   onClose: () => void;
   workflows: AgentWorkflowDTO[];
-  /** Workflow preselected when the modal opens (falls back to the first). */
+  
   selectedId: string;
   onSaved: (workflow: AgentWorkflowDTO) => void;
   onDeleted: (id: string) => void;

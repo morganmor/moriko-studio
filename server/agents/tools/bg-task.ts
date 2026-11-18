@@ -1,39 +1,58 @@
-/**
- * agent__task_start / agent__task_output / agent__task_stop — background
- * process manager.
- *
- * task_start spawns a shell process in the BACKGROUND (non-blocking)
- * and returns a taskId. The command runs through the native system shell.
- * Output is buffered in memory (capped at 48 KB).
- * task_output reads the buffered output (optionally waiting N ms for more).
- * task_stop kills a running task and removes it from the registry.
- *
- * Up to 10 concurrent tasks. In-memory registry (not persisted). Requires
- * terminal mode enabled.
- */
+
 import type { ChildProcess } from 'node:child_process';
 import { statSync } from 'node:fs';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, num, truncateOutput, resolveWithPermission } from './shared.js';
 import { spawnBackgroundShell } from '../exec.js';
 import { auditToolCall } from '../audit.js';
-import { isSneakyWebCommand, sneakyWebRefusal, commandTouchesWebScripts } from './terminal.js';
+import { isSneakyWebCommand, sneakyWebRefusal, commandTouchesWebScripts, approveCommand } from './terminal.js';
 
 interface BgTask {
   id: string;
+  
+  sessionId: string;
   child: ChildProcess;
   command: string;
   cwd: string;
   startedAt: number;
   exited: boolean;
   exitCode: number | null;
+  
+  endedBy?: string;
   output: string;
 }
 
 const tasks = new Map<string, BgTask>();
 const MAX_TASKS = 10;
 const MAX_TASK_OUTPUT = 48_000;
+
+const EXITED_TTL_MS = 30 * 60 * 1000;
+const MAX_EXITED_KEPT = 20;
+const PANEL_TAIL_CHARS = 1600;
 let taskCounter = 0;
+
+
+function ownsTask(task: BgTask, sessionId: string | undefined): boolean {
+  return !task.sessionId || task.sessionId === 'default' || !sessionId || task.sessionId === sessionId;
+}
+
+
+function pruneExited(): void {
+  const now = Date.now();
+  const exited = [...tasks.entries()].filter(([, task]) => task.exited).sort((a, b) => a[1].startedAt - b[1].startedAt);
+  const drop = new Set<string>();
+  for (const [id, task] of exited) {
+    if (now - task.startedAt >= EXITED_TTL_MS) drop.add(id);
+  }
+  const survivors = exited.filter(([id]) => !drop.has(id));
+  for (let i = 0; i < survivors.length - MAX_EXITED_KEPT; i += 1) drop.add(survivors[i][0]);
+  for (const id of drop) tasks.delete(id);
+}
+
+
+function runningIds(): string {
+  return [...tasks.values()].filter((task) => !task.exited).map((task) => task.id).join(', ') || 'none';
+}
 
 export async function taskStartTool(args: Record<string, unknown>, ctx: AgentToolContext): Promise<HarnessToolResult> {
   const mode = ctx.terminalMode ?? 'auto';
@@ -54,8 +73,10 @@ export async function taskStartTool(args: Record<string, unknown>, ctx: AgentToo
     return { ok: false, isError: true, errorCode: 'web_access_off', text: sneakyWebRefusal(rawCommand) };
   }
 
-  if (tasks.size >= MAX_TASKS) {
-    return { ok: false, isError: true, text: `Task limit reached (${MAX_TASKS}). Stop an existing task first with agent__task_stop.` };
+  pruneExited();
+  const runningCount = [...tasks.values()].filter((task) => !task.exited).length;
+  if (runningCount >= MAX_TASKS) {
+    return { ok: false, isError: true, text: `Task limit reached (${MAX_TASKS} running). Stop an existing task first with agent__task_stop.` };
   }
 
   const cwdRaw = str(args, 'cwd').trim() || '.';
@@ -68,11 +89,22 @@ export async function taskStartTool(args: Record<string, unknown>, ctx: AgentToo
     return { ok: false, isError: true, errorCode: 'web_access_off', text: sneakyWebRefusal(rawCommand) };
   }
 
+  const approved = await approveCommand('task_start', rawCommand, resolved.absolute, false, ctx);
+  if (!approved) {
+    return {
+      ok: false,
+      isError: true,
+      errorCode: 'approval_denied',
+      text: `The user did not approve starting background task "${rawCommand}".`,
+    };
+  }
+
   const taskId = `task-${++taskCounter}`;
   const child = spawnBackgroundShell(rawCommand, { cwd: resolved.absolute });
 
   const task: BgTask = {
     id: taskId,
+    sessionId: ctx.sessionId ?? 'default',
     child,
     command: rawCommand,
     cwd: resolved.relative,
@@ -102,6 +134,20 @@ export async function taskStartTool(args: Record<string, unknown>, ctx: AgentToo
     cap(`\n[process error: ${error.message}]`);
   });
 
+  const onAbort = (): void => {
+    if (task.exited) return;
+    try {
+      task.child.kill('SIGKILL');
+    } catch {
+    }
+    task.endedBy = 'aborted with the run';
+    cap('\n[aborted with the run]');
+  };
+  if (ctx.signal) {
+    if (ctx.signal.aborted) onAbort();
+    else ctx.signal.addEventListener('abort', onAbort, { once: true });
+  }
+
   tasks.set(taskId, task);
 
   auditToolCall({
@@ -125,14 +171,16 @@ export async function taskStartTool(args: Record<string, unknown>, ctx: AgentToo
   };
 }
 
-export async function taskOutputTool(args: Record<string, unknown>, _ctx: AgentToolContext): Promise<HarnessToolResult> {
+export async function taskOutputTool(args: Record<string, unknown>, ctx: AgentToolContext): Promise<HarnessToolResult> {
   const taskId = str(args, 'taskId').trim();
   if (!taskId) return { ok: false, isError: true, text: 'task_output needs a "taskId".' };
 
   const task = tasks.get(taskId);
   if (!task) {
-    const active = [...tasks.keys()].join(', ') || 'none';
-    return { ok: false, isError: true, text: `No background task with id "${taskId}". Active tasks: ${active}.` };
+    return { ok: false, isError: true, text: `No background task with id "${taskId}". Running tasks: ${runningIds()}.` };
+  }
+  if (!ownsTask(task, ctx.sessionId)) {
+    return { ok: false, isError: true, text: `Task "${taskId}" belongs to another session — it is not yours to read.` };
   }
 
   const waitMs = Math.min(Math.max(num(args, 'waitMs') ?? 0, 0), 30_000);
@@ -141,7 +189,7 @@ export async function taskOutputTool(args: Record<string, unknown>, _ctx: AgentT
   }
 
   const elapsed = Math.round((Date.now() - task.startedAt) / 100) / 10;
-  const status = task.exited ? `exited (code ${task.exitCode ?? 'null'})` : 'running';
+  const status = task.exited ? `exited (code ${task.exitCode ?? 'null'}${task.endedBy ? ` · ${task.endedBy}` : ''})` : 'running';
   const header = `${taskId} — ${status} — ${elapsed}s elapsed — pid ${task.child.pid ?? 'n/a'}`;
 
   return {
@@ -157,19 +205,20 @@ export async function taskStopTool(args: Record<string, unknown>, ctx: AgentTool
 
   const task = tasks.get(taskId);
   if (!task) {
-    const active = [...tasks.keys()].join(', ') || 'none';
-    return { ok: false, isError: true, text: `No background task with id "${taskId}". Active tasks: ${active}.` };
+    return { ok: false, isError: true, text: `No background task with id "${taskId}". Running tasks: ${runningIds()}.` };
+  }
+  if (!ownsTask(task, ctx.sessionId)) {
+    return { ok: false, isError: true, text: `Task "${taskId}" belongs to another session — it is not yours to stop.` };
   }
 
   if (!task.exited) {
     try {
       task.child.kill('SIGKILL');
-      task.output += '\n[process killed by agent__task_stop]';
+      task.endedBy = 'stopped by agent (task_stop)';
+      task.output += '\n[stopped by agent (task_stop)]';
     } catch {
     }
   }
-
-  tasks.delete(taskId);
 
   auditToolCall({
     session: ctx.sessionId ?? 'default',
@@ -185,4 +234,67 @@ export async function taskStopTool(args: Record<string, unknown>, ctx: AgentTool
     isError: false,
     text: `Stopped ${taskId} (${task.command}, ran for ${elapsed}s).`,
   };
+}
+
+
+export interface BgTaskDto {
+  id: string;
+  sessionId: string;
+  command: string;
+  cwd: string;
+  pid: number | null;
+  running: boolean;
+  exitCode: number | null;
+  endedBy?: string;
+  startedAt: number;
+  elapsedSec: number;
+  
+  tail: string;
+  outputBytes: number;
+}
+
+
+export function listBgTasks(sessionId?: string): BgTaskDto[] {
+  pruneExited();
+  const now = Date.now();
+  return [...tasks.values()]
+    .filter((task) => !sessionId || task.sessionId === sessionId)
+    .sort((a, b) => a.startedAt - b.startedAt)
+    .map((task) => ({
+      id: task.id,
+      sessionId: task.sessionId,
+      command: task.command,
+      cwd: task.cwd,
+      pid: task.child.pid ?? null,
+      running: !task.exited,
+      exitCode: task.exitCode,
+      ...(task.endedBy ? { endedBy: task.endedBy } : {}),
+      startedAt: task.startedAt,
+      elapsedSec: Math.round((now - task.startedAt) / 100) / 10,
+      tail: task.output.slice(-PANEL_TAIL_CHARS),
+      outputBytes: task.output.length,
+    }));
+}
+
+
+export function stopBgTaskAsUser(taskId: string, sessionId?: string): { ok: boolean; error?: string; notOwner?: boolean } {
+  const task = tasks.get(taskId);
+  if (!task) return { ok: false, error: `No background task with id "${taskId}".` };
+  if (!ownsTask(task, sessionId)) return { ok: false, notOwner: true };
+  if (!task.exited) {
+    try {
+      task.child.kill('SIGKILL');
+      task.endedBy = 'stopped via process panel';
+      task.output += '\n[stopped via process panel]';
+    } catch {
+    }
+    auditToolCall({
+      session: sessionId ?? 'default',
+      tool: 'task_stop_panel',
+      ok: true,
+      durationMs: 0,
+      args: `${taskId} · ${task.command}`,
+    });
+  }
+  return { ok: true };
 }

@@ -1,12 +1,4 @@
-/**
- * OpenAI-compatible synchronous image adapter.
- *
- * Many gateways answer `POST /v1/images/generations` with the finished image
- * in the same response (`data[].url` or `data[].b64_json`) — no task to poll.
- * The client contract stays async, so this adapter wraps the synchronous call
- * in a server-side local job: `submit` returns a generated id immediately and
- * runs the upstream call in the background; `poll` reads the job's state.
- */
+
 
 import { randomUUID } from 'node:crypto';
 
@@ -27,12 +19,12 @@ interface LocalJob {
   status: 'RUNNING' | 'SUCCEED' | 'FAILED';
   images: NormalizedImage[];
   error?: string;
-  /** Non-fatal caveat for a successful generation (e.g. size was dropped). */
+  
   note?: string;
   raw?: unknown;
 }
 
-/** Local job states live here (not in `imageTasks`) so sync execution owns them. */
+
 const localJobs = new Map<string, LocalJob>();
 
 function rememberJob(id: string, job: LocalJob): void {
@@ -43,11 +35,7 @@ function rememberJob(id: string, job: LocalJob): void {
   localJobs.set(id, job);
 }
 
-/**
- * Known OpenAI image sizes mapped from our aspect-ratio presets. Ratios with
- * no safe mapping are omitted rather than guessed — the provider default
- * applies.
- */
+
 const RATIO_TO_SIZE: Record<string, string> = {
   '1:1': '1024x1024',
   '16:9': '1792x1024',
@@ -56,11 +44,7 @@ const RATIO_TO_SIZE: Record<string, string> = {
   '2:3': '1024x1536',
 };
 
-/**
- * Maps custom pixel dimensions to the closest standard OpenAI size by
- * computing the aspect ratio and snapping to the nearest known pair.
- * Returns null when no standard size is close enough (e.g. 1:1 stays 1024x1024).
- */
+
 function closestStandardSize(width: number, height: number): string | null {
   const ratio = width / height;
   const standards: Array<{ size: string; r: number }> = [
@@ -92,12 +76,7 @@ interface DetailedImageModel {
 const catalogCache = new Map<string, { at: number; models: Map<string, string[]> }>();
 const CATALOG_TTL = 10 * 60 * 1000;
 
-/**
- * Fetches the provider's image-model catalog (NanoGPT
- * `GET /image-models?detailed=true`) and indexes each model's
- * `supported_parameters.resolutions`. Cached 10 min per base URL. An empty
- * map means the catalog is unavailable — size snapping is skipped.
- */
+
 async function fetchResolutionCatalog(base: string, apiKey: string | undefined): Promise<Map<string, string[]>> {
   const cached = catalogCache.get(base);
   if (cached && Date.now() - cached.at < CATALOG_TTL) return cached.models;
@@ -126,11 +105,7 @@ async function fetchResolutionCatalog(base: string, apiKey: string | undefined):
   return models;
 }
 
-/**
- * Picks the supported resolution with the closest aspect ratio (ties broken
- * by total pixel count). Only pixel-dimension entries ("WxH") are considered;
- * symbolic values like "auto" are skipped.
- */
+
 function snapToSupported(width: number, height: number, resolutions: string[]): string | null {
   const ratio = width / height;
   let best: { size: string; diff: number; areaDiff: number } | null = null;
@@ -149,22 +124,14 @@ function snapToSupported(width: number, height: number, resolutions: string[]): 
   return best ? best.size : null;
 }
 
-/** What this adapter's contract says the endpoint accepts — quoted verbatim
- * in rejection reports so the user sees the expected configuration. */
+
 const ACCEPTED_CONTRACT =
   'model, prompt, n (image count), size "WxH" (optional — some OpenAI-compatible ' +
   'gateways, e.g. BitDeer, reject size with HTTP 400 invalid request, in which case ' +
   'Moriko retries with the minimal body and the provider default applies) — response ' +
   'returns data[].url or data[].b64_json';
 
-/** The request shapes the adapter tries, in order. Gateways vary in how
- * strictly they validate optional parameters (BitDeer rejects `size` with
- * 400), so a 400 falls back to the next simpler body instead of failing
- * the generation outright.
- *
- * When the user enters custom pixels (e.g. 1080x1920) and the provider
- * rejects that size, the adapter tries the closest standard OpenAI size
- * (e.g. 1024x1792 for 9:16) before falling back to no size at all. */
+
 function attemptBodies(req: ImageSubmitRequest, explicitSize?: string): Array<{ label: string; body: Record<string, unknown> }> {
   const customSize =
     explicitSize ??

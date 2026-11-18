@@ -1,7 +1,4 @@
-/**
- * F5.4 — agent__asset_inspect: parse GLB/glTF, PNG/JPEG/WebP/KTX2, WAV with
- * zero dependencies; warn on budget violations; folders get a table.
- */
+
 import path from 'node:path';
 import { statSync } from 'node:fs';
 import type { AgentToolContext, HarnessToolResult } from './shared.js';

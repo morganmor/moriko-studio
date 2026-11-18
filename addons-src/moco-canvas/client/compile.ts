@@ -1,8 +1,4 @@
-/**
- * Moco Canvas — compiler (P0): scene → standalone HTML/CSS.
- * Pure function: no browser, no measurement, no file writes.
- * Output is hand-readable and ejectable (plan §8.1).
- */
+
 
 import { COLS, SPACE, parseAt, slug, isFrameLike, type Scene, type SceneNode, type ResponsiveSpec } from './scene.ts';
 import { frameCols, frameRows, gridFrames, nodeIndex } from './geometry.ts';
@@ -47,8 +43,6 @@ function buildGridFrame(frame: SceneNode): AreaBuild {
   const total = rows * cols;
   const empty = matrix.flat().filter((c) => c === '.').length;
 
-  // Explicit grid lines allow smooth positioning and handle overlaps gracefully
-  // while keeping grid-template-areas in comments/clean CSS when collision-free.
   if (collisions.length > 0) {
     for (const { name, rect } of placed) {
       nodeCss.push(
@@ -147,7 +141,7 @@ function nodeHtml(node: SceneNode, scene: Scene): string {
   return `<div ${common}"${styleVars ? ` style="${styleVars}"` : ''}>${handles}</div>`;
 }
 
-/** Token-driven style vars — the scene never carries a raw colour (plan §5.4). */
+
 function styleVarsOf(node: SceneNode, scene: Scene): string {
   const style = node.style;
   if (!style) return '';
@@ -171,7 +165,7 @@ export interface CompileResult {
   collisions: Array<{ a: string; b: string; cell: string }>;
 }
 
-/** Design tokens + element defaults — the part a designer would edit by hand. */
+
 function baseCss(scene: Scene): string[] {
   const tokens = Object.entries(scene.tokens)
     .map(([k, v]) => `  --mcv-${k}:${v};`)
@@ -199,7 +193,6 @@ function baseCss(scene: Scene): string[] {
     `.mcv-img{background:repeating-linear-gradient(135deg,var(--mcv-hairline) 0 8px,transparent 8px 16px);border:1px solid var(--mcv-hairline);width:100%;min-height:140px}`,
     `.mcv-cta{display:inline-flex;align-items:center;padding:10px 18px;border:1px solid var(--mcv-ink);border-radius:2px;font-size:0.875rem;letter-spacing:0.02em}`,
     `.mcv-slot{display:grid;place-items:center;border:1px dashed var(--mcv-hairline);color:var(--mcv-muted);font:500 0.75rem/1.4 ui-monospace,monospace;letter-spacing:0.06em;text-transform:uppercase;min-height:72px}`,
-    // Token-driven overrides: every node may carry --mcv-fg/--mcv-bg/--mcv-radius/--mcv-weight.
     `[data-mcv-id]{color:var(--mcv-fg,inherit);font-weight:var(--mcv-weight,inherit)}`,
     `[data-mcv-id][style*="--mcv-bg"]{background:var(--mcv-bg);border-radius:var(--mcv-radius,0)}`,
     `[data-mcv-id][style*="--mcv-radius"]{border-radius:var(--mcv-radius)}`,
@@ -207,10 +200,7 @@ function baseCss(scene: Scene): string[] {
   ];
 }
 
-/** P4 responsive: the compiler walks the OVERRIDE map per node, mobile-first.
- *  sm media covers everything below md; md media covers the md band only.
- *  Grid frames get their explicit rules (columns/areas + per-node overrides);
- *  every other override (hide, maxWidth, stack layout) is per-node too. */
+
 function responsiveCss(scene: Scene): string[] {
   const md = scene.breakpoints.md;
   const sm = scene.breakpoints.sm;
@@ -248,7 +238,6 @@ function responsiveCss(scene: Scene): string[] {
     return rules;
   };
 
-  // 1) base fallback for grid frames (pre-P4 behaviour) under md.
   const rulesSm: string[] = [];
   for (const f of gridFrames(scene.root)) {
     const name = slug(f.id);
@@ -258,7 +247,6 @@ function responsiveCss(scene: Scene): string[] {
     rulesSm.push(`  .mcv-frame-${name}{gap:${px(f.layout?.gap, 16)}}`);
   }
 
-  // 2) explicit sm overrides (highest precedence inside the sm media).
   for (const { node, parent } of nodeIndex(scene.root)) {
     const spec = node.responsive?.sm;
     if (!spec) continue;
@@ -269,7 +257,6 @@ function responsiveCss(scene: Scene): string[] {
   }
   out.push(`@media (max-width:${md - 1}px){`, ...rulesSm, `}`);
 
-  // 3) md band: explicit md overrides only (base + sm already cascade).
   const rulesMd: string[] = [];
   for (const { node, parent } of nodeIndex(scene.root)) {
     const spec = node.responsive?.md;
@@ -283,14 +270,13 @@ function responsiveCss(scene: Scene): string[] {
   return out;
 }
 
-/** Overlay: ids visible, selection + live drag + grid guide + snap ghost affordances. */
+
 function overlayCss(): string[] {
   return [
     `[data-mcv-id]{outline:1px dashed color-mix(in oklch,var(--mcv-accent) 42%,transparent);outline-offset:2px;cursor:grab;position:relative;z-index:1;transition:outline-color .12s ease,box-shadow .12s ease}`,
     `[data-mcv-id]:hover{outline:1px solid color-mix(in oklch,var(--mcv-accent) 80%,transparent)}`,
     `[data-mcv-id].mcv-selected{outline:2px solid var(--mcv-accent);outline-offset:2px;z-index:3}`,
     `[data-mcv-id].mcv-dragging{opacity:.88;cursor:grabbing !important;z-index:1000 !important;box-shadow:0 14px 34px -6px rgba(20,16,12,.22),0 0 0 2px var(--mcv-accent);outline:2px solid var(--mcv-accent);will-change:transform;transition:none !important;pointer-events:none}`,
-    // Node id + address badge
     `[data-mcv-id]::before{content:attr(data-mcv-id);position:absolute;left:-2px;top:-17px;z-index:10;
       font:600 9.5px/1.35 ui-monospace,monospace;letter-spacing:.03em;white-space:nowrap;
       background:var(--mcv-ink);color:var(--mcv-canvas);padding:1px 5px;border-radius:2px 2px 0 0;pointer-events:none;
@@ -298,7 +284,6 @@ function overlayCss(): string[] {
     `[data-mcv-id][data-mcv-at]::before{content:attr(data-mcv-id) " · " attr(data-mcv-at)}`,
     `[data-mcv-id]:hover::before,[data-mcv-id].mcv-selected::before,[data-mcv-id].mcv-dragging::before{opacity:1}`,
     `[data-mcv-id].mcv-selected::before,[data-mcv-id].mcv-dragging::before{background:var(--mcv-accent);color:var(--mcv-canvas)}`,
-    // Resize handles on grid-placed nodes
     `.mcv-rh{position:absolute;z-index:12;opacity:0;pointer-events:none;transition:opacity .12s ease}`,
     `[data-mcv-id].mcv-selected > .mcv-rh,[data-mcv-id]:hover > .mcv-rh{opacity:1;pointer-events:auto}`,
     `.mcv-rh-e{top:6px;bottom:6px;right:-5px;width:8px;cursor:ew-resize}`,
@@ -306,12 +291,10 @@ function overlayCss(): string[] {
     `.mcv-rh-s{left:6px;right:6px;bottom:-5px;height:8px;cursor:ns-resize}`,
     `.mcv-rh-s::after{content:"";position:absolute;left:50%;top:2px;transform:translateX(-50%);width:18px;height:4px;border-radius:2px;background:var(--mcv-accent)}`,
     `.mcv-rh-se{right:-6px;bottom:-6px;width:12px;height:12px;cursor:nwse-resize;border-radius:2px;background:var(--mcv-accent);border:2px solid var(--mcv-canvas)}`,
-    // 12-column lattice guide inside grid frames
     `.mcv-grid-guide{position:absolute;inset:0;display:grid;grid-template-columns:inherit;grid-template-rows:inherit;gap:inherit;padding:inherit;pointer-events:none;z-index:0;opacity:0;transition:opacity .15s ease}`,
     `body[data-mcv-grid="1"] .mcv-grid-guide,.mcv-frame.mcv-frame-dragging > .mcv-grid-guide{opacity:1}`,
     `.mcv-guide-cell{border:1px dashed color-mix(in oklch,var(--mcv-accent) 26%,transparent);background:color-mix(in oklch,var(--mcv-accent) 3%,transparent);border-radius:2px;display:flex;align-items:flex-start;justify-content:flex-end;padding:2px 4px}`,
     `.mcv-guide-cell span{font:500 8.5px/1 ui-monospace,monospace;color:color-mix(in oklch,var(--mcv-accent) 62%,transparent);letter-spacing:.03em}`,
-    // Live drop target ghost (grid cell snap & stack reorder line)
     `.mcv-drop-ghost{position:fixed;z-index:999;pointer-events:none;border:2px solid var(--mcv-accent);background:color-mix(in oklch,var(--mcv-accent) 14%,transparent);border-radius:3px;transition:left .05s cubic-bezier(.2,0,0,1),top .05s cubic-bezier(.2,0,0,1),width .05s cubic-bezier(.2,0,0,1),height .05s cubic-bezier(.2,0,0,1)}`,
     `.mcv-drop-ghost[data-mode="stack"]{height:3px !important;border:0;background:var(--mcv-accent);box-shadow:0 0 0 2px color-mix(in oklch,var(--mcv-accent) 28%,transparent)}`,
     `.mcv-drop-label{position:absolute;right:-2px;top:-20px;background:var(--mcv-accent);color:var(--mcv-canvas);font:600 10px/1.3 ui-monospace,monospace;padding:2px 6px;border-radius:2px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.18)}`,
@@ -560,7 +543,6 @@ export function compileScene(scene: Scene): CompileResult {
   const nodeRules: string[] = [];
   const collisions: CompileResult['collisions'] = [];
 
-  // Every grid frame compiles — including frames nested inside other frames.
   for (const frame of gridFrames(scene.root)) {
     const built = buildGridFrame(frame);
     frameBlocks.push(built.css.join('\n'));

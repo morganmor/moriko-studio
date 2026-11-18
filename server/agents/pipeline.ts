@@ -1,16 +1,4 @@
-/**
- * TOOL EXECUTION PIPELINE.
- *
- * callAgentTool routes by name, but the cross-cutting concerns around an
- * execution (schema validity, timing, retries, accounting) should not live
- * inside that switch — they were scattered before and had to be re-read in
- * five places to change one rule.
- *
- * This is a small ordered pipeline: each hook runs before the handler, can
- * deny the call outright, and gets to see the result afterwards. It is the
- * single place a new cross-cutting rule is added. Nothing here knows about
- * specific tools; nothing in a tool knows it is being piped.
- */
+
 import type { HarnessToolResult, AgentToolContext } from './tools/shared.js';
 import { requireWorkspace } from './tools/shared.js';
 import { auditToolCall } from './audit.js';
@@ -26,14 +14,9 @@ import {
   diagnosticSignature, ledgerFiles, recordFileDiagnostics, type UnresolvedDiagnostic,
 } from './diagnostics-ledger.js';
 
-/**
- * Error shape used by a hook that wants to deny a call. Hooks may also just
- * return a result directly (e.g. schema validation failures read better as
- * data than as an exception in a tool loop).
- */
+
 export class ToolPipelineError extends Error {
-  /** Stable failure code surfaced on the denied result (audit + loop
-   * containment). Hooks may override; schemaValidator uses 'schema_error'. */
+  
   errorCode: string;
   constructor(message: string, errorCode = 'schema_error') {
     super(message);
@@ -41,65 +24,34 @@ export class ToolPipelineError extends Error {
   }
 }
 
-/** The call as every hook sees it. */
+
 export interface PipelineCall {
   wireName: string;
-  /** The bare tool name (wireName without the `agent__` prefix). */
+  
   name: string;
   args: Record<string, unknown>;
   ctx: AgentToolContext;
-  /** Timing of the handler run, filled in postExecute for the audit hook. */
+  
   durationMs?: number;
-  /**
-   * F3 spatial gate — the BEFORE content of the UI files this call will
-   * touch, captured in preExecute so the transform can diff against it after
-   * the handler wrote. Undefined for non-gated tools.
-   */
+  
   gateBefore?: Map<string, string | null>;
-  /**
-   * DIAGNOSTICS BASELINE (6B) — each touched file's syntactic-diagnostic
-   * signatures captured BEFORE the handler ran. The after-diff only counts
-   * errors this call INTRODUCED, so a file that was already broken never
-   * blocks a todo from completing.
-   */
+  
   diagBefore?: Map<string, Set<string>>;
 }
 
-/** A hook that runs BEFORE the handler and may veto the call. */
+
 export interface ToolHook {
   name: string;
-  /** Returns an error result to deny, or null/undefined to allow. */
+  
   preExecute(call: PipelineCall): Promise<ToolPipelineError | null>;
-  /** Runs after the handler; may REPLACE the result. The F3 spatial gate
-   *  uses this to flip a UI edit to isError when it created new collisions. */
+  
   transform?(call: PipelineCall, result: HarnessToolResult): HarnessToolResult;
-  /** Runs after the handler with its timing and outcome. */
+  
   postExecute(call: PipelineCall, result: HarnessToolResult): void;
 }
 
-/**
- * SCHEMA VALIDATOR + COERCION — the gap the pipeline closes first.
- *
- * Two passes run per call, in order:
- *   1. COERCION (coerceStructuredArgs) — a provider sometimes serializes a
- *      structured arg (array/object) as a JSON-encoded string (the edits[]
- *      double-encoding failure). A string that parses into the declared type
- *      is recovered ONCE, here, so the tool parser never sees the broken
- *      form. This is the single normalization point — coercion is NOT
- *      duplicated in every parser.
- *   2. VALIDATION (checkSchema) — `required`, top-level type, and a
- *      depth-bounded nested check (items.type, maxItems, nested required).
- *      Keywords beyond those are still ignored; this is a fast guard, not a
- *      full validator, and the tools remain defensive on their own
- *      (tier-2 backstop).
- *
- * The catalogue is imported LAZILY (dynamic import): a top-level import would
- * be circular (pipeline ← tools/index ← dispatcher ← pipeline), and in Node
- * ESM the binding is not yet initialized during module load — the validator
- * silently saw no tool defs and validated nothing.
- */
-/** Minimal JSON example for a schema node — used in prescriptive error
- * messages so the model can fix a wrong-typed arg in one retry. */
+
+
 function schemaExample(node: Record<string, unknown>, depth = 0): string {
   if (depth > 2) return '…';
   const type = node.type as string | undefined;
@@ -126,9 +78,7 @@ function schemaExample(node: Record<string, unknown>, depth = 0): string {
   return '…';
 }
 
-/** Recursively check a value against a schema node (depth-bounded). Covers
- * type, maxItems, items.type, and nested required. Returns a prescriptive
- * error string or null. Keywords beyond those are still ignored. */
+
 function checkShape(value: unknown, node: Record<string, unknown>, path: string, depth = 0): string | null {
   if (depth > 3) return null;
   const type = node.type as string | undefined;
@@ -177,8 +127,7 @@ function checkShape(value: unknown, node: Record<string, unknown>, path: string,
   return null;
 }
 
-/** Resolve the catalogue def's inputSchema for a call (lazy import avoids the
- * circular binding problem documented above). */
+
 async function schemaFor(call: PipelineCall): Promise<Record<string, unknown> | null> {
   const { listAgentToolDefs } = await import('./tools/index.js');
   const bare = call.wireName.replace(/^agent__/, '');
@@ -189,18 +138,7 @@ async function schemaFor(call: PipelineCall): Promise<Record<string, unknown> | 
   return schema && typeof schema === 'object' ? (schema as Record<string, unknown>) : null;
 }
 
-/**
- * CASE TRANSLATOR — the wire/JSON-Schema layer speaks snake_case (Anthropic/
- * OpenAI convention), the engine internals speak camelCase (TS idiom). This
- * one pass rewrites every argument key to its camelCase canonical form FIRST,
- * so tool implementations and the validator below only ever read camelCase.
- *
- * Tolerant by design: canonical is derived from the schema's own property
- * names (camelized), so a model sending EITHER casing is accepted — only keys
- * that resolve to a declared property are rewritten. Nested object/array
- * shapes recurse only through schema-declared `properties`, never into opaque
- * user-data blobs (which keeps e.g. a backend request body untouched).
- */
+
 function normalizeObjectKeys(obj: Record<string, unknown>, props: Record<string, unknown>): void {
   for (const key of Object.keys(obj)) {
     const canonical = snakeToCamel(key);
@@ -233,16 +171,14 @@ function normalizeObjectKeys(obj: Record<string, unknown>, props: Record<string,
   }
 }
 
-/** Rewrite call.args keys from snake_case to camelCase (first pipeline step). */
+
 function normalizeArgCase(call: PipelineCall, schema: Record<string, unknown>): void {
   const props = schema.properties as Record<string, unknown> | undefined;
   if (!props || typeof props !== 'object') return;
   normalizeObjectKeys(call.args, props);
 }
 
-/** COERCION — recover structured args a provider serialized as a JSON string.
- * Only touches properties declared object/array in the schema; a plain string
- * that does not parse is left for the validator to reject prescriptively. */
+
 function coerceStructuredArgs(call: PipelineCall, schema: Record<string, unknown>): void {
   const properties = schema.properties as Record<string, unknown> | undefined;
   if (!properties || typeof properties !== 'object') return;
@@ -265,8 +201,64 @@ function coerceStructuredArgs(call: PipelineCall, schema: Record<string, unknown
   }
 }
 
-/** Validate call.args against a resolved schema: required + depth-bounded
- * nested shape checks. Returns a prescriptive error string or null. */
+
+const REGEX_CAPABLE_KEYS = new Set(['pattern', 'patterns', 'regex', 'regexes', 'query']);
+const REGEXP_FLAGS_RE = /^[dgimsuvy]*$/;
+
+
+function extractCrossRealmRegex(value: unknown): string | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const candidate = value as { source?: unknown; flags?: unknown; constructor?: { name?: unknown } };
+  if (typeof candidate.source !== 'string' || typeof candidate.flags !== 'string') return null;
+  if (!REGEXP_FLAGS_RE.test(candidate.flags)) return null;
+  const tag = Object.prototype.toString.call(value);
+  if (tag !== '[object RegExp]' && candidate.constructor?.name !== 'RegExp') return null;
+  return candidate.flags ? `/${candidate.source}/${candidate.flags}` : candidate.source;
+}
+
+
+function healRuntimeAndScalarArgs(call: PipelineCall, schema: Record<string, unknown>): void {
+  const properties = schema.properties as Record<string, unknown> | undefined;
+  if (!properties || typeof properties !== 'object') return;
+  for (const [key, declaredNode] of Object.entries(properties)) {
+    const declared = declaredNode as { type?: string; items?: { type?: string } };
+    const value = call.args[key];
+    if (value === undefined || value === null) continue;
+
+    if (declared.type === 'string' && REGEX_CAPABLE_KEYS.has(key)) {
+      const healed = extractCrossRealmRegex(value);
+      if (healed !== null) {
+        call.args[key] = healed;
+        continue;
+      }
+    }
+
+    if (
+      declared.type === 'array' && Array.isArray(value) &&
+      declared.items?.type === 'string' && REGEX_CAPABLE_KEYS.has(key)
+    ) {
+      call.args[key] = value.map((item) => extractCrossRealmRegex(item) ?? item);
+      continue;
+    }
+
+    if (declared.type === 'number' && typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed !== '' && Number.isFinite(Number(trimmed))) call.args[key] = Number(trimmed);
+    } else if (declared.type === 'integer' && typeof value === 'string') {
+      const trimmed = value.trim();
+      if (/^-?\d+$/.test(trimmed)) {
+        const parsed = Number(trimmed);
+        if (Number.isSafeInteger(parsed)) call.args[key] = parsed;
+      }
+    } else if (declared.type === 'boolean' && typeof value === 'string') {
+      const lower = value.trim().toLowerCase();
+      if (lower === 'true') call.args[key] = true;
+      else if (lower === 'false') call.args[key] = false;
+    }
+  }
+}
+
+
 function checkSchema(call: PipelineCall, schema: Record<string, unknown>): string | null {
   const required = Array.isArray(schema.required) ? schema.required.filter((r) => typeof r === 'string') : [];
   for (const prop of required) {
@@ -285,15 +277,16 @@ function checkSchema(call: PipelineCall, schema: Record<string, unknown>): strin
   return null;
 }
 
-/** The single shared hook chain. Order matters: schema before anything else. */
+
 
 
 const UI_FILE_RE = /\.(css|tsx|jsx)$/i;
 
-/** The workspace-relative files one gated call will touch (null = not gated). */
+
 function collectGateFiles(call: PipelineCall): string[] | null {
   if (
-    call.name === 'edit_file' || call.name === 'write' || call.name === 'multi_edit' ||
+    call.name === 'edit_file' || call.name === 'write' || call.name === 'overwrite' ||
+    call.name === 'multi_edit' ||
     call.name === 'edit_lines' || call.name === 'edit_between' || call.name === 'insert_at_line'
   ) {
     const p = typeof call.args.path === 'string' ? call.args.path.trim().replace(/\\/g, '/') : '';
@@ -377,18 +370,7 @@ const spatialGateHook: ToolHook = {
 
 const TS_FILE_RE = /\.(ts|tsx|mts|cts)$/;
 
-/**
- * LIGHT single-file parse — `ts.createSourceFile` + parseDiagnostics only.
- *
- * Deliberately NOT `getLanguageService().getSyntacticDiagnostics()`: that call
- * builds a full Program (module resolution over the whole repo, including
- * node_modules type trees) per project, and the MAX_SERVICES=3 LRU thrashes
- * whenever a session touches files across more than three tsconfig projects —
- * rebuilding a hundreds-of-MB Program on every edit until the heap dies.
- *
- * Parsing ONE file in memory costs ~1ms, allocates only that file's AST, and
- * reaches the same syntactic errors the invariant needs.
- */
+
 function readSyntactic(abs: string): UnresolvedDiagnostic[] {
   const out: UnresolvedDiagnostic[] = [];
   let content: string;
@@ -436,6 +418,7 @@ const hooks: ToolHook[] = [
         const camelSchema = camelizeSchemaNode(schema);
         normalizeArgCase(call, camelSchema);
         coerceStructuredArgs(call, camelSchema);
+        healRuntimeAndScalarArgs(call, camelSchema);
         const problem = checkSchema(call, camelSchema);
         if (problem) {
           return new ToolPipelineError(
@@ -491,7 +474,6 @@ const hooks: ToolHook[] = [
   {
     name: 'diagnosticsHook',
     async preExecute(call) {
-      // BASELINE: what the file looked like BEFORE this call touched it.
       const gateFiles = collectGateFiles(call);
       if (!gateFiles) return null;
       const tsFiles = gateFiles.filter((f) => TS_FILE_RE.test(f));
@@ -520,8 +502,6 @@ const hooks: ToolHook[] = [
         if (!ws) return result;
         const notes: string[] = [];
         const deadline = Date.now() + 1_500;
-        // Re-check every file already in the ledger too: fixing file A may
-        // clear a stale entry, and a ledger nobody prunes blocks forever.
         const candidates = [...new Set([...tsFiles, ...ledgerFiles(call.ctx.sessionId)])];
         for (const rel of candidates) {
           if (Date.now() > deadline) break;
@@ -549,12 +529,7 @@ const hooks: ToolHook[] = [
   },
 ];
 
-/**
- * Runs one tool call through the hook chain. Every denial and every thrown
- * error is converted into a `HarnessToolResult` so the tool loop only ever
- * sees data — the loop has no try/catch for pipeline errors and should not
- * need one.
- */
+
 export async function runPipeline(
   execute: (call: PipelineCall) => Promise<HarnessToolResult>,
   call: PipelineCall,

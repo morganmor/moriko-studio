@@ -3,14 +3,7 @@ import { Check, ChevronDown } from './icons';
 import { cx } from './ui';
 import { Popover } from './Popover';
 
-/**
- * A compact pill dropdown that matches the app's dark UI.
- *
- * Native `<select>` popups are drawn by the operating system and cannot be
- * themed, so small option lists (like Image Studio's size overrides) use this
- * instead. The menu opens upward — these controls live in the docked composer
- * — and closes on pick, outside click, or Escape.
- */
+
 export function PillSelect({
   label,
   value,
@@ -22,19 +15,16 @@ export function PillSelect({
   value: string;
   options: { value: string; label: string }[];
   onChange: (value: string) => void;
-  /** Tailwind width/positioning classes for the opened menu (w-NN → px). */
+  
   menuClassName?: string;
-  /**
-   * Deprecated: the Popover primitive now picks the side automatically (flip
-   * above/below like the design), so an explicit direction is unnecessary.
-   */
+  
   direction?: 'up' | 'down';
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const current = options.find((option) => option.value === value);
-  /** Tailwind w-NN = NN × 4px; the old default was w-44 (176px). */
+  
   const menuWidth = Number(/^w-(\d+)$/.exec(menuClassName)?.[1] ?? 44) * 4;
 
   return (

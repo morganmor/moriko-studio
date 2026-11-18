@@ -5,26 +5,12 @@ import { atomicWriteJson } from '../atomicWrite.js';
 import { workflowsFile } from '../paths.js';
 import { AGENT_WORKFLOWS, type AgentWorkflow } from './workflows.js';
 
-/**
- * USER WORKFLOW STORE — user-authored and user-customized agent workflows.
- *
- * The BUILT-IN catalog lives in workflows.ts (read-only doctrine). This store
- * holds everything the USER shapes:
- *   • overrides   — entries whose id matches a built-in: they replace the
- *                   built-in's label/hint/content (this is how editing
- *                   Frontend-First works) — deleting the override restores it.
- *   • customs     — brand-new workflows created from the editor ("Add or Make
- *                   Workflow") with their own generated id.
- *
- * One JSON file at ~/.moriko-studio/workflows.json, written atomically.
- * The harness's workflow injection resolves through the MERGED catalog, so an
- * edited doctrine takes effect on the very next agent turn.
- */
+
 
 export interface StoredWorkflow extends AgentWorkflow {
-  /** True when this id belongs to the read-only built-in catalog. */
+  
   builtin: boolean;
-  /** True when a user override replaces a built-in's content. */
+  
   modified: boolean;
   updatedAt: number;
 }
@@ -65,7 +51,7 @@ function clean(value: unknown, max: number): string {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
 }
 
-/** The merged catalog: built-ins (possibly overridden) + user customs. */
+
 export function listStoredWorkflows(): StoredWorkflow[] {
   const userRecords = loadUserRecords();
   const byId = new Map(userRecords.map((record) => [record.id, record]));
@@ -87,7 +73,7 @@ export function listStoredWorkflows(): StoredWorkflow[] {
   return merged;
 }
 
-/** Create or update. A known built-in id updates its override; new ids are customs. */
+
 export function upsertWorkflow(input: { id?: unknown; label?: unknown; hint?: unknown; content?: unknown }): StoredWorkflow {
   const label = clean(input.label, MAX_LABEL);
   const hint = clean(input.hint, MAX_HINT);
@@ -113,10 +99,7 @@ export function upsertWorkflow(input: { id?: unknown; label?: unknown; hint?: un
   return { id, label, hint, content, builtin, modified: builtin, updatedAt: now };
 }
 
-/**
- * Delete a user workflow; deleting a customized built-in REMOVES the override
- * (the built-in reverts to its original doctrine).
- */
+
 export function deleteWorkflow(id: string): void {
   const records = loadUserRecords();
   const next = records.filter((record) => record.id !== id);
@@ -124,7 +107,7 @@ export function deleteWorkflow(id: string): void {
   persistUserRecords(next);
 }
 
-/** Resolve a settings value against the MERGED catalog; unknown/empty → default. */
+
 export async function resolveStoredWorkflow(id: string | undefined | null): Promise<AgentWorkflow> {
   const merged = listStoredWorkflows();
   return merged.find((workflow) => workflow.id === id) ?? merged[0];

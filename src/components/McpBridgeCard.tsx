@@ -1,13 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Check, Copy, Link2 } from './icons';
 
-/**
- * MCP Bridge card inside Settings → MCP. The bridge exposes Council + RSAT
- * agent tools and read-only workspace tools to external MCP clients
- * (claude.ai connectors, Gemini web custom apps). Here the user binds WHICH
- * Main Session acts as the external orchestrator and WHICH workspace the
- * read-only tools jail to — each Main Session has its own unique id.
- */
+
 
 interface BridgeSession {
   id: string;
@@ -80,7 +74,6 @@ export function McpBridgeCard() {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1600);
     } catch {
-      // clipboard unavailable (http origin) — selection fallback
     }
   };
 

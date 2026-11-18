@@ -1,10 +1,4 @@
-/**
- * RSA/T Interlinked — ComfyUI-style glowing node & wire architecture canvas
- * + @RSLK v1 Agent DSL preview.
- * Phase I (Frontend-First): Interactive pan/zoom canvas, draggable file/contract
- * nodes, glowing cubic-bezier wires (runtime, type, active-touch, cross-agent,
- * violation), spotlight hover/selection, inspector panel, and live @RSLK v1 view.
- */
+
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import { rpc, tr } from './shared.tsx';
 import { Ic } from './icon.tsx';
@@ -95,16 +89,14 @@ const STATE_VAR: Record<string, string> = {
   blocked: 'var(--c-rsat-blocked)',
 };
 
-/** Empty graph placeholder — the panel shows REAL scanned workspace data via
- *  the `interlinkGraph` RPC. No hardcoded fixture: an honest empty state is
- *  rendered when no workspace is bound or the scan found nothing. */
+
 const EMPTY_GRAPH: { clusters: ModuleCluster[]; nodes: InterlinkNode[]; wires: InterlinkWire[] } = {
   clusters: [],
   nodes: [],
   wires: [],
 };
 
-/** Hitung titik koordinat X,Y dari pin socket untuk menggambar kurva Bezier. */
+
 function socketCoords(
   node: InterlinkNode,
   socketId: string,
@@ -117,7 +109,7 @@ function socketCoords(
   return { x, y };
 }
 
-/** Generator Format Khusus Agent: @RSLK v1 (Token-Dense Topology & Blast Radius DSL). */
+
 export function generateRslkDsl(
   clusters: ModuleCluster[],
   nodes: InterlinkNode[],
@@ -425,8 +417,7 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
     }
   };
 
-  /** Auto-arrange: clear every saved position server-side, then refetch — the
-   *  deterministic default grid (per-module columns) becomes the live layout. */
+  
   const autoArrange = useCallback(async () => {
     if (tidying) return;
     setTidying(true);
@@ -435,14 +426,13 @@ export default function Interlinked({ onOpen }: { onOpen: (id: string) => void }
       setPositions({});
       await loadLiveGraph(true);
     } catch {
-      // keep local reset even if the RPC fails — view still tidies up
       setPositions({});
     } finally {
       setTidying(false);
     }
   }, [loadLiveGraph, tidying]);
 
-  /** Reset = same tidy grid, but also recenters the camera on the canvas. */
+  
   const resetLayout = useCallback(() => {
     setPositions({});
     void rpc('clearNodePositions', {}).catch(() => {});

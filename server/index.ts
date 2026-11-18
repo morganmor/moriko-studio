@@ -31,7 +31,7 @@ import { loadAllAddons, startAddonWatcher } from './addons/loader.js';
 import { publishBusEvent } from './addons/bus.js';
 import { aggregateUsage, dailyUsage, USAGE_WINDOWS } from './usageLedger.js';
 import { listReminders, renderReminder, takeDueReminders } from './reminders/store.js';
-import { clearLiveCompactionConfig, setLiveCompactionConfig } from './compactionLiveConfig.js';
+import { getLiveCompactionConfig, setLiveCompactionConfig } from './compactionLiveConfig.js';
 import { asyncRoute, HttpError } from './http.js';
 import { guardedJsonParser } from './bodyParsers.js';
 import { subscribeTree } from './agents/treeIndex.js';
@@ -75,9 +75,11 @@ import {
   getStoredConversation,
   listStoredConversationSummaries,
   listTrash,
+  patchConversationConfig,
   restoreFromTrash,
   summarizeConversation,
   syncStoredConversations,
+  type StoredConversation,
 } from './conversationStore.js';
 import {
   abortStream,
@@ -159,10 +161,7 @@ app.use(
 );
 app.use(
   compression({
-    /** SSE MUST NOT be compressed: zlib holds small tool_call/tool_result
-     *  frames in its buffer and the client sees a batch dump after tens of
-     *  seconds of dead air instead of a live per-event feed. Every
-     *  event-stream route (chat, resume, addons bus, tree) bypasses here. */
+    
     filter: (req, res) => {
       const type = res.getHeader('Content-Type');
       if (typeof type === 'string' && type.includes('text/event-stream')) return false;
@@ -194,14 +193,7 @@ function resolveBuiltIn(providerId: string): ProviderPublic {
   };
 }
 
-/**
- * Adapter capabilities for one provider, or undefined when the provider has
- * no resolvable image adapter (chat-only providers stay without the field, so
- * the UI keeps its permissive legacy behavior). `models` carries the
- * per-model image classification so the picker can hide chat models and flag
- * edit-capable ones. The implementation is shared with the agent image tool —
- * see ./images/runtime.ts.
- */
+
 
 
 async function listProviders(): Promise<ProviderPublic[]> {
@@ -260,16 +252,7 @@ async function listProviders(): Promise<ProviderPublic[]> {
   ];
 }
 
-/**
- * Resolves ONE model through the 3-layer cascade for this server's own paths.
- *
- * This is the async bridge between the pure resolver and the provider store:
- * it looks up the model's Layer-1 row and Layer-2 hints wherever the provider
- * lives (custom record vs built-in map) and hands them to the cascade. Called
- * per request rather than cached — the store is already an in-memory cache, and
- * a process-wide capability snapshot would go stale the moment the user saves
- * the table, which is exactly the class of bug this change removes.
- */
+
 async function resolveCapabilityFor(
   providerId: string,
   modelId: string,
@@ -297,11 +280,7 @@ async function resolveCapabilityFor(
   );
 }
 
-/**
- * Credential resolution for this server's own calls — the shared implementation
- * lives in credentials.ts (agent tools use it too; index importing tools would
- * be circular). HttpError keeps the chat stream's status codes identical.
- */
+
 async function resolveCredentials(
   providerId: string,
   browserKey?: string,
@@ -314,7 +293,7 @@ async function resolveCredentials(
   }
 }
 
-/** Per-model capability metadata (models.dev snapshot) for the client. */
+
 app.get('/api/model-metadata', (_req, res) => {
   res.json(allModelMetadata());
 });
@@ -352,7 +331,6 @@ app.post(
       baseUrl: input.baseUrl.trim().replace(/\/+$/, ''),
       apiKey: input.apiKey === undefined ? undefined : input.apiKey.trim(),
       models: (input.models ?? []).map((model) => model.trim()).filter(Boolean),
-      // An OMITTED table keeps the stored one — see ProviderStore.upsert.
       modelConfigs: input.modelConfigs,
       imageAdapter: input.imageAdapter?.trim() || undefined,
       imageConfig: input.imageConfig,
@@ -394,11 +372,7 @@ app.delete(
   }),
 );
 
-/**
- * Sets (or clears, with an empty string) the UI-supplied API key for a
- * BUILT-IN provider, and/or its user-added model ids. Built-in definitions
- * themselves are immutable — only the credential + model slots are writable.
- */
+
 app.put(
   '/api/providers/builtins/:id/key',
   asyncRoute(async (req, res) => {
@@ -409,9 +383,9 @@ app.put(
       apiKey?: string;
       addModels?: string[];
       removeModels?: string[];
-      /** Full replacement list — a live fetch from the provider's own API. */
+      
       setModels?: string[];
-      /** LAYER 2 hints captured by that fetch (merged, never destructive). */
+      
       modelHints?: Record<string, ProviderModelHint>;
     };
 
@@ -458,11 +432,7 @@ app.put(
   }),
 );
 
-/**
- * ComfyUI model discovery — scans /models/{folder} for checkpoints,
- * diffusion_models, and unet (legacy). Returns tagged IDs:
- * "ckpt:name" (CheckpointLoaderSimple) or "diff:name" / "unet:name" (UNETLoader).
- */
+
 async function probeComfyuiModels(baseUrl: string): Promise<string[]> {
   const base = baseUrl.replace(/\/+$/, '');
   const models: string[] = [];
@@ -480,7 +450,7 @@ async function probeComfyuiModels(baseUrl: string): Promise<string[]> {
   return models;
 }
 
-/** Detect ComfyUI by probing /system_stats. */
+
 async function isComfyui(baseUrl: string): Promise<boolean> {
   const base = baseUrl.replace(/\/+$/, '');
   try {
@@ -491,11 +461,7 @@ async function isComfyui(baseUrl: string): Promise<boolean> {
   } catch { return false; }
 }
 
-/**
- * A model-list answer: the bare ids older clients read, PLUS the Layer-2
- * metadata this endpoint actually published. `models` stays first-class so
- * every existing caller keeps working unchanged.
- */
+
 function modelListPayload(probe: Awaited<ReturnType<typeof probeProviderModels>>) {
   const textModels = probe.entries.map((entry) => entry.id);
   return {
@@ -506,14 +472,7 @@ function modelListPayload(probe: Awaited<ReturnType<typeof probeProviderModels>>
   };
 }
 
-/**
- * Validates one submitted Layer-1 table against the stored one.
- *
- * The PIN SET is what makes the table authoritative: a field the client marks
- * as pinned is written verbatim, and a field it does not mark keeps whatever
- * was pinned before. That way a client which only knows a few columns (or a
- * future one which knows more) can never silently UNPIN a user's decision.
- */
+
 function sanitizeConfigSubmission(
   submitted: Record<string, unknown>,
   existing: Record<string, ProviderModelConfig>,
@@ -528,8 +487,6 @@ function sanitizeConfigSubmission(
     const incomingPinned = Array.isArray(row.pinned)
       ? row.pinned.filter((value): value is string => typeof value === 'string')
       : [];
-    // UNION with the stored pins: dropping a pin must be an explicit act (the
-    // client sends the full pinned array it wants), never an omission.
     const pinned = [...new Set([...(previous?.pinned ?? []), ...incomingPinned])]
       .filter((field) => PINNABLE_FIELDS.has(field)) as ProviderModelConfig['pinned'];
 
@@ -543,9 +500,6 @@ function sanitizeConfigSubmission(
         ? Math.round(row.context)
         : null;
 
-    // Re-resolve so a stored row always agrees with its own provenance: fields
-    // the user did not pin fall back to Layer 2/3 rather than freezing a stale
-    // snapshot of an earlier fetch.
     const resolved = resolveModelCapability(
       id,
       {
@@ -584,15 +538,13 @@ function sanitizeConfigSubmission(
   return next;
 }
 
-/** Proxies a model list so the UI can populate pickers from the provider itself. */
+
 app.get(
   '/api/providers/:id/models',
   asyncRoute(async (req, res) => {
     const credentials = await resolveCredentials(req.params.id);
     const base = credentials.baseUrl.replace(/\/+$/, '');
 
-    // ComfyUI speaks a workflow API, not a chat API — its model ids are
-    // checkpoint filenames and carry no capability metadata at all.
     if (await isComfyui(base)) {
       res.json({ models: await probeComfyuiModels(base), entries: [], hints: {}, family: 'opaque' });
       return;
@@ -604,10 +556,6 @@ app.get(
       kind: credentials.kind,
     });
 
-    // LAYER 2 PERSISTENCE: a fetch is the moment the provider states what it
-    // supports, so the hints are stored instead of discarded. Merged, never
-    // replacing — an endpoint that stops publishing a field must not erase the
-    // evidence an earlier fetch already captured.
     const hints = hintsFromListing(probe);
     if (Object.keys(hints).length > 0) {
       const builtIn = findBuiltIn(req.params.id);
@@ -619,11 +567,7 @@ app.get(
   }),
 );
 
-/**
- * Stateless model-list probe: works on a DRAFT (unsaved) provider. The body
- * carries baseUrl/apiKey/kind directly, nothing is persisted, so the user can
- * fetch models the moment endpoint + key are filled — save-first was friction.
- */
+
 app.post(
   '/api/providers/probe-models',
   asyncRoute(async (req, res) => {
@@ -652,15 +596,7 @@ app.post(
   }),
 );
 
-/**
- * Saves the LAYER-1 capability table for one provider (custom or built-in).
- *
- * Separate from the provider upsert because saving the grid must not require
- * echoing the whole definition back: a stale client copy would otherwise
- * overwrite a newer label or baseUrl. The server re-resolves every row through
- * the cascade before persisting, so a row can never be stored disagreeing with
- * the fields it claims.
- */
+
 app.put(
   '/api/providers/:id/model-configs',
   asyncRoute(async (req, res) => {
@@ -696,17 +632,7 @@ app.put(
 );
 
 
-/**
- * Streaming chat endpoint.
- *
- * Responds with `text/event-stream` where every frame is a JSON `StreamEvent`.
- * The run lives in the STREAM REGISTRY, not in the socket: frames are
- * buffered and fanned out, so a browser reload can re-attach through
- * `GET /api/chat/resume/:id` and watch the same generation continue. The
- * upstream is aborted when the grace window runs out with nobody attached,
- * or immediately on an explicit Stop (`POST /api/chat/stream/:id/abort`) —
- * so a cancelled generation still stops costing tokens.
- */
+
 app.post(
   '/api/chat',
   asyncRoute(async (req, res) => {
@@ -732,8 +658,45 @@ app.post(
 
     const credentials = await resolveCredentials(body.providerId, body.apiKey);
 
-    const rawEnforcement = body.settings?.enforcement;
-    const legacyLockdown = body.settings?.lockdown?.active === true;
+    const sessionId = typeof body.conversationId === 'string' ? body.conversationId : null;
+    const isCompactionRequest = body.compaction === true;
+    const storedConversation = sessionId ? getStoredConversation(sessionId) : null;
+    const storedSettings =
+      storedConversation &&
+      typeof storedConversation.settings === 'object' &&
+      storedConversation.settings !== null
+        ? (storedConversation.settings as Partial<ChatSettingsDTO>)
+        : undefined;
+    const liveCompaction = sessionId ? getLiveCompactionConfig(sessionId) : undefined;
+    const liveCompactionOverrides: Partial<ChatSettingsDTO> = liveCompaction
+      ? {
+          autoCompact: liveCompaction.autoCompact,
+          compactThresholdTokens: liveCompaction.compactThresholdTokens,
+          ...(liveCompaction.compactThresholdRatio !== null
+            ? { compactThresholdRatio: liveCompaction.compactThresholdRatio }
+            : {}),
+          maxContextTokens: liveCompaction.maxContextTokens,
+        }
+      : {};
+    const authoritativeSettings: ChatSettingsDTO = {
+      ...(body.settings ?? ({} as ChatSettingsDTO)),
+      ...(storedSettings ?? {}),
+      ...liveCompactionOverrides,
+      ...(isCompactionRequest
+        ? {
+            ...(body.settings?.systemInstruction !== undefined
+              ? { systemInstruction: body.settings.systemInstruction }
+              : {}),
+            thinkingLevel: body.settings?.thinkingLevel ?? 'off',
+            temperature: body.settings?.temperature ?? 0.2,
+            topP: body.settings?.topP ?? 0.9,
+            structuredOutputs: body.settings?.structuredOutputs ?? false,
+          }
+        : {}),
+    };
+
+    const rawEnforcement = authoritativeSettings.enforcement;
+    const legacyLockdown = authoritativeSettings.lockdown?.active === true;
     const enforcementLevel: 0 | 1 | 2 | 3 | 4 | 5 = legacyLockdown
       ? 4
       : rawEnforcement && typeof rawEnforcement.level === 'number'
@@ -742,9 +705,8 @@ app.post(
     const inLockdown = enforcementLevel >= 4;
     const inFrozen = enforcementLevel >= 5 || body.trust?.outputFrozen === true;
     // into raw transcript imitation (the garbage checkpoint bug).
-    const isCompactionRequest = body.compaction === true;
     const settings: ChatSettingsDTO = {
-      ...body.settings,
+      ...authoritativeSettings,
       ...(enforcementLevel >= 1
         ? {
             ...(enforcementLevel >= 3
@@ -760,17 +722,21 @@ app.post(
       ...(inFrozen ? { trust: { ...(body.trust ?? { level: 5 }), outputFrozen: true } } : body.trust ? { trust: body.trust } : {}),
     };
 
+    const steerSessionId =
+      typeof body.harness?.sessionId === 'string' && body.harness.sessionId.trim()
+        ? body.harness.sessionId.trim()
+        : undefined;
     const legacyUrls = (settings as { urlContext?: unknown }).urlContext;
     const fetchEnabled =
       inLockdown === false &&
       settings.webAccess !== false &&
       (Boolean(settings.fetchWeb) || (typeof legacyUrls === 'string' && legacyUrls.trim().length > 0));
     const { browserManager } = await import('./agents/browser/manager.js');
-    if (settings.webAccess === true) await browserManager.setWebAccess(true);
+    await browserManager.setWebAccess(
+      inLockdown === false && settings.webAccess === true,
+      steerSessionId ?? sessionId ?? undefined,
+    );
     resolveWireRefs(body.messages);
-    // HARD PROVIDER CAP — gateways reject the whole request past 8 images
-    // ("At most 8 image(s) may be provided in one prompt"). Age out the OLDEST
-    // media on the wire copy; the user's thread keeps every picture.
     capWireImages(body.messages);
     const messages = appendDeviceContext(await augmentWithWebContent(body.messages ?? [], fetchEnabled));
 
@@ -781,7 +747,6 @@ app.post(
         ? body.assistantTurnId.trim()
         : `turn_${streamId.replace(/-/g, '').slice(0, 20)}`;
 
-    const steerSessionId = typeof body.harness?.sessionId === 'string' ? body.harness.sessionId : undefined;
     if (steerSessionId) registerSteerSession(steerSessionId);
 
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
@@ -789,12 +754,6 @@ app.post(
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders?.();
-
-    const sessionId = typeof body.conversationId === 'string' ? body.conversationId : null;
-    // A NEW run starts: the request body's settings snapshot is the fresh
-    // authority — drop any live-config entry a PREVIOUS run left behind, so a
-    // stale value can never override the newer snapshot inside the guard.
-    if (sessionId) clearLiveCompactionConfig(sessionId);
 
     const registrySessionId = steerSessionId ?? undefined;
     if (registrySessionId) {
@@ -841,9 +800,7 @@ app.post(
     });
     attachStream(streamId, res);
 
-    /** finishReason reported by the adapter's terminal `done` — the fallback
-     *  `done` in `finally` must carry it forward, or the client's last-write-
-     *  wins handler overwrites a real cut (max_tokens) with `undefined`. */
+    
     let lastFinishReason: string | undefined;
     const send: StreamHandler = (event: StreamEvent) => {
       if (event.type === 'done' && event.finishReason) lastFinishReason = event.finishReason;
@@ -895,11 +852,7 @@ app.post(
       }
     }
 
-    /**
-     * THE CAPABILITY CASCADE, resolved ONCE for this run. Every consumer below
-     * (system injections, adapters, tool loop) reads this same object, so the
-     * prompt, the wire and the budget cannot disagree about what the model is.
-     */
+    
     const capability = await resolveCapabilityFor(body.providerId, body.model);
 
     const harnessSessionId = typeof body.harness?.sessionId === 'string' ? body.harness.sessionId : undefined;
@@ -1019,8 +972,6 @@ app.post(
         harnessInjections = [...harnessInjections, directive];
       }
 
-      // SKILLS — a user message that IS "/skill-name args" activates the
-      // skill's full body for this turn (level-2 expansion, Claude-Code style).
       {
         const firstUser = [...messages].reverse().find((message: { role?: string }) => message?.role === 'user');
         const userText = typeof (firstUser as { content?: unknown } | undefined)?.content === 'string'
@@ -1058,17 +1009,7 @@ app.post(
       harnessInjections,
       sessionId: harnessSessionId,
       attachmentPaths: attachmentPaths.length > 0 ? attachmentPaths : undefined,
-      // THE MODEL'S WINDOW, AS THE USER DEFINED IT. No catalogue fallback:
-      // `capability.context` is the resolved Layer-1 value. The user's own
-      // "Lower context limit" cap is applied LIVE inside the guard (read from
-      // the compaction-config registry every round) — user against user, and
-      // a mid-run change reaches a running loop instead of dying here.
       contextLimit: capability.context,
-      // THE GUARD FIRES AT THE USER'S THRESHOLD. Passing the Configuration
-      // values keeps the server handoff and the client's own trigger on the
-      // same number — a constant here forced a compaction the client would
-      // re-check against a different ratio and refuse. `conversationId` keys
-      // the LIVE registry: the guard re-reads it every round.
       compactGuard: {
         conversationId: sessionId ?? undefined,
         autoCompact: settings.autoCompact !== false,
@@ -1078,6 +1019,10 @@ app.post(
             : null,
         compactThresholdRatio:
           typeof settings.compactThresholdRatio === 'number' ? settings.compactThresholdRatio : 0.95,
+        maxContextTokens:
+          typeof settings.maxContextTokens === 'number' && settings.maxContextTokens > 0
+            ? settings.maxContextTokens
+            : null,
       },
       capability,
     };
@@ -1151,21 +1096,8 @@ app.post(
   }),
 );
 
-/**
- * LIVE STREAMS — the shared truth behind the sidebar's running badge.
- *
- * genRunning is per-tab sessionStorage: a generation running in ANOTHER tab
- * or browser was invisible there (the reported "sesi berjalan tak terlihat"
- * bug). This endpoint exposes what the STREAM REGISTRY knows: every run that
- * is still streaming, tagged with its conversation. Clients poll it every
- * few seconds and merge it with their local state (union).
- */
-/**
- * LIVE COMPACTION CONFIG — the client pushes the Configuration panel's
- * compaction settings the moment they change; the running tool loop re-reads
- * them every round (server/mcp/loop.ts), so a mid-run change applies
- * immediately instead of at the next request.
- */
+
+
 app.post(
   '/api/compaction/config',
   (req, res) => {
@@ -1176,7 +1108,7 @@ app.post(
       res.status(400).json({ error: 'conversationId and config are required.' });
       return;
     }
-    setLiveCompactionConfig(conversationId, {
+    const normalized = {
       autoCompact: config.autoCompact !== false,
       compactThresholdTokens:
         typeof config.compactThresholdTokens === 'number' && config.compactThresholdTokens > 0
@@ -1190,6 +1122,17 @@ app.post(
         typeof config.maxContextTokens === 'number' && config.maxContextTokens > 0
           ? config.maxContextTokens
           : null,
+    };
+    setLiveCompactionConfig(conversationId, normalized);
+    patchConversationConfig(conversationId, {
+      settings: {
+        autoCompact: normalized.autoCompact,
+        compactThresholdTokens: normalized.compactThresholdTokens,
+        ...(normalized.compactThresholdRatio !== null
+          ? { compactThresholdRatio: normalized.compactThresholdRatio }
+          : {}),
+        maxContextTokens: normalized.maxContextTokens,
+      },
     });
     res.json({ ok: true });
   },
@@ -1202,16 +1145,7 @@ app.get(
   },
 );
 
-/**
- * RESUME — re-attach to a generation that survived a page reload.
- *
- * HEAD answers the probe: 200 = the run is live (or its finished buffer is
- * still retained) and a replay awaits; 204 = known but no longer replayable
- * (overflowed); 404 = unknown/expired. GET performs the re-attach: the full
- * frame buffer is replayed from the start, then the same socket tails the
- * run live. The client's reducer is unchanged — to it a resume is exactly
- * the stream it would have watched all along.
- */
+
 app.head(
   '/api/chat/resume/:id',
   (req, res) => {
@@ -1252,12 +1186,7 @@ app.get(
   },
 );
 
-/**
- * EXPLICIT STOP — kill a run by stream id. Disconnecting is no longer a kill
- * order (that is what grace is for), so the Stop button has to say so: the
- * upstream aborts immediately and nothing keeps burning tokens after the
- * user cancelled.
- */
+
 app.post(
   '/api/chat/stream/:id/abort',
   (req, res) => {
@@ -1265,24 +1194,7 @@ app.post(
   },
 );
 
-/**
- * STEER: push user input into a running generation's context (DSH-style).
- *
- * The message lands between tool rounds, so the model picks it up on its next
- * completion. A 202 (not 200) tells the UI the note was queued, not delivered
- * yet — delivery is only visible via the `steer` event the stream emits when it
- * actually drains the buffer.
- *
- * Body variants:
- *  - `parts: [{ type: 'text', text }, { type: 'image_url', … }, …]` — a REAL
- *    user message, text and/or image/file attachments (deepseek parity: steer
- *    carries PromptContentParts). Image URLs may be data URLs or
- *    `moriko-ref://<mime>/<hash>` — resolved to bytes at the provider boundary
- *    like every other attachment part.
- *  - `text` (legacy) — a plain text steer.
- *  - `preset: "writingRules"` — the manual SYSTEM-RULES REMINDER (one authored
- *    copy on the server; sent by the user via the Composer button).
- */
+
 app.post(
   '/api/chat/steer',
   asyncRoute(async (req, res) => {
@@ -1335,12 +1247,7 @@ app.post(
 );
 
 
-/**
- * IMAGE RUNTIME — task submission, polling, the failure journal and the
- * Gallery live in ONE shared engine (./images/runtime.ts), used by both the
- * HTTP routes below and the agent tool `agent__image` (LLM-driven
- * generation; see docs/plans/PLAN-AGENT-DRIVEN-IMAGE-GENERATION.md).
- */
+
 
 
 app.post(
@@ -1378,11 +1285,7 @@ app.post(
 );
 
 
-/**
- * Generated images are downloaded to disk so they outlive the provider's CDN
- * links and stay available offline. The browser reads them back through
- * `/api/images/local/...`, which is same-origin, so `download` works too.
- */
+
 const IMAGES_DIR = imagesDir;
 fs.mkdirSync(IMAGES_DIR, { recursive: true });
 
@@ -1391,7 +1294,7 @@ app.use('/api/images/local', express.static(IMAGES_DIR, { fallthrough: false }))
 const ADDONS_DIR = path.join(morikoHome, 'addons');
 app.use('/addon-modules', express.static(ADDONS_DIR, { fallthrough: false }));
 
-/** Lists every image saved so far, newest first. */
+
 app.get(
   '/api/images/local-list',
   asyncRoute(async (_req, res) => {
@@ -1408,7 +1311,7 @@ app.get(
   }),
 );
 
-/** Creation metadata for one saved image — the sidecar JSON beside the file. */
+
 app.get(
   '/api/images/meta/:name',
   asyncRoute(async (req, res) => {
@@ -1422,7 +1325,7 @@ app.get(
   }),
 );
 
-/** Polls one task. Results are saved locally; the task is then forgotten. */
+
 app.get(
   '/api/images/tasks/:taskId',
   asyncRoute(async (req, res) => {
@@ -1446,7 +1349,7 @@ app.get(
   }),
 );
 
-/** Proxies a generated image so the browser can save it as a file. */
+
 app.get(
   '/api/images/file',
   asyncRoute(async (req, res) => {
@@ -1468,7 +1371,7 @@ app.get(
 );
 
 
-/** The Gallery collection itself lives in ./images/runtime.ts (shared with agent__image). */
+
 
 app.get('/api/gallery', (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');
@@ -1491,13 +1394,7 @@ app.post(
 );
 
 
-/**
- * A generation session: a named, ordered history of images produced in Image
- * Studio. Sessions group results the way conversations group chat turns —
- * the user can continue one or delete it. The image FILES themselves stay in
- * IMAGES_DIR and are temporary by default; the Gallery is what makes one
- * permanent.
- */
+
 interface ImageSessionItem {
   url: string;
   taskId: string;
@@ -1538,11 +1435,7 @@ function writeImageSessions(sessions: ImageSession[]): void {
 }
 
 
-/**
- * Drops session items whose backing file no longer exists (swept, cleaned, or
- * manually deleted) and rewrites the store when anything changed, so the UI
- * never shows dead thumbnails.
- */
+
 function pruneSessionItems(sessions: ImageSession[]): boolean {
   let changed = false;
   for (const session of sessions) {
@@ -1559,12 +1452,9 @@ function pruneSessionItems(sessions: ImageSession[]): boolean {
   return changed;
 }
 
-/**
- * Server-wide, user-settable settings. Currently only the temporary-image
- * retention window; extended fields must keep the same defensive read.
- */
+
 interface ServerSettings {
-  /** Days a temporary generated image survives; 0 disables the sweep. */
+  
   imageRetentionDays: number;
 }
 
@@ -1588,11 +1478,7 @@ function writeServerSettings(settings: ServerSettings): void {
   atomicWriteJson(SETTINGS_FILE, settings);
 }
 
-/**
- * Deletes temporary generated images older than the retention window. Files
- * referenced by the Gallery are permanent and always skipped. Runs at boot
- * and on an interval, so the disk self-heals even if the app stays open.
- */
+
 function sweepTemporaryImages(): number {
   const { imageRetentionDays } = readServerSettings();
   if (!Number.isFinite(imageRetentionDays) || imageRetentionDays <= 0) return 0;
@@ -1664,12 +1550,12 @@ app.get('/api/mcp/servers', (_req, res) => {
   res.json({ servers: listServersMasked() });
 });
 
-/** Figma MCP OAuth status. */
+
 app.get('/api/mcp/figma/auth', asyncRoute(async (_req, res) => {
   res.json(figmaAuthStatus());
 }));
 
-/** Starts the Figma OAuth browser flow (discovery → DCR → PKCE → consent). */
+
 app.post('/api/mcp/figma/auth', asyncRoute(async (_req, res) => {
   try {
     res.json(await figmaSignIn());
@@ -1678,7 +1564,7 @@ app.post('/api/mcp/figma/auth', asyncRoute(async (_req, res) => {
   }
 }));
 
-/** Drops stored Figma tokens. */
+
 app.delete('/api/mcp/figma/auth', asyncRoute(async (_req, res) => {
   figmaAuthReset();
   res.json({ ok: true });
@@ -1738,7 +1624,7 @@ app.put(
       headers?: Record<string, string>;
       auth?: 'figma';
       enabled?: boolean;
-      /** Full replacement list of tool names switched OFF for this server. */
+      
       disabledTools?: string[];
     };
     await dropConnection(existing.id);
@@ -1771,7 +1657,7 @@ app.delete(
   }),
 );
 
-/** Connects + lists tools: the Settings "Test" button. */
+
 app.post(
   '/api/mcp/servers/:id/test',
   asyncRoute(async (req, res) => {
@@ -1798,7 +1684,7 @@ app.get(
   }),
 );
 
-/** Executes one tool on a specific server — debug/inspection helper. */
+
 app.post(
   '/api/mcp/servers/:id/call',
   asyncRoute(async (req, res) => {
@@ -1829,8 +1715,6 @@ app.use('/api/addons', addonRouter());
 app.use('/api/watch', watchRouter());
 app.use('/api/ui', uiExportRouter());
 
-// MCP Bridge — external MCP clients (claude.ai / Gemini web) call Council +
-// RSAT addon tools and read-only workspace tools, acting as the Main Session.
 app.use('/', bridgeRouter());
 
 app.get('/api/usage', (req, res) => {
@@ -1981,11 +1865,7 @@ app.post(
   }),
 );
 
-/**
- * Manual cleanup. `all` removes every temporary image; `urls` removes just the
- * listed ones. Gallery-referenced files are always protected and counted as
- * skipped, so "cleanup all" can never destroy the permanent collection.
- */
+
 app.post(
   '/api/images/cleanup',
   asyncRoute(async (req, res) => {
@@ -2050,11 +1930,7 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
   res.status(status).json({ error: message });
 });
 
-/**
- * Boot-time housekeeping: restore in-flight tasks (so restarts stop orphaning
- * pending work), prune generated images older than the retention window, and
- * keep sweeping on an interval so the disk self-heals during long sessions.
- */
+
 loadImageTasksFromDisk();
 sweepTemporaryImages();
 setInterval(sweepTemporaryImages, 30 * 60 * 1000);
@@ -2079,12 +1955,7 @@ function pruneOldImages(): void {
 pruneOldImages();
 
 
-/**
- * One row: which provider + multimodal model answers `agent__vision`. The
- * model never sees the key; the tool resolves it through the same path as
- * chat. A missing/empty key is allowed here (the caller reports it to the
- * model, which can then ask the user) so the panel saves without a round trip.
- */
+
 app.get(
   '/api/vision/config',
   asyncRoute(async (_req, res) => {
@@ -2106,14 +1977,7 @@ app.post(
 );
 
 
-/**
- * The authoritative conversation list (`.data/conversation/` — index.json +
- * per-chat folders) — as SUMMARIES. The client hydrates its list view from
- * here (a few hundred bytes per chat, not the whole multi-megabyte store) and
- * fetches one full body on demand when a chat is opened or a record is newer
- * than the local cache. localStorage remains the instant-paint cache of the
- * bodies.
- */
+
 app.get(
   '/api/conversations',
   asyncRoute(async (_req, res) => {
@@ -2121,9 +1985,7 @@ app.get(
   }),
 );
 
-/** TRASH — list (sweep >30 hari berjalan di sini), restore satu chat,
- *  empty semua. Restore memindahkan folder kembali ke archive dan
- *  mendaftarkannya lagi di manifest, sehingga muncul di list normal. */
+
 app.get(
   '/api/conversations/trash',
   asyncRoute(async (_req, res) => {
@@ -2151,12 +2013,7 @@ app.post(
   }),
 );
 
-/**
- * P2 EXTERNALIZATION — the byte store's read route. Content-addressed and
- * immutable: a hash always serves the exact same bytes, so the response is
- * cached FOREVER (immutable) and repeat renders never re-download. The
- * client may pin the mime it already knows from the record's dataRef.
- */
+
 app.get(
   '/api/attachments/ref/:hash',
   (req, res) => {
@@ -2173,13 +2030,7 @@ app.get(
   },
 );
 
-/**
- * P2 EXTERNALIZATION — the byte store's WRITE route. The client pushes bytes
- * here the moment a file is picked (BEFORE the send), so the conversation
- * record never needs to carry the base64 — it references `hash` instead.
- * Content-addressed and idempotent: re-uploading identical bytes returns the
- * same hash without a second write.
- */
+
 app.post(
   '/api/attachments/store',
   express.raw({ type: () => true, limit: '12mb' }),
@@ -2196,11 +2047,7 @@ app.post(
   }),
 );
 
-/** One full conversation record — the thread loads a chat only when opened.
- *  P2 EXTERNALIZATION: the body ships the STORED (stripped) shape — payloads
- *  ride as dataRef/htmlRef, the client renders from /api/attachments/ref/:hash
- *  (immutable browser cache) and re-wires `moriko-ref://` at send time. That
- *  is what keeps this body ≤ 200 KB for the audit conversation. */
+
 app.get(
   '/api/conversations/:id',
   asyncRoute(async (req, res) => {
@@ -2213,19 +2060,72 @@ app.get(
   }),
 );
 
-/**
- * Applies a sync batch: per-conversation upserts + explicit deletions,
- * merged by id so two browsers editing different chats never clobber each
- * other. The response is the post-merge SUMMARY list — the client folds it in
- * by id and fetches only the bodies it does not already hold, so a sync no
- * longer downloads the whole store on every debounce.
- *
- * `turnPatches` carries INCREMENTAL turn snapshots for chats the sender is
- * currently generating into: the store replaces/inserts each turn by id so
- * the shared record stays current WITHOUT the multi-megabyte full-record
- * upload on every debounce. Patches apply AFTER the upserts so a patch can
- * land inside a record the same batch just created.
- */
+app.patch(
+  '/api/conversations/:id/config',
+  asyncRoute(async (req, res) => {
+    const conversationId = String(req.params.id ?? '').trim();
+    const body = (req.body ?? {}) as {
+      settings?: unknown;
+      compaction?: unknown;
+      hasCompaction?: boolean;
+      providerId?: unknown;
+      model?: unknown;
+      liveContext?: unknown;
+      initialConversation?: unknown;
+    };
+    if (!conversationId) {
+      res.status(400).json({ error: 'conversation id is required.' });
+      return;
+    }
+    const initialConversation =
+      body.initialConversation &&
+      typeof body.initialConversation === 'object' &&
+      !Array.isArray(body.initialConversation)
+        ? ({ ...(body.initialConversation as Record<string, unknown>), id: conversationId } as StoredConversation)
+        : undefined;
+    const updated = patchConversationConfig(conversationId, {
+      settings:
+        body.settings && typeof body.settings === 'object' && !Array.isArray(body.settings)
+          ? (body.settings as Record<string, unknown>)
+          : undefined,
+      hasCompaction: body.hasCompaction === true || 'compaction' in body,
+      compaction: body.compaction,
+      providerId: typeof body.providerId === 'string' ? body.providerId : undefined,
+      model: typeof body.model === 'string' ? body.model : undefined,
+      liveContext: 'liveContext' in body ? body.liveContext : undefined,
+      initialConversation,
+    });
+    if (!updated) {
+      res.status(404).json({ error: 'No conversation with that id.' });
+      return;
+    }
+    const mergedSettings =
+      typeof updated.settings === 'object' && updated.settings !== null
+        ? (updated.settings as Record<string, unknown>)
+        : {};
+    setLiveCompactionConfig(conversationId, {
+      autoCompact: mergedSettings.autoCompact !== false,
+      compactThresholdTokens:
+        typeof mergedSettings.compactThresholdTokens === 'number' &&
+        mergedSettings.compactThresholdTokens > 0
+          ? mergedSettings.compactThresholdTokens
+          : null,
+      compactThresholdRatio:
+        typeof mergedSettings.compactThresholdRatio === 'number' &&
+        Number.isFinite(mergedSettings.compactThresholdRatio)
+          ? mergedSettings.compactThresholdRatio
+          : null,
+      maxContextTokens:
+        typeof mergedSettings.maxContextTokens === 'number' &&
+        mergedSettings.maxContextTokens > 0
+          ? mergedSettings.maxContextTokens
+          : null,
+    });
+    res.json({ ok: true, summary: summarizeConversation(updated) });
+  }),
+);
+
+
 app.post(
   '/api/conversations/sync',
   asyncRoute(async (req, res) => {
@@ -2243,18 +2143,7 @@ app.post(
 );
 
 
-/**
-  * Persists ONE uploaded file to the CHAT'S OWN folder inside the app store
-  * (conversation/<chat>/attachment/attachment-NNN.ext) and hands back the
-  * ABSOLUTE store path the model's file tools accept. ATTACHMENTS v2: files
-  * never live in a workspace — uploads work in plain chat AND in
-  * no-workspace agent mode alike, and the agent reads them without any
-  * approval (the attachment read exemption, isAttachmentPath).
-  *
-  * Called the moment the user PICKS a file (not on send), so the attachment has
-  * a stable address before the model ever sees it — and the Composer can show
-  * the path right in the attachment chip.
-  */
+
 app.post(
   '/api/attachments/upload',
   express.raw({ type: () => true, limit: '12mb' }),
@@ -2321,8 +2210,6 @@ const httpServer = app.listen(PORT, () => {
       const { emitPoint } = await import('./addons/points.js');
       await emitPoint('harness.start', { at: Date.now() });
     } catch {  }
-    // MCP bridge notice — the URL users paste into claude.ai / Gemini web
-    // (after pointing their tunnel at this port).
     console.log(`  [mcp-bridge] POST /mcp/${bridgeToken()} (actor: council Main Session ${resolveMainSessionId() ?? 'pending'})`);
   })();
 

@@ -2,6 +2,7 @@ import type {
   AgentPermissionRequest,
   AskAnswer,
   AskUserRequest,
+  OperatorGateRequest,
   AgentWorkspaceInfo,
   ChatMessage,
   ChatSettings,
@@ -26,11 +27,7 @@ import type {
   TurnPatch,
 } from '../types';
 
-/**
- * Mirrors the server's `coerceText` — the client-side last ditch. A text or
- * reasoning frame carrying anything but a string is re-shaped here before it
- * can stamp "[object Object]" into the UI transcript or the device archive.
- */
+
 export function coerceDelta(value: unknown): string | null {
   if (typeof value === 'string') return value;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
@@ -53,15 +50,18 @@ export function coerceDelta(value: unknown): string | null {
 }
 
 
-/** One directory registered for the agent harness (server-persisted). */
+
 export type { AgentWorkspaceInfo };
 
-/** Sandbox gate: the agent wants to touch paths outside the workspace. */
+
 export type { AgentPermissionRequest };
+
+
+export type { OperatorGateRequest };
 
 // Goals / plans / todos (Context Injection)
 
-/** Goals of one conversation session (the agent manages them via tools). */
+
 export type { Goal };
 
 export async function fetchGoals(sessionId: string): Promise<Goal[]> {
@@ -93,7 +93,7 @@ export async function patchGoal(
   return payload.goal;
 }
 
-/** Scheduled reminders of one conversation session. */
+
 export async function fetchReminders(sessionId: string): Promise<Reminder[]> {
   const response = await fetch(`/api/reminders?session=${encodeURIComponent(sessionId)}`);
   if (!response.ok) await parseError(response);
@@ -147,6 +147,18 @@ export async function deleteTodoApi(sessionId: string, todoId: string): Promise<
   if (!response.ok) await parseError(response);
 }
 
+
+export async function sweepTodosApi(sessionId: string): Promise<Todo[]> {
+  const response = await fetch('/api/todos/sweep', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session: sessionId }),
+  });
+  if (!response.ok) await parseError(response);
+  const payload = (await response.json()) as { todos?: Todo[] };
+  return payload.todos ?? [];
+}
+
 export async function cancelReminderApi(sessionId: string, reminderId: string): Promise<void> {
   const response = await fetch(
     `/api/reminders/${encodeURIComponent(reminderId)}?session=${encodeURIComponent(sessionId)}`,
@@ -160,7 +172,7 @@ export interface VaultSnapshotMeta {
   id: string;
   originalPath: string;
   storedPath: string;
-  /** "edit_file" | "delete" | "pre-restore" | … */
+  
   operation: string;
   size: number;
   createdAt: number;
@@ -169,14 +181,14 @@ export interface VaultSnapshotMeta {
 export interface VaultRestoreOutcome {
   target: string;
   entry: VaultSnapshotMeta;
-  /** Unified diff of current → restored content (text files only). */
+  
   diff?: string;
   diffstat?: { added: number; removed: number };
-  /** Pre-restore snapshot of the overwritten file — makes the restore undoable. */
+  
   previousEntryId?: string;
 }
 
-/** File-vault snapshots of one session (optional path-substring filter). */
+
 export async function fetchVaultSnapshots(
   sessionId: string,
   query?: string,
@@ -189,7 +201,7 @@ export async function fetchVaultSnapshots(
   return payload.snapshots ?? [];
 }
 
-/** Dry-run preview of a restore — READ-ONLY (the vault_restore tool's dryRun). */
+
 export async function previewVaultRestore(
   sessionId: string,
   snapshotId: string,
@@ -208,7 +220,7 @@ export async function previewVaultRestore(
   };
 }
 
-/** Applies a vault restore (writes the file back; pre-restore snapshot first). */
+
 export async function restoreVaultSnapshot(
   sessionId: string,
   snapshotId: string,
@@ -223,8 +235,7 @@ export async function restoreVaultSnapshot(
   return payload.result;
 }
 
-/** Deletes a file the AGENT created (no pre-agent state) — a pre-delete
- *  snapshot is taken first, so the marker's restore brings it back. */
+
 export async function removeCreatedFile(
   sessionId: string,
   filePath: string,
@@ -242,7 +253,7 @@ export async function removeCreatedFile(
   };
 }
 
-/** Folders the agent may access OUTSIDE the workspace without prompts. */
+
 export async function fetchAllowlist(): Promise<string[]> {
   const response = await fetch('/api/agent/allowlist');
   if (!response.ok) await parseError(response);
@@ -276,7 +287,7 @@ export async function deleteGoalApi(sessionId: string, goalId: string): Promise<
   if (!response.ok) await parseError(response);
 }
 
-/** One row of the workspace picker's Explorer-style listing. */
+
 export interface AgentBrowseEntry {
   name: string;
   path: string;
@@ -286,11 +297,11 @@ export interface AgentBrowseEntry {
 }
 
 export interface AgentBrowseResult {
-  /** Current directory (null at the roots level). */
+  
   path: string | null;
-  /** Parent directory, null when there is none (drive root). */
+  
   parent: string | null;
-  /** Folders and files of the current directory (drives at the roots level). */
+  
   entries: AgentBrowseEntry[];
 }
 
@@ -305,16 +316,24 @@ export async function fetchAgentWorkspaces(sessionId?: string): Promise<{
 }
 
 
-/**
- * The named window target for the browser panel — a CONSTANT so every open
- * site (auto-open, tool-card button, future affordances) shares ONE tab.
- */
-const BROWSER_PANEL_TARGET = 'moriko-browser-panel';
 
-/**
- * Server-side source of truth for the panel URL (GET /api/agent/browser/panel-url).
- * The panel path is static today, but the route keeps one place to change it.
- */
+const panelWindows = new Map<string, Window>();
+
+
+function extractSessionKey(panelUrl?: string, explicitSessionId?: string): string {
+  if (explicitSessionId && explicitSessionId.trim()) return explicitSessionId.trim();
+  if (panelUrl) {
+    try {
+      const parsed = new URL(panelUrl, window.location.origin);
+      const s = parsed.searchParams.get('session');
+      if (s && s.trim()) return s.trim();
+    } catch {
+    }
+  }
+  return 'default';
+}
+
+
 export async function getBrowserPanelUrl(sessionId?: string): Promise<string> {
   const query = sessionId ? `?session=${encodeURIComponent(sessionId)}` : '';
   const response = await fetch(`/api/agent/browser/panel-url${query}`);
@@ -323,30 +342,20 @@ export async function getBrowserPanelUrl(sessionId?: string): Promise<string> {
   return payload.panelUrl;
 }
 
-/**
- * Opens the live browser panel as a near-fullscreen, centered window (the
- * panel is a workspace, not a dialog — the 16:9 stream fills it). Returns
- * the window handle, or null when popup-blocked (the caller falls back to a
- * visible button the user can click).
- */
-export function openBrowserPanel(panelUrl: string): Window | null {
+
+export function openBrowserPanel(panelUrl: string, sessionId?: string): Window | null {
   const width = Math.min(1680, Math.floor(window.screen.availWidth * 0.96));
   const height = Math.floor(window.screen.availHeight * 0.94);
   const left = Math.max(0, Math.floor((window.screen.availWidth - width) / 2));
   const top = Math.max(0, Math.floor((window.screen.availHeight - height) / 2));
-  return window.open(panelUrl, BROWSER_PANEL_TARGET, `width=${width},height=${height},left=${left},top=${top}`);
+  const sid = extractSessionKey(panelUrl, sessionId);
+  const target = `moriko-browser-panel-${sid.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+  const win = window.open(panelUrl, target, `width=${width},height=${height},left=${left},top=${top}`);
+  if (win) panelWindows.set(sid, win);
+  return win;
 }
 
-/** Module-level handle: the named target reuses the tab, this guards refocus churn. */
-let panelWindow: Window | null = null;
 
-/**
- * LIVE COMPACTION CONFIG — pushes the compaction settings to the server the
- * moment they change, so a RUNNING tool loop adopts them from its next round
- * (server/mcp/loop.ts re-reads the registry per round). Throws on failure —
- * the caller surfaces the error; the loop keeps its request snapshot until a
- * successful push.
- */
 export async function pushCompactionConfig(
   conversationId: string,
   config: {
@@ -364,39 +373,44 @@ export async function pushCompactionConfig(
   if (!response.ok) await parseError(response);
 }
 
-/**
- * WEB ACCESS KILL-SWITCH — tells the server the toggle's new value. `on: false`
- * broadcasts shutdown to every open panel (each closes its own window) and
- * tears the shared Edge context down. Never throws — a failed call only means
- * the server-side sweep lags one round (the WS gate is the hard backstop).
- */
-export async function setWebAccessRemote(on: boolean): Promise<void> {
+
+export async function setWebAccessRemote(on: boolean, sessionId?: string): Promise<void> {
   try {
     await fetch('/api/agent/browser/web-access', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ on }),
+      body: JSON.stringify({ on, ...(sessionId ? { sessionId } : {}) }),
     });
-    if (on === false && panelWindow && !panelWindow.closed) {
-      panelWindow.close();
+    if (on === false) {
+      if (sessionId) {
+        const win = panelWindows.get(sessionId);
+        if (win && !win.closed) win.close();
+        panelWindows.delete(sessionId);
+      } else {
+        for (const [sid, win] of panelWindows) {
+          if (win && !win.closed) win.close();
+          panelWindows.delete(sid);
+        }
+      }
     }
   } catch {
   }
 }
 
-/**
- * Opens the panel once per SPA load: an existing live tab is refocused
- * instead of duplicated, and a blocked/null open leaves the caller's button
- * as the fallback. Never throws — popup blockers are a normal browser state.
- */
-export function openBrowserPanelOnce(panelUrl?: string): void {
-  const url = panelUrl ?? '/browser-view.html';
+
+export function openBrowserPanelOnce(panelUrl?: string, sessionId?: string): void {
+  const sid = extractSessionKey(panelUrl, sessionId);
+  const defaultUrl =
+    sid !== 'default' ? `/browser-view.html?session=${encodeURIComponent(sid)}` : '/browser-view.html';
+  const url = panelUrl ?? defaultUrl;
   try {
-    if (panelWindow && !panelWindow.closed) {
-      panelWindow.focus();
+    const existing = panelWindows.get(sid);
+    if (existing && !existing.closed) {
+      existing.focus();
       return;
     }
-    panelWindow = openBrowserPanel(url);
+    const opened = openBrowserPanel(url, sid);
+    if (opened) panelWindows.set(sid, opened);
   } catch {
   }
 }
@@ -445,12 +459,7 @@ export async function saveTreeRules(workspaceId: string, rules: TreeIgnoreRules)
   return payload.rules;
 }
 
-/**
- * The idle-time tree channel: an SSE generator of tree deltas (+ a periodic
- * hello that carries the current version, so the panel can detect drift and
- * re-fetch the full tree). Callers break the loop via `return` — the browser
- * then closes the socket and the server unsubscribes on `close`.
- */
+
 export async function* streamTreeEvents(workspaceId: string): AsyncGenerator<
   { type: 'tree_hello'; workspaceId: string; version: number } | TreeDelta & { type: 'tree_delta' }
 > {
@@ -481,7 +490,7 @@ export async function* streamTreeEvents(workspaceId: string): AsyncGenerator<
   }
 }
 
-/** Registers a directory and (server-side) nothing else; activation is separate. */
+
 export async function addAgentWorkspace(path: string, label?: string): Promise<AgentWorkspaceInfo> {
   const response = await fetch('/api/agent/workspaces', {
     method: 'POST',
@@ -493,7 +502,7 @@ export async function addAgentWorkspace(path: string, label?: string): Promise<A
   return payload.workspace;
 }
 
-/** Removes a workspace from the registry — the disk is never touched. */
+
 export async function deleteAgentWorkspace(id: string): Promise<void> {
   const response = await fetch(`/api/agent/workspaces/${encodeURIComponent(id)}`, {
     method: 'DELETE',
@@ -501,11 +510,7 @@ export async function deleteAgentWorkspace(id: string): Promise<void> {
   if (!response.ok) await parseError(response);
 }
 
-/**
- * Activates a workspace. With `sessionId` the switch is SCOPED to that
- * conversation (per-session binding server-side); without it the selection is
- * global (kept for scripts/debugging only — the UI always passes a session).
- */
+
 export async function setActiveAgentWorkspace(id: string, sessionId?: string): Promise<void> {
   const response = await fetch('/api/agent/workspaces/active', {
     method: 'PUT',
@@ -515,7 +520,7 @@ export async function setActiveAgentWorkspace(id: string, sessionId?: string): P
   if (!response.ok) await parseError(response);
 }
 
-/** Read-only directory listing that powers the file-explorer picker. */
+
 export async function browseAgentDir(path?: string): Promise<AgentBrowseResult> {
   const query = path ? `?path=${encodeURIComponent(path)}` : '';
   const response = await fetch(`/api/agent/browse${query}`);
@@ -523,11 +528,7 @@ export async function browseAgentDir(path?: string): Promise<AgentBrowseResult> 
   return (await response.json()) as AgentBrowseResult;
 }
 
-/**
- * NATIVE device folder picker (Windows FolderBrowserDialog, driven by the
- * local proxy's PowerShell). Resolves the absolute path, or null when the
- * user cancels / the platform has no native dialog.
- */
+
 export async function pickNativeWorkspace(): Promise<string | null> {
   const response = await fetch('/api/agent/native-pick', { method: 'POST' });
   if (!response.ok) await parseError(response);
@@ -535,7 +536,7 @@ export async function pickNativeWorkspace(): Promise<string | null> {
   return payload.path ?? null;
 }
 
-/** Currently undecided outside-workspace permission requests (reconnect path). */
+
 export async function fetchPendingAgentPermissions(): Promise<AgentPermissionRequest[]> {
   const response = await fetch('/api/agent/permissions');
   if (!response.ok) await parseError(response);
@@ -543,7 +544,7 @@ export async function fetchPendingAgentPermissions(): Promise<AgentPermissionReq
   return payload.requests ?? [];
 }
 
-/** Currently pending agent__ask_user question batches (polling / reconnects). */
+
 export async function fetchPendingAskUser(): Promise<AskUserRequest[]> {
   const response = await fetch('/api/agent/ask-user');
   if (!response.ok) await parseError(response);
@@ -551,10 +552,29 @@ export async function fetchPendingAskUser(): Promise<AskUserRequest[]> {
   return payload.requests ?? [];
 }
 
-/**
- * Delivers the user's answers (or skips) for one agent__ask_user batch — the
- * paused tool call on the server resumes with them.
- */
+
+export async function fetchPendingOperatorGates(): Promise<OperatorGateRequest[]> {
+  const response = await fetch('/api/agent/gates');
+  if (!response.ok) await parseError(response);
+  const payload = (await response.json()) as { requests?: OperatorGateRequest[] };
+  return payload.requests ?? [];
+}
+
+
+export async function decideOperatorGate(
+  id: string,
+  verdict: 'accept' | 'reject',
+  reason: string,
+): Promise<void> {
+  const response = await fetch(`/api/agent/gates/${encodeURIComponent(id)}/decision`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ verdict, reason }),
+  });
+  if (!response.ok) await parseError(response);
+}
+
+
 export async function answerAgentQuestions(
   id: string,
   answers: AskAnswer[],
@@ -567,11 +587,7 @@ export async function answerAgentQuestions(
   if (!response.ok) await parseError(response);
 }
 
-/**
- * C3 keepalive — pushes one pending batch's auto-skip deadline forward while
- * the tab is hidden (the server cannot see browser visibility itself). A
- * settled batch answers { ok: false }; harmless.
- */
+
 export async function extendAgentQuestion(id: string, ms: number): Promise<void> {
   const response = await fetch(`/api/agent/ask-user/${encodeURIComponent(id)}/extend`, {
     method: 'POST',
@@ -581,19 +597,53 @@ export async function extendAgentQuestion(id: string, ms: number): Promise<void>
   if (!response.ok) await parseError(response);
 }
 
-/**
- * Delivers the user's sandbox decision. `remember` keeps the exact paths
- * approved for this server session (memory only, cleared on restart).
- */
+
 export async function decideAgentPermission(
   id: string,
   approve: boolean,
   remember: boolean,
+  reason?: string,
 ): Promise<void> {
   const response = await fetch(`/api/agent/permissions/${encodeURIComponent(id)}/decision`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ approve, remember }),
+    body: JSON.stringify({ approve, remember, reason }),
+  });
+  if (!response.ok) await parseError(response);
+}
+
+
+export interface AgentTaskDto {
+  id: string;
+  sessionId: string;
+  command: string;
+  cwd: string;
+  pid: number | null;
+  running: boolean;
+  exitCode: number | null;
+  endedBy?: string;
+  startedAt: number;
+  elapsedSec: number;
+  
+  tail: string;
+  outputBytes: number;
+}
+
+
+export async function fetchAgentTasks(sessionId?: string): Promise<AgentTaskDto[]> {
+  const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : '';
+  const response = await fetch(`/api/agent/tasks${query}`);
+  if (!response.ok) await parseError(response);
+  const payload = (await response.json()) as { tasks?: AgentTaskDto[] };
+  return payload.tasks ?? [];
+}
+
+
+export async function stopAgentTask(id: string, sessionId?: string): Promise<void> {
+  const response = await fetch(`/api/agent/tasks/${encodeURIComponent(id)}/stop`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId }),
   });
   if (!response.ok) await parseError(response);
 }
@@ -609,14 +659,14 @@ export interface McpServerConfig {
   env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
-  /** Named OAuth profile — currently only Figma. */
+  
   auth?: 'figma';
-  /** Tool names the user switched OFF for this server. */
+  
   disabledTools?: string[];
   createdAt: string;
 }
 
-/** One tool of a server, as rendered by the settings tools panel. */
+
 export interface McpServerTool {
   name: string;
   description?: string;
@@ -661,7 +711,7 @@ export async function updateMcpServer(
   if (!response.ok) await parseError(response);
 }
 
-/** Connects (if needed) and lists one server's tools with disabled flags. */
+
 export async function listServerTools(id: string): Promise<McpServerTool[]> {
   const response = await fetch(`/api/mcp/servers/${encodeURIComponent(id)}/tools`);
   if (!response.ok) await parseError(response);
@@ -682,7 +732,7 @@ export async function testMcpServer(
   return (await response.json()) as { ok: boolean; toolCount: number; error?: string };
 }
 
-/** Figma MCP OAuth connection state. */
+
 export interface FigmaAuthStatus {
   connected: boolean;
   scope?: string;
@@ -695,7 +745,7 @@ export async function getFigmaAuth(): Promise<FigmaAuthStatus> {
   return (await response.json()) as FigmaAuthStatus;
 }
 
-/** Opens the Figma consent page; resolves once tokens are stored. */
+
 export async function connectFigma(): Promise<void> {
   const response = await fetch('/api/mcp/figma/auth', { method: 'POST' });
   if (!response.ok) await parseError(response);
@@ -706,7 +756,7 @@ export async function disconnectFigma(): Promise<void> {
   if (!response.ok) await parseError(response);
 }
 
-/** Error carrying a user-facing message, so the UI never renders a raw stack. */
+
 export class ApiError extends Error {
   readonly status: number;
   constructor(message: string, status = 500) {
@@ -734,16 +784,7 @@ export async function fetchProviders(): Promise<ProviderPublic[]> {
 }
 
 
-/**
- * Asks the server whether a stream is still resumable.
- *
- * `live: true` — the run is still going (or its finished buffer is still
- * retained): re-attach with resumeChat() and the replay rebuilds from frame
- * one. `live: false` — the server knows the id but can no longer replay it.
- * A NETWORK failure THROWS (fetch rejects): a dead proxy must never be
- * mistaken for a dead stream — the caller's catch classifies it as a
- * connection loss and the reconnect path owns it from there.
- */
+
 export async function probeResume(streamId: string): Promise<{ ok: boolean; live: boolean }> {
   const response = await fetch(`/api/chat/resume/${encodeURIComponent(streamId)}`, {
     method: 'HEAD',
@@ -753,11 +794,7 @@ export async function probeResume(streamId: string): Promise<{ ok: boolean; live
   return { ok: false, live: false };
 }
 
-/**
- * Re-attaches to a resumable stream as an SSE read. Yields the buffered
- * events the client missed during the gap, then continues live. Throws when
- * the id is unknown/gone — the caller falls back to a plain Continue.
- */
+
 export async function* resumeChat(streamId: string): AsyncGenerator<StreamEvent> {
   const response = await fetch(`/api/chat/resume/${encodeURIComponent(streamId)}`);
   if (!response.ok) {
@@ -800,7 +837,7 @@ export async function* resumeChat(streamId: string): AsyncGenerator<StreamEvent>
 }
 
 
-/** One run as the proxy's journal holds it. */
+
 export interface JobRunSummary {
   id: string;
   sessionId: string | undefined;
@@ -813,12 +850,7 @@ export interface JobRunSummary {
   callCount: number;
 }
 
-/**
- * Reads ONE durable run record. Used at boot to learn whether a run the
- * client remembers reached a terminal state or died mid-flight (`crashed`).
- * Unknown/absent (expired record, one-shot caller) resolves to null — the
- * caller treats that as "nothing to surface".
- */
+
 export async function fetchJobRun(runId: string): Promise<JobRunSummary | null> {
   try {
     const response = await fetch(`/api/agent/runs/${encodeURIComponent(runId)}`);
@@ -872,7 +904,7 @@ export async function saveVisionConfig(config: VisionConfig): Promise<void> {
   if (!response.ok) await parseError(response);
 }
 
-/** Per-model capability metadata (models.dev snapshot served by the proxy). */
+
 export async function fetchModelMetadata(): Promise<Record<string, unknown>> {
   if (!modelMetadataInFlight) {
     modelMetadataInFlight = (async () => {
@@ -897,7 +929,7 @@ export async function createProvider(input: {
   baseUrl: string;
   apiKey?: string;
   models: string[];
-  /** LAYER 1: the capability matrix as saved from the Providers dialog. */
+  
   modelConfigs?: Record<string, ProviderModelConfig>;
   imageAdapter?: string;
   imageConfig?: Record<string, unknown>;
@@ -917,11 +949,7 @@ export async function deleteProvider(id: string): Promise<void> {
   if (!response.ok && response.status !== 204) await parseError(response);
 }
 
-/**
- * Updates a BUILT-IN provider's user-managed slots: the API key (saved with
- * a string, cleared with an empty string) and/or its added model ids.
- * The definition itself is fixed server-side.
- */
+
 export async function updateBuiltInProvider(
   providerId: string,
   patch: {
@@ -929,7 +957,7 @@ export async function updateBuiltInProvider(
     addModels?: string[];
     removeModels?: string[];
     setModels?: string[];
-    /** LAYER 2 hints captured by a live fetch (merged server-side). */
+    
     modelHints?: Record<string, ProviderModelHint>;
   },
 ): Promise<{
@@ -955,19 +983,12 @@ export async function updateBuiltInProvider(
   };
 }
 
-/**
- * A model-list answer from the provider, WITH the Layer-2 metadata it published.
- *
- * `models` remains the flat id list (every older caller keeps working), while
- * `entries`/`hints` carry the context window and modality flags the endpoint
- * actually stated — the whole point of fetching from the provider instead of
- * guessing from models.dev.
- */
+
 export interface RemoteModelList {
   models: string[];
   entries: ProviderModelEntry[];
   hints: Record<string, ProviderModelHint>;
-  /** Which endpoint family answered (openrouter/lmstudio/vllm/…). */
+  
   family?: string;
 }
 
@@ -987,7 +1008,7 @@ export async function fetchRemoteModels(
   };
 }
 
-/** Draft probe: lists models from an UNSAVED provider (baseUrl + apiKey in the body). */
+
 export async function probeRemoteModels(input: {
   baseUrl: string;
   apiKey?: string;
@@ -1012,13 +1033,7 @@ export async function probeRemoteModels(input: {
   };
 }
 
-/**
- * Persists one provider's LAYER-1 capability table.
- *
- * Deliberately its own endpoint rather than part of the provider upsert: saving
- * the grid must not require echoing the whole definition back, so a stale
- * client copy can never overwrite a newer label or baseUrl.
- */
+
 export async function saveModelConfigs(
   providerId: string,
   configs: Record<string, ProviderModelConfig>,
@@ -1037,18 +1052,17 @@ export async function saveModelConfigs(
 }
 
 
-/** Submits an async generation task and returns the provider's task id. */
+
 export async function submitImageTask(input: {
   providerId: string;
   model: string;
   prompt: string;
   apiKey?: string;
-  /** Testing overrides, forwarded to the provider untouched. */
+  
   aspectRatio?: string;
   width?: number;
   height?: number;
-  /** Reference images (data URLs) — forwarded as-is; the endpoint's own
-      capacity (not any model tag) decides whether they can be sent. */
+  
   images?: string[];
 }): Promise<string> {
   const response = await fetch('/api/images/generations', {
@@ -1062,9 +1076,7 @@ export async function submitImageTask(input: {
   return payload.taskId;
 }
 
-/** One poll of a submitted task. Terminal statuses come back as SUCCEED/FAILED.
- * `note` carries a non-fatal caveat for successful generations (e.g. a size
- * request the provider rejected was dropped in a retry). */
+
 export async function pollImageTask(
   taskId: string,
 ): Promise<{ status: string; images: string[]; error?: string; note?: string }> {
@@ -1084,7 +1096,7 @@ export async function pollImageTask(
   };
 }
 
-/** Every image the server has saved locally, newest first. */
+
 export async function fetchLocalImages(): Promise<string[]> {
   const response = await fetch('/api/images/local-list');
   if (!response.ok) return [];
@@ -1092,7 +1104,7 @@ export async function fetchLocalImages(): Promise<string[]> {
   return payload.images ?? [];
 }
 
-/** The user's persisted, ordered Gallery collection. */
+
 export async function fetchGallery(): Promise<string[]> {
   const response = await fetch('/api/gallery', { cache: 'no-store' });
   if (!response.ok) await parseError(response);
@@ -1100,7 +1112,7 @@ export async function fetchGallery(): Promise<string[]> {
   return payload.images ?? [];
 }
 
-/** Replaces the whole Gallery collection (add, remove, and reorder in one call). */
+
 export async function saveGallery(images: string[]): Promise<void> {
   const response = await fetch('/api/gallery', {
     method: 'POST',
@@ -1110,13 +1122,13 @@ export async function saveGallery(images: string[]): Promise<void> {
   if (!response.ok) await parseError(response);
 }
 
-/** Local proxy URL that downloads a generated image as a file. */
+
 export function imageFileUrl(url: string): string {
   return `/api/images/file?url=${encodeURIComponent(url)}`;
 }
 
 
-/** All generation sessions, newest activity first. */
+
 export async function fetchImageSessions(): Promise<ImageSession[]> {
   const response = await fetch('/api/images/sessions');
   if (!response.ok) await parseError(response);
@@ -1124,7 +1136,7 @@ export async function fetchImageSessions(): Promise<ImageSession[]> {
   return payload.sessions ?? [];
 }
 
-/** Creates an empty session; label defaults to a dated one on the server. */
+
 export async function createImageSession(label?: string): Promise<ImageSession> {
   const response = await fetch('/api/images/sessions', {
     method: 'POST',
@@ -1143,7 +1155,7 @@ export async function deleteImageSession(id: string): Promise<void> {
   if (!response.ok && response.status !== 204) await parseError(response);
 }
 
-/** Renames a session inline (sidebar context menu). */
+
 export async function renameImageSession(id: string, label: string): Promise<ImageSession> {
   const response = await fetch(`/api/images/sessions/${encodeURIComponent(id)}`, {
     method: 'PATCH',
@@ -1155,7 +1167,7 @@ export async function renameImageSession(id: string, label: string): Promise<Ima
   return payload.session;
 }
 
-/** Appends finished generations to a session, newest last. */
+
 export async function appendImageSessionItems(
   id: string,
   items: ImageSessionItem[],
@@ -1170,10 +1182,7 @@ export async function appendImageSessionItems(
   return payload.session;
 }
 
-/**
- * Removes temporary generated images. Gallery-referenced files are protected
- * server-side and returned as `skipped`.
- */
+
 export async function cleanupImages(options: {
   all?: boolean;
   urls?: string[];
@@ -1208,84 +1217,45 @@ export interface ChatStreamOptions {
   model: string;
   messages: ChatMessage[];
   settings: ChatSettings;
-  /**
-   * Marks THIS REQUEST as a compaction summarization (never persisted on the
-   * conversation): the server's enforcement ladder keeps the compaction
-   * system prompt intact at L4+ instead of wiping `systemInstruction` — a
-   * compaction without its section skeleton degrades into transcript mimicry.
-   */
+  
   compaction?: boolean;
-  /** PROBATION ladder state (conversation-level, client-owned). */
-  trust?: { level: 1 | 2 | 3 | 4 | 5; outputFrozen: boolean; evadeAt?: number };
-  /**
-   * OPERATOR RELAY: the operator's message, sent so the harness can deliver
-   * it as its own system-prompt authority. Set when the composer role is
-   * Operator; the route turns it into the `operator-directive` injection.
-   */
+  
+  trust?: {
+    level: 1 | 2 | 3 | 4 | 5;
+    outputFrozen: boolean;
+    evadeAt?: number;
+    continueCount?: number;
+    continueSeized?: boolean;
+  };
+  
   operatorDirective?: string;
-  /** Only sent for providers whose key the user entered in the UI. */
+  
   apiKey?: string;
-  /** Optional: one-shot helpers (auto-titling) may omit it. */
+  
   signal?: AbortSignal;
-  /**
-   * Attachment paths persisted under `.attachments/` for THIS message (the
-   * Composer uploads each file the moment it is picked). The harness injects
-   * them into the system prompt so the model can point its file tools at the
-   * files by stable path.
-   */
+  
   attachmentPaths?: string[];
-  /**
-   * Harness context plumbing: the persisted injections ride along so every
-   * request keeps the same context; `refresh` rebuilds them (conversation
-   * start, model switch, after compaction). `sessionId` keys goals state.
-   */
+  
 harness?: {
      persisted?: TurnInjection[];
      refresh?: boolean;
      sessionId?: string;
-     /**
-      * Per-conversation CONTEXT ID for the read-before-edit policy. Changes
-      * on regenerate/model switch/compaction/tab close; the server voids old
-      * read receipts on change (multi-session enforcement).
-      */
+     
      contextId?: string;
    };
-  /**
-   * RESUME: when set, this send re-attaches to the conversation's live
-   * server-side stream (page reloaded mid-generation) instead of starting a
-   * fresh request — see the probe at the top of `streamChat`.
-   */
+  
   streamId?: string;
-  /**
-   * With `streamId`: if the probe says the run is gone, FAIL LOUDLY instead
-   * of falling through to a fresh POST — a resume caller does not want to
-   * accidentally double-generate the last message.
-   */
+  
   resumeOnly?: boolean;
-  /**
-   * RESUME OF A CRASHED RUN: the durable job journal's run id. The server
-   * loads that run's executed tool calls as an idempotency map, so re-sent
-   * history does not re-execute mutating tools. Absent on ordinary sends.
-   */
+  
   resumeFrom?: string;
-  /**
-   * Which conversation this run belongs to — the server tags the stream with
-   * it so ANY browser/tab can see "this chat is generating right now" via
-   * GET /api/chat/live (the sidebar's live badge). One-shot helpers
-   * (auto-titling) omit it.
-   */
+  
   conversationId?: string;
-  /**
-   * TURN ID OWNERSHIP: this run's assistant turn id, minted by the caller
-   * BEFORE the POST. The server adopts it (echoing it on the stream_id frame)
-   * so every consumer of the run — this tab, a reload, a second browser —
-   * writes patches under the SAME turn id. Without it each consumer minted
-   * its own and the shared record grew duplicate assistant turns.
-   */
+  
   assistantTurnId?: string;
 }
 
-/** Response of POST /api/attachments/upload. */
+
 interface UploadResult {
   ok: boolean;
   path?: string;
@@ -1295,17 +1265,7 @@ interface UploadResult {
   error?: string;
 }
 
-/**
- * Persists ONE picked file to the attachment directory under the active
- * workspace, the moment the user selects it. Returns the workspace-rooted
- * path the model's file tools accept, or null when there is no workspace / the
- * server rejected the file — the caller then simply keeps the in-memory data
- * URL and everything still works.
- *
- * `chatId` puts the file into the CONVERSATION'S OWN subfolder
- * (`.attachments/<chatId>/…`), so attachments from different chats never
- * mingle in one shared directory.
- */
+
 export async function uploadAttachment(file: File, chatId?: string): Promise<string | null> {
   const params = new URLSearchParams({ name: file.name });
   if (chatId) params.set('chatId', chatId);
@@ -1324,22 +1284,12 @@ export async function uploadAttachment(file: File, chatId?: string): Promise<str
 }
 
 
-/**
- * The browser-cacheable URL for a stored payload: content-addressed and
- * immutable, so the thread's <img> and VisualCard fetch-on-mount read through
- * here and repeat renders never re-download.
- */
+
 export function attachmentRefUrl(hash: string, mime?: string): string {
   return `/api/attachments/ref/${encodeURIComponent(hash)}${mime ? `?mime=${encodeURIComponent(mime)}` : ''}`;
 }
 
-/**
- * VISUAL v2 PICK — records the user's choice of one frontend-preview
- * candidate. The server broadcasts it to every other browser and returns the
- * tool_result-shaped sentence the caller turns into a steer so the running
- * model learns the pick. Null = network/shape failure (caller keeps the UI
- * consistent locally anyway).
- */
+
 export async function pickVisualVariant(input: {
   visualId: string;
   variantId: string;
@@ -1360,12 +1310,7 @@ export async function pickVisualVariant(input: {
   }
 }
 
-/**
- * Turns a wire URL into a browser-renderable URL: `moriko-ref://<mime>/<hash>`
- * (the wire/persistence form) becomes the byte-store HTTP route. Inline data
- * URLs and plain http(s) URLs pass through untouched. Used by the steer
- * bubbles, whose parts carry wire-form URLs.
- */
+
 export function renderableRefUrl(url: string): string {
   if (!url.startsWith('moriko-ref://')) return url;
   const rest = url.slice('moriko-ref://'.length);
@@ -1376,21 +1321,12 @@ export function renderableRefUrl(url: string): string {
   return attachmentRefUrl(hash, mime);
 }
 
-/**
- * The server-resolvable wire URL for a stored payload. POST /api/chat swaps
- * it back for the real bytes at the provider boundary — the record itself
- * never carries the base64 again.
- */
+
 export function attachmentRefWireUrl(hash: string, mime: string): string {
   return `moriko-ref://${mime}/${hash}`;
 }
 
-/**
- * Pushes bytes into the server's byte store BEFORE the send, so the
- * conversation record can reference the payload by hash instead of carrying
- * its base64. Returns the ref object, or null when unreachable (the caller
- * then keeps the inline data URL — small payloads ride fine).
- */
+
 export async function storeBytesRef(bytes: ArrayBuffer, mime: string): Promise<{ hash: string; mime: string; byteSize: number } | null> {
   try {
     const response = await fetch(`/api/attachments/store?mime=${encodeURIComponent(mime)}`, {
@@ -1408,9 +1344,9 @@ export async function storeBytesRef(bytes: ArrayBuffer, mime: string): Promise<{
 }
 
 
-/** hash → dataUrl memo: one fetch per unique byte-store entry per session. */
+
 const refDataUrlCache = new Map<string, Promise<string | null>>();
-/** hash → text memo (visual html payloads). */
+
 const refTextCache = new Map<string, Promise<string | null>>();
 
 function fetchRefAsDataUrl(hash: string, mime: string): Promise<string | null> {
@@ -1442,17 +1378,7 @@ function fetchRefAsText(hash: string): Promise<string | null> {
   return promise;
 }
 
-/**
- * Deep-walks conversations and re-inlines every byte-store ref as REAL bytes
- * (attachments/tool images → data URLs, visuals → html text) IN PLACE.
- *
- * Called on the export paths (single chat + full bundle): a portable export
- * must not depend on THIS device's byte store — a bundle that only carries
- * `dataRef` hashes is useless on another machine. Deduped by hash, so a
- * hundred references to the same image cost one fetch. A payload that cannot
- * resolve (byte store gone) keeps its ref — import still works on the
- * exporting device and the render degrades to the attachment label.
- */
+
 export async function hydrateConversationPayloads(conversations: unknown[]): Promise<void> {
   const jobs: Promise<void>[] = [];
   const visit = (value: unknown): void => {
@@ -1489,13 +1415,7 @@ export async function hydrateConversationPayloads(conversations: unknown[]): Pro
 }
 
 
-/**
- * The server's authoritative chat SUMMARIES, or null when unreachable.
- *
- * The list endpoints ship a compact projection (a few hundred bytes per
- * chat) instead of the whole multi-megabyte store; full bodies load on
- * demand via fetchConversationDetail.
- */
+
 export async function fetchConversationSummaries(): Promise<ConversationSummary[] | null> {
   try {
     const response = await fetch('/api/conversations');
@@ -1507,10 +1427,7 @@ export async function fetchConversationSummaries(): Promise<ConversationSummary[
   }
 }
 
-/** One full conversation record by id — the thread loads a chat on demand.
- *  P3: SINGLE-FLIGHT per id — the audit caught the SAME body GET ×2 at boot
- *  (the boot list and the fold racing the same id); a second caller now
- *  awaits the first request instead of doubling the download. */
+
 const conversationDetailInFlight = new Map<string, Promise<Conversation | null>>();
 
 export function fetchConversationDetail(id: string): Promise<Conversation | null> {
@@ -1547,26 +1464,17 @@ export function fetchConversationDetail(id: string): Promise<Conversation | null
   return request;
 }
 
-/** One entry of GET /api/chat/live — a run still streaming server-side. */
+
 export interface LiveStreamInfo {
   id: string;
-  /** null for one-shot helpers (auto-titling) — no badge for those. */
+  
   conversationId: string | null;
   startedAt: number;
-  /**
-   * The last moment this run published a frame. A live-listed stream whose
-   * lastFrameAt is minutes old is WEDGED, not working — the UI can show the
-   * difference instead of spinning a badge over a frozen thread.
-   */
+  
   lastFrameAt: number;
 }
 
-/**
- * Which runs are STILL streaming, straight from the server's registry — the
- * shared truth behind the sidebar's live badge. Null on any failure (server
- * restarting, offline): the badge simply falls back to this tab's local
- * genRunning state until the next poll succeeds.
- */
+
 export async function fetchLiveStreams(): Promise<LiveStreamInfo[] | null> {
   try {
     const response = await fetch('/api/chat/live');
@@ -1578,37 +1486,17 @@ export async function fetchLiveStreams(): Promise<LiveStreamInfo[] | null> {
   }
 }
 
-/**
- * Pushes changed/deleted conversations and resolves with the post-merge
- * SUMMARY list the server holds (including other browsers' edits), or null
- * on failure — the caller keeps its copy dirty and retries on the next
- * persist. Merging happens by conversation id, never whole-array.
- *
- * The response is a summary delta, not a full echo: the fold fetches only
- * the bodies the server holds NEWER than the local copies, so a sync no
- * longer downloads the whole store on every debounce.
- *
- * RELOAD-WINDOW RETRY: the graceful reload (exit 75 → supervisor respawn →
- * tsx boot) leaves a few seconds where the proxy refuses connections and the
- * vite proxy answers /api/conversations/sync with a 500 — that is the
- * ECONNREFUSED noise in the dev log. P3: network failures and 5xx retry on an
- * EXPONENTIAL BACKOFF with jitter (1.5s → 3s → 6s → capped 12s, ±20% jitter);
- * CONSECUTIVE 5xx responses (3 in a row) arm a circuit breaker that FAILS
- * FAST for a minute — a restarting proxy is answered with silence, not a
- * thundering herd of retries. 4xx validation failures are NOT retried (they
- * would fail again). The unload beacon does not go through here — sendBeacon
- * has no response to read, and boot reconcile covers its gap.
- */
+
 const SYNC_RETRY_DELAYS_MS = [1_500, 3_000, 6_000, 12_000];
-/** Consecutive 5xx before the circuit opens (the reload window fires 1–2). */
+
 const SYNC_5XX_BREAKER_THRESHOLD = 3;
-/** How long the open circuit fails fast (a restart takes seconds, not minutes). */
+
 const SYNC_5XX_BREAKER_MS = 60_000;
 
 let syncFailureStreak = 0;
 let syncCircuitOpenUntil = 0;
 
-/** Exponential backoff + ±20% jitter: never a synchronized retry stampede. */
+
 function syncRetryDelayMs(): number {
   const base = SYNC_RETRY_DELAYS_MS[Math.min(syncFailureStreak, SYNC_RETRY_DELAYS_MS.length - 1)];
   const jitter = base * (0.8 + Math.random() * 0.4);
@@ -1673,11 +1561,38 @@ export async function syncConversations(
   return null;
 }
 
-/**
- * Best-effort final push while the page goes away: sendBeacon survives the
- * unload, an ordinary fetch might not. No response is read — the next boot
- * reconciles from the server anyway.
- */
+export interface ConversationConfigPatchPayload {
+  settings?: Partial<import('../types').ChatSettings>;
+  compaction?: import('../types').ConversationCompaction | null;
+  hasCompaction?: boolean;
+  providerId?: string;
+  model?: string;
+  liveContext?: import('../types').LiveContextTelemetry | null;
+  initialConversation?: Conversation;
+}
+
+export async function patchConversationConfig(
+  conversationId: string,
+  payload: ConversationConfigPatchPayload,
+): Promise<ConversationSummary | null> {
+  try {
+    const response = await fetch(
+      `/api/conversations/${encodeURIComponent(conversationId)}/config`,
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    );
+    if (!response.ok) return null;
+    const data = (await response.json()) as { summary?: ConversationSummary };
+    return data.summary ?? null;
+  } catch {
+    return null;
+  }
+}
+
+
 export function beaconSyncConversations(
   upsert: Conversation[],
   removeIds: string[],
@@ -1692,13 +1607,7 @@ export function beaconSyncConversations(
   }
 }
 
-/**
- * Streams a completion.
- *
- * The proxy emits `text/event-stream` frames that are each a JSON `StreamEvent`.
- * We parse them by hand rather than using `EventSource`, because `EventSource`
- * cannot send a POST body or carry an abort signal.
- */
+
 export async function* streamChat(options: ChatStreamOptions): AsyncGenerator<StreamEvent> {
   if (options.streamId) {
     const probe = await probeResume(options.streamId);
@@ -1786,15 +1695,7 @@ export async function* streamChat(options: ChatStreamOptions): AsyncGenerator<St
   }
 }
 
-/**
- * STEER: push mid-run text into a live generation's context.
- *
- * The proxy buffers it server-side and the running adapter drains it between
- * tool rounds. Returns the server-assigned steer id (the `steer` stream event
- * echoes the SAME id when the text is actually delivered — the optimistic
- * bubble is matched on it), or null when the run already ended (409) or the
- * network dropped — a normal race, not an error.
- */
+
 export async function steerChat(
   sessionId: string,
   text: string,
@@ -1802,37 +1703,22 @@ export async function steerChat(
   return steerWithParts(sessionId, [{ type: 'text', text }]);
 }
 
-/**
- * VISUAL v2 PICK STEER — announces the user's frontend-preview pick to the
- * RUNNING model through the same mid-run steer channel. The sentence comes
- * from /api/agent/visual/pick (tool_result-shaped, model-legible). Returns
- * the steer echo; the card already painted the choice locally regardless.
- */
+
 export async function steerVisualPick(sessionId: string, steerText: string): Promise<void> {
   await steerChat(sessionId, steerText);
 }
 
-/**
- * Manual SYSTEM-RULES REMINDER ("Send Reminder" button): pushes a server-owned
- * preset reminder into the running generation — same steer channel, no text to
- * type. `preset` must match a key of the server's SYSTEM_RULES_PRESETS.
- */
+
 export type SteerFailure = { id: null; reason: 'not_streaming' | 'error'; detail?: string };
 
-/** Wire part a steer carries — same shape as the message wire parts. */
+
 export type SteerClientPart =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string } }
   | { type: 'video_url'; video_url: { url: string } }
   | { type: 'file'; file: { filename: string; file_data: string } };
 
-/**
- * STEER (DSH parity): sends a real user message (text and/or image/file parts)
- * into the running generation. Image URLs may be a data URL or a
- * `moriko-ref://` wire URL — resolved at the provider boundary like any other
- * attachment. The failure variant carries the real reason so the notice never
- * lies with "the run just finished".
- */
+
 export async function steerWithParts(
   sessionId: string,
   parts: SteerClientPart[],
@@ -1887,19 +1773,12 @@ export async function sendReminderPreset(
 }
 
 export interface SteerEcho {
-  /** Server-assigned steer id — returned by the 202 and echoed in the event. */
+  
   id?: string;
   ok?: boolean;
 }
 
-/**
- * Whether a provider has a usable key.
- *
- * `hasServerKey` is the whole answer now: the server computes it from the
- * device vault (`~/.moriko/api-keys.json`) plus the environment, and the
- * browser holds no key material at all. The old fallback — "or a key pasted in
- * this browser" — is gone with the browser store it read from.
- */
+
 export function providerHasKey(provider: ProviderPublic | undefined): boolean {
   return Boolean(provider?.hasServerKey);
 }
@@ -1925,7 +1804,7 @@ export function buildExportBundle(
   };
 }
 
-/** Single-conversation export: one thread, no provider keys. */
+
 export interface ConversationExport {
   kind: 'moriko-conversation-export';
   version: 1;
@@ -1981,12 +1860,7 @@ export async function saveStorageLocation(value: string): Promise<StorageLocatio
   return body;
 }
 
-/**
- * HARNESS RELOAD (user-facing): trigger the graceful restart, then wait for
- * the fresh server to answer before reloading the page — a blind reload can
- * hit the dying process and lose the moment. The typecheck gate inside
- * harness-reload may take a while; the poll absorbs that.
- */
+
 export async function reloadHarness(): Promise<void> {
   const res = await fetch('/api/agent/harness-reload', { method: 'POST' });
   if (!res.ok) {
@@ -2014,7 +1888,7 @@ export async function reloadHarness(): Promise<void> {
 }
 
 
-/** AGENT WORKFLOWS — merged catalog (built-ins + the user's own). */
+
 export interface AgentWorkflowDTO {
   id: string;
   label: string;

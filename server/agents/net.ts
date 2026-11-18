@@ -2,20 +2,7 @@ import { lookup } from 'node:dns/promises';
 import net from 'node:net';
 import { deadline, isAbortLike } from '../liveness.js';
 
-/**
- * NETWORK GATE for internet-capable harness tools (fetch, download).
- *
- * The agent may read PUBLIC http(s) resources — nothing else. The gate:
- *  - only http/https on ports 80/443;
- *  - blocks loopback, private, link-local and cloud-metadata targets by
- *    IP — checked BOTH on the literal host and on the DNS resolution
- *    result (anti DNS-rebinding: resolve first, connect to the resolved
- *    IP, never re-resolve);
- *  - bounds every transfer: redirects (≤5), wall time (≤30s) and bytes.
- *
- * All limits are deliberately strict; the agent reads reference material,
- * it does not crawl.
- */
+
 
 const MAX_REDIRECTS = 5;
 const NET_TIMEOUT_MS = 30_000;
@@ -62,7 +49,7 @@ function assertLiteralHost(host: string): void {
   if (net.isIPv4(bare) || net.isIPv6(bare)) assertPublicIp(bare, host);
 }
 
-/** Validates the URL and resolves the host, rejecting private targets. */
+
 async function resolveTarget(rawUrl: string): Promise<{ url: URL }> {
   let url: URL;
   try {
@@ -99,14 +86,11 @@ export interface NetResult {
   status: number;
   contentType: string;
   finalUrl: string;
-  /** Response body, hard-capped at MAX_NET_BYTES. */
+  
   buffer: Buffer;
 }
 
-/**
- * Performs a bounded GET. Redirects are followed (re-validated through the
- * gate every hop); the response body streams into a hard byte cap.
- */
+
 export async function boundedGet(rawUrl: string): Promise<NetResult> {
   let currentUrl = rawUrl.trim();
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
@@ -165,7 +149,7 @@ export async function boundedGet(rawUrl: string): Promise<NetResult> {
   throw new Error('unreachable');
 }
 
-/** GET + text extraction for agent__fetch. */
+
 export async function fetchText(
   rawUrl: string,
   format: 'text' | 'html' | 'markdown',
@@ -197,7 +181,7 @@ export async function fetchText(
   };
 }
 
-/** Strips scripts/styles/tags into readable text (or light markdown). */
+
 export function htmlToReadable(html: string, markdown: boolean): string {
   let working = html
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')

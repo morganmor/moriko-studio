@@ -1,42 +1,13 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { scrubSecrets, resolveSandboxCwd, type SandboxOptions } from './sandbox.js';
 
-/**
- * SHELL-BASED PROCESS EXECUTION for the agent harness.
- *
- * Design:
- *  - agent__run / agent__git / agent__task_start run commands through the
- *    NATIVE SYSTEM SHELL (cmd.exe on Windows, /bin/sh on Unix). Shell
- *    metacharacters — pipes, redirects, chaining, substitution — are
- *    interpreted by the shell intentionally. The agent has full shell
- *    access, equivalent to a command prompt.
- *  - NO program allowlist and NO shell-metacharacter rejection. Any
- *    program installed on the system can be invoked.
- *  - The workspace-write sandbox is still enforced: cwd is clamped inside
- *    the workspace root, and secrets are scrubbed from the child env.
- *  - Hard timeout with kill, output capped, minimal environment.
- *  - Internal harness callers (gitbadges, reload, edit, test-run) use
- *    runProcess() — a direct spawn for known programs with vetted args,
- *    NOT exposed to the agent.
- */
+
 
 const RUN_TIMEOUT_MS = 120_000;
 const RUN_MAX_TIMEOUT_MS = 600_000;
 const RUN_OUTPUT_CHARS = 48_000;
 
-/**
- * SELF-DESTRUCTION GUARD.
- *
- * The harness runs as a Node process. A command like `taskkill /F /IM
- * node.exe` (Windows) or `pkill node` / `killall node` (Unix) would kill
- * EVERY node process on the machine — including the harness server itself.
- * The agent must never be allowed to issue such a command: it would silently
- * terminate the server, the SSE stream, and every active conversation.
- *
- * This check runs in BOTH the foreground (runShellCommand) and background
- * (spawnBackgroundShell) paths — it is the LAST gate before spawn, so no
- * caller can bypass it.
- */
+
 const SELF_KILL_PATTERNS: ReadonlyArray<{ regex: RegExp; reason: string }> = [
   { regex: /\btaskkill\b[\s/]*[^]*?\b\/IM\s+node(?:\.exe)?\b/i, reason: 'taskkill /IM node.exe would kill the harness server itself.' },
   { regex: /\btaskkill\b[\s/]*[^]*?\b\/PID\s+\d+/i, reason: 'taskkill /PID targets a process by ID — this can kill the harness server.' },
@@ -45,7 +16,7 @@ const SELF_KILL_PATTERNS: ReadonlyArray<{ regex: RegExp; reason: string }> = [
   { regex: /\bkill\s+-\d+\s+\d+/i, reason: 'kill with a PID can target the harness server process.' },
 ];
 
-/** Check a command line for self-destruction attempts. Returns a reason string if blocked. */
+
 export function checkSelfDestruct(commandLine: string): string | null {
   for (const pattern of SELF_KILL_PATTERNS) {
     if (pattern.regex.test(commandLine)) return pattern.reason;
@@ -53,10 +24,7 @@ export function checkSelfDestruct(commandLine: string): string | null {
   return null;
 }
 
-/**
- * Resolve the native system shell for the current platform.
- * Windows: cmd.exe (always available). Unix: /bin/sh (POSIX standard).
- */
+
 function getSystemShell(): { shell: string; flag: string } {
   if (process.platform === 'win32') {
     return { shell: 'cmd.exe', flag: '/d /s /c' };
@@ -70,19 +38,11 @@ export interface RunOutcome {
   stderr: string;
   timedOut: boolean;
   durationMs: number;
-  /** Combined, capped text the model sees. */
+  
   output: string;
 }
 
-/**
- * Spawns ONE process directly (NOT via shell) for internal harness callers
- * (gitbadges, reload, edit, test-run). `program`/`args` must already be
- * vetted by the caller. Never throws — failures come back as data.
- *
- * On Windows, .cmd shims (npm, tsc, …) need cmd to resolve; we compose a
- * quoted cmd /d /s /c line with windowsVerbatimArguments to avoid Node's
- * broken default re-quoting.
- */
+
 export function runProcess(
   program: string,
   args: string[],
@@ -90,7 +50,7 @@ export function runProcess(
     cwd: string;
     timeoutMs?: number;
     signal?: AbortSignal;
-    /** Sandbox policy: clamps cwd inside the workspace and scrubs secrets. */
+    
     sandbox?: SandboxOptions;
   },
 ): Promise<RunOutcome> {
@@ -178,14 +138,7 @@ export function runProcess(
   });
 }
 
-/**
- * Runs a command line through the NATIVE SYSTEM SHELL (cmd.exe on Windows,
- * /bin/sh on Unix). Shell metacharacters — pipes, redirects, chaining,
- * substitution — are all interpreted by the shell. No program allowlist;
- * any program installed on the system can be invoked. The workspace-write
- * sandbox clamps cwd and scrubs secrets. Never throws — failures come
- * back as data.
- */
+
 export function runShellCommand(
   commandLine: string,
   options: {
@@ -282,11 +235,7 @@ export function runShellCommand(
   });
 }
 
-/**
- * Spawns a BACKGROUND shell process (non-blocking) for agent__task_start.
- * Runs the command line through the native system shell. Returns the
- * ChildProcess immediately so the caller can poll its output.
- */
+
 export function spawnBackgroundShell(
   commandLine: string,
   options: { cwd: string },
@@ -309,7 +258,7 @@ export function spawnBackgroundShell(
   });
 }
 
-/** Minimal child environment: no Moriko/user secrets, just what builds need. */
+
 function minimalEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of [
@@ -326,7 +275,7 @@ function minimalEnv(): NodeJS.ProcessEnv {
 }
 
 
-/** Quote one token for cmd /d /s /c (internal callers only). */
+
 function quoteForCmd(token: string): string {
   if (token === '') return '""';
   let escaped = token.replace(/"/g, '""');
@@ -338,7 +287,7 @@ function quoteForCmd(token: string): string {
 }
 
 
-/** Human framing added by the tools around a RunOutcome. */
+
 
 export function formatRunOutcome(outcome: RunOutcome, commandLine: string): string {
   const header =

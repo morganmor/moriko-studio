@@ -1,14 +1,4 @@
-/**
- * AddonApi factory — the `$` context each addon receives in register()/activate().
- *
- * ADDON v2 (A1):
- *  - createAddonApi(addonId, opts) — the facade binds to the ADDON's identity,
- *    so store/bus/context writes made from ITS hooks are attributed to it (A-03).
- *  - tool.register passes the full ctx through to execute (A-01).
- *  - fs is jailed to the addon root (A-10); workspace uses the session's
- *    workspace + isInside checks (A-11) + vault/audit on write (A-12).
- *  - ui.toast/notify publish SSE frames; ui.invalidate is real (A-13).
- */
+
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -44,11 +34,11 @@ import type { AddonApi, AddonToolRegistration, AddonCommandRegistration, AddonTo
 import type { HarnessToolResult } from '../agents/tools/shared.js';
 
 export interface AddonApiOptions {
-  /** The addon root dir — `$.fs` is jailed to this (A-10). */
+  
   addonDir?: string;
 }
 
-/** isInside: containment via path.relative, never startsWith (A-11). */
+
 function isInside(root: string, abs: string): boolean {
   const rel = path.relative(path.resolve(root), path.resolve(abs));
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
@@ -59,7 +49,7 @@ function jailResolve(root: string, rel: string): string | null {
   return isInside(root, abs) ? abs : null;
 }
 
-/** The actor bound into tool ctx when a session runs the tool. */
+
 function actorFromCtx(ctx: { sessionId?: string; modelId?: string }): AddonActor {
   return { kind: 'agent', sessionId: ctx.sessionId, model: ctx.modelId };
 }
@@ -141,8 +131,8 @@ export function createAddonApi(addonId: string, opts: AddonApiOptions | string =
         addonLog(addonId, kind === 'error' ? 'error' : kind === 'warn' ? 'warn' : 'info', text);
         notifyAddon(addonId, { kind: kind ?? 'info', title: text });
       },
-      /** v2 (R6): rich notification — achievement toasts with openView. */
-      /** v2 (R6): rich notification — achievement toasts with openView. */
+      
+      
       notify(notification: import('./notify.js').AddonNotification) {
         addonLog(addonId, notification.kind === 'error' ? 'error' : 'info', notification.title);
         notifyAddon(addonId, notification);
@@ -267,7 +257,7 @@ export function createAddonApi(addonId: string, opts: AddonApiOptions | string =
         forSession(sessionId?: string) {
           return sessionId ? handleFor(sessionId) : base;
         },
-        /** Registered workspaces (id + label + path) for addon-side pickers. */
+        
         listRegistered(): Array<{ id: string; label: string; path: string }> {
           try {
             return listWorkspaces().map((w) => ({ id: w.id, label: w.label, path: w.path }));
@@ -275,7 +265,7 @@ export function createAddonApi(addonId: string, opts: AddonApiOptions | string =
             return [];
           }
         },
-        /** Bind to one registered workspace (by id or exact path). */
+        
         forWorkspace(idOrPath: string) {
           let found: { path: string } | undefined;
           try {
@@ -297,10 +287,7 @@ export function createAddonApi(addonId: string, opts: AddonApiOptions | string =
       },
     },
     events: {
-      /** HARNESS-EVENT: persist an addon event as a `kind: 'harness-event'`
-       *  turn in THIS conversation only (never broadcast), plus a live bus
-       *  frame ('harness:event') for open clients. Separate channel — not a
-       *  user message, not a harness injection. */
+      
       emit(conversationId: string, msg: { text: string; level?: 'info' | 'warn' | 'block'; key?: string }): { ok: boolean; error?: string } {
         return emitHarnessEvent(conversationId, { ...msg, addonId });
       },
@@ -349,11 +336,7 @@ export function createAddonApi(addonId: string, opts: AddonApiOptions | string =
       inject(target, msg) {
         return injectMessage(target, { ...msg, addonId });
       },
-      /** Abort a running generation for one conversation (or session id).
-       * Resolves conversationId → live stream id via the stream registry; falls
-       * back to treating target as a raw stream id. Returns false when no live
-       * stream matched (nothing to stop). Used by the council orchestrator's
-       * council_stop tool to halt a sub-agent mid-response. */
+      
       abort(target: string): boolean {
         try {
           const live = listLiveStreams();
@@ -364,9 +347,7 @@ export function createAddonApi(addonId: string, opts: AddonApiOptions | string =
           return false;
         }
       },
-      /** Live streams (conversationId + streamId + timing) — read-only mirror
-       * of the host stream registry; lets an orchestrator check what is running
-       * before issuing a stop. */
+      
       live(): Array<{ id: string; conversationId: string | null; startedAt: number; lastFrameAt: number }> {
         try {
           return listLiveStreams();
@@ -374,9 +355,7 @@ export function createAddonApi(addonId: string, opts: AddonApiOptions | string =
           return [];
         }
       },
-      /** Start a generation for a conversation SERVER-SIDE (council wake).
-       *  Builds the run from the stored conversation and self-POSTs to the
-       *  chat engine — no bus/SSE/browser hop, nothing to drop. */
+      
       async startRun(conversationId: string, text: string, opts?: { providerId?: string; model?: string }) {
         try {
           return await startServerRun(conversationId, text, opts ?? {});
@@ -384,8 +363,7 @@ export function createAddonApi(addonId: string, opts: AddonApiOptions | string =
           return { started: false, error: error instanceof Error ? error.message : String(error) };
         }
       },
-      /** Server-side conversation summaries (read-only) — council membership
-       *  fallback: conversations already carry councilId/role/agentId. */
+      
       listConversations(): Array<{ id: string; title: string; councilId?: string; councilRole?: string; councilAgentId?: string; providerId?: string; model?: string }> {
         try {
           return listStoredConversationSummaries();
@@ -411,8 +389,7 @@ export function createAddonApi(addonId: string, opts: AddonApiOptions | string =
       touchedPaths(tool: string, args: Record<string, unknown>) {
         return touchedPaths(tool, args);
       },
-      /** P2 (moco-canvas): headless measurement of standalone HTML. Gated by
-       *  the sensitive "harness.render" permission — setContent only. */
+      
       async measureHtml(html: string, viewports: Array<{ name: string; width: number; height: number }>) {
         assertPermission(addonId, 'harness.render');
         const { measureHtml } = await import('../agents/spatial-runtime.js');
@@ -484,7 +461,7 @@ export function createAddonApi(addonId: string, opts: AddonApiOptions | string =
   return api;
 }
 
-/** Harness-side helper list (used by routes/tooling, not by addons). */
+
 export function addonToolCount(_addonId: string): number {
   return listAddonToolDefs().length;
 }

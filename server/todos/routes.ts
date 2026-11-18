@@ -1,17 +1,9 @@
 import { Router } from 'express';
 
 import { asyncRoute, HttpError } from '../http.js';
-import { createTodo, deleteTodo, listTodos, updateTodo } from './store.js';
+import { createTodo, deleteTodo, listTodos, sweepTodos, updateTodo } from './store.js';
 
-/**
- * REST surface for the Todos panel (the USER side — the AGENT side rides the
- * `todo_*` harness tools). Todos are keyed by the conversation session id.
- *
- *   GET    /api/todos?session=…        — todos of one session
- *   POST   /api/todos                  — create { session, text, priority? }
- *   PATCH  /api/todos/:todoId          — update { session, text?, done?, priority?, notes? }
- *   DELETE /api/todos/:todoId?session=… — remove
- */
+
 export function todosRouter(): Router {
   const router = Router();
 
@@ -60,6 +52,17 @@ export function todosRouter(): Router {
         throw new HttpError(404, 'Unknown todo.');
       }
       res.status(204).end();
+    },
+  );
+
+  // End-of-turn sweep: stamps every completed todo (all-done turns only) with
+  // sweptAt — the panel hides them, todos.json keeps the data.
+  router.post(
+    '/sweep',
+    (req, res) => {
+      const session = requireSession(req.body?.session);
+      const result = sweepTodos(session);
+      res.json(result);
     },
   );
 

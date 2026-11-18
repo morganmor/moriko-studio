@@ -1,8 +1,4 @@
-/**
- * MobileWatching — bottom-left button (right of day/night) that downloads
- * cloudflared (skipped when present) and opens a Quick Tunnel to the running
- * web dev port. The popover shows a QR + link so another device can join.
- */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, Copy, Loader2 } from './icons';
 import { DIcon } from './designIcons';

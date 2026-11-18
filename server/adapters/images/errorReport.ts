@@ -1,21 +1,4 @@
-/**
- * Human-readable upstream rejections.
- *
- * A raw provider error body (`{"error":{"message":"invalid request!","type":
- * "invalid_request_error",…}}`) is useless to a person. This module turns it
- * into a structured multi-line report the UI shows as-is:
- *
- *   My provider rejected the generation (HTTP 400).
- *   Provider said: "invalid request!" (invalid_request_error).
- *   We sent: POST https://…/v1/images/generations — model "seedream-5.0-lite",
- *   prompt 24 chars, n 1, no size parameter.
- *   This endpoint accepts: model, prompt, n, size "WxH" (…) — returns data[].url.
- *   Likely fix: …
- *
- * Every adapter composes the "We sent" and "accepts" lines from its own
- * contract, so the message states facts (what left the server, what the
- * adapter expects) instead of raw JSON.
- */
+
 
 export interface ParsedUpstreamError {
   message?: string;
@@ -23,11 +6,7 @@ export interface ParsedUpstreamError {
   code?: string | number;
 }
 
-/**
- * Pulls the readable parts out of an error body. Handles the OpenAI shape
- * (`{error:{message,type,code}}`), plain `{message}`, FastAPI `{detail}`, a
- * string `error`, and finally short plain-text bodies.
- */
+
 export function parseUpstreamError(bodyText: string): ParsedUpstreamError {
   const trimmed = (bodyText ?? '').trim();
   if (!trimmed) return {};
@@ -63,7 +42,7 @@ export function parseUpstreamError(bodyText: string): ParsedUpstreamError {
   return {};
 }
 
-/** Status-specific "likely fix" line, in plain language. */
+
 export function statusHint(status: number): string {
   if (status === 400)
     return (
@@ -80,8 +59,7 @@ export function statusHint(status: number): string {
   return "Likely fix: check the provider's API documentation for the exact request format.";
 }
 
-/** Builds the full multi-line report. `request` is one line describing the
- * exact outgoing request; `accepts` is the adapter's contract summary. */
+
 export function formatRejection(params: {
   label: string;
   status: number;

@@ -1,7 +1,4 @@
-/**
- * F3.8 — agent__review_diff: static checklist over the session's changes
- * (touched files) or a git diff. Reports issues; never modifies anything.
- */
+
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AgentToolContext, HarnessToolResult } from './shared.js';
@@ -10,6 +7,7 @@ import { runShellCommand } from '../exec.js';
 import { functionMetrics } from '../ts-ast.js';
 import { defineTool } from './registry.js';
 import { touchedFiles } from './diagnostics.js';
+import { approveCommand } from './terminal.js';
 
 interface Issue {
   category: string;
@@ -40,7 +38,15 @@ async function reviewDiffTool(args: Record<string, unknown>, ctx: AgentToolConte
       return { ok: true, isError: false, text: 'No files touched this session. Use scope "git" to review the git diff instead.' };
     }
   } else {
-    const outcome = await runShellCommand('git diff --name-only HEAD', { cwd: root, timeoutMs: 15_000 });
+    const mode = ctx.terminalMode ?? 'auto';
+    if (mode === 'off') {
+      return { ok: false, isError: true, text: 'Terminal execution is turned OFF — git diff requires terminal access.' };
+    }
+    const approved = await approveCommand('review_diff', 'git diff --name-only HEAD', root, false, ctx);
+    if (!approved) {
+      return { ok: false, isError: true, errorCode: 'approval_denied', text: 'The user did not approve running git diff for review_diff.' };
+    }
+    const outcome = await runShellCommand('git diff --name-only HEAD', { cwd: root, timeoutMs: 15_000, signal: ctx.signal });
     if (outcome.exitCode !== 0) {
       return { ok: false, isError: true, text: `git diff failed (exit=${outcome.exitCode}). Is this a git repo?` };
     }
@@ -48,7 +54,7 @@ async function reviewDiffTool(args: Record<string, unknown>, ctx: AgentToolConte
       const t = line.trim();
       if (t) files.add(path.join(root, t.split('/').join(path.sep)));
     }
-    const untracked = await runShellCommand('git ls-files --others --exclude-standard', { cwd: root, timeoutMs: 15_000 });
+    const untracked = await runShellCommand('git ls-files --others --exclude-standard', { cwd: root, timeoutMs: 15_000, signal: ctx.signal });
     if (untracked.exitCode === 0) {
       for (const line of untracked.stdout.split('\n')) {
         const t = line.trim();

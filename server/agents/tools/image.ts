@@ -1,21 +1,6 @@
-/**
- * agent__image / agent__image_models — LLM-driven image generation.
- *
- * The chat model composes the FINAL prompt (it is the prompt engineer) and
- * submits through the shared image runtime (./images/runtime.ts) — the same
- * engine the HTTP routes use, so provider adapters, task persistence, the
- * failure journal and local saving behave identically.
- *
- * Two modes, picked automatically:
- *  - text-to-image: no referencePaths.
- *  - edit: referencePaths present (user attachments, earlier results).
- *
- * Results are appended to the user's Gallery automatically (user decision),
- * ride back INLINE so the model can see and iterate on them, and the local
- * URLs are stable enough to feed back as referencePaths.
- */
+
 import type { HarnessToolResult, AgentToolContext, ToolImage } from './shared.js';
-import { str, resolveWithPermission } from './shared.js';
+import { str, resolveWithPermission, checkWebAccessUrl } from './shared.js';
 import { resolveImageSource } from '../vision.js';
 import { fetchPublicImage } from './vision.js';
 import { getUiState } from '../../uiState.js';
@@ -28,12 +13,12 @@ import {
   type ImageProviderEntry,
 } from '../../images/runtime.js';
 
-/** One active generation per session — the model must not fan out image calls. */
+
 const activeRuns = new Set<string>();
 
-/** Cap on the composed prompt (providers clamp lower; their error surfaces). */
+
 const MAX_PROMPT_CHARS = 2000;
-/** Inline images returned to the model per call (context budget). */
+
 const MAX_INLINE_IMAGES = 2;
 
 function unconfigured(): HarnessToolResult {
@@ -52,11 +37,7 @@ function readableError(error: unknown, fallback: string): string {
   return text.trim() ? text.slice(0, 600) : fallback;
 }
 
-/**
- * Resolves ONE reference input — a previous result URL (`/api/images/local/…`),
- * a data: URL, a public http(s) URL, or a workspace/attachment path (same
- * permission gate the vision tool uses).
- */
+
 async function resolveReference(
   input: string,
   ctx: AgentToolContext,
@@ -71,6 +52,10 @@ async function resolveReference(
   }
 
   if (trimmed.startsWith('data:') || /^https?:\/\//i.test(trimmed)) {
+    if (/^https?:\/\//i.test(trimmed)) {
+      const blocked = checkWebAccessUrl(trimmed, ctx, 'agent__image');
+      if (blocked) return { error: blocked };
+    }
     const out = await resolveImageSource(trimmed, fetchPublicImage);
     if (!out) return { error: `"${trimmed}" is not a supported image (expected an image content type).` };
     return { dataUrl: `data:${out.mime};base64,${out.buffer.toString('base64')}` };
@@ -113,18 +98,27 @@ export async function imageTool(args: Record<string, unknown>, ctx: AgentToolCon
     };
   }
 
-  const target = await resolveAgentImageTarget({
-    providerId: str(args, 'providerId').trim() || undefined,
-    model: str(args, 'model').trim() || undefined,
-  });
-  if (!target) return unconfigured();
-
   const rawRefs = Array.isArray(args.referencePaths) ? args.referencePaths : [];
   const refInputs = rawRefs
     .filter((entry): entry is string => typeof entry === 'string')
     .map((entry) => entry.trim())
     .filter(Boolean)
     .slice(0, 8);
+  for (const input of refInputs) {
+    if (/^https?:\/\//i.test(input)) {
+      const blocked = checkWebAccessUrl(input, ctx, 'agent__image');
+      if (blocked) {
+        return { ok: false, isError: true, errorCode: 'web_access_off', text: blocked };
+      }
+    }
+  }
+
+  const target = await resolveAgentImageTarget({
+    providerId: str(args, 'providerId').trim() || undefined,
+    model: str(args, 'model').trim() || undefined,
+  });
+  if (!target) return unconfigured();
+
   const images: string[] = [];
   for (const input of refInputs) {
     const resolved = await resolveReference(input, ctx);

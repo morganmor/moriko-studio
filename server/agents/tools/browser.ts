@@ -1,61 +1,47 @@
-/**
- * agent__browser_* — the built-in browser tools (layer-1 actuator surface).
- *
- * Every handler delegates the real work to `browserManager`
- * (agents/browser/manager.ts): ONE persistent Edge context whose profile
- * (~/.moriko/browser-profile/) keeps cookies, localStorage and saved logins
- * alive across sessions. The tools are the ONLY way the agent touches the
- * browser — each call re-enters the tool pipeline (schema, audit, gates) like
- * every other agent tool, and each is callable as `tools.browser_*` inside
- * `agent__exec` for multi-step orchestration.
- *
- * Phase-1 tools (this file):
- *   browser_open        — navigate the active tab (assertAllowedTarget gate)
- *   browser_read        — page/element text
- *   browser_screenshot  — PNG of the viewport → inline image for the model
- *                         (vision gate: screenshot → judge → next step)
- *   browser_wait        — selector / load-state wait with timeout
- *   browser_eval        — JS in the page context (DOM extraction, positions)
- *   browser_url         — current URL + title
- *
- * Phase-2 tools (this file):
- *   browser_click       — click at coordinates (cursor moves first) or selector
- *   browser_type        — fill a selector, or click+type at the cursor position
- *   browser_cursor_move — move the harness cursor (visible state for Phase 3)
- *   browser_scroll      — mouse wheel / element scroll
- *
- * Phase-3 tools (this file):
- *   browser_handover    — hand control to the user (takeover starts)
- *   browser_release     — take control back after the user is done
- *   browser_tabs        — list tabs (ids for switch/close)
- *   browser_switch_tab  — make another tab active (capture follows)
- *   browser_close_tab   — close a tab
- *
- * TAKEOVER GUARD: every INPUT tool checks browserManager.isTakeover() first —
- * during a user takeover the agent must not act. Read-only tools (read /
- * screenshot / url / eval / wait) deliberately still work so the agent can
- * keep observing while the user drives.
- */
+
 import type { HarnessToolResult, AgentToolContext, ToolImage } from './shared.js';
-import { str, num, bool, truncateOutput, requireWorkspace } from './shared.js';
+import { str, num, bool, truncateOutput, requireWorkspace, checkWebAccessUrl } from './shared.js';
 import { browserManager } from '../browser/manager.js';
 import { requestApproval } from '../permissions.js';
 import { lookupModelMetadata } from '../../modelMetadata.js';
 import { htmlToMarkdown } from '../browser/markdown.js';
-import { isInsideRoot } from '../workspace.js';
+import { isInsideRoot, getActiveWorkspace } from '../workspace.js';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 type Page = import('playwright-core').Page;
 
-/** Uniform takeover refusal for every input tool. */
-function takeoverRefusal(): HarnessToolResult {
+
+function approvalRoot(ctx: AgentToolContext): string {
+  return getActiveWorkspace(ctx.sessionId)?.path ?? process.cwd();
+}
+
+function takeoverRefusal(sessionId?: string): HarnessToolResult {
   return {
     ok: false,
     isError: true,
     errorCode: 'browser_takeover',
-    text: browserManager.takeoverNotice(),
+    text: browserManager.takeoverNotice(sessionId),
   };
+}
+
+function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal, message = 'Aborted because user took over control.'): Promise<T> {
+  if (signal.aborted) return Promise.reject(new Error(message));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new Error(message));
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (val) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(val);
+      },
+      (err) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(err);
+      },
+    );
+  });
 }
 
 
@@ -63,15 +49,20 @@ export async function browserOpenTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   const raw = str(args, 'url');
   if (!raw.trim()) {
     return { ok: false, isError: true, text: 'browser_open needs a "url" (full http(s) URL).' };
   }
-  requireWorkspace(ctx);
+  const rawBlocked = checkWebAccessUrl(raw, ctx, 'agent__browser_open');
+  if (rawBlocked) {
+    return { ok: false, isError: true, errorCode: 'web_access_off', text: rawBlocked };
+  }
 
   let url: URL;
   try {
-    url = browserManager.assertUrl(raw, bool(args, 'allowPublic') || true);
+    url = browserManager.assertUrl(raw, bool(args, 'allowPublic') || true, sid);
   } catch (error) {
     return {
       ok: false,
@@ -80,19 +71,21 @@ export async function browserOpenTool(
       text: error instanceof Error ? error.message : String(error),
     };
   }
+  const blocked = checkWebAccessUrl(url.toString(), ctx, 'agent__browser_open');
+  if (blocked) {
+    return { ok: false, isError: true, errorCode: 'web_access_off', text: blocked };
+  }
 
+  const tracker = browserManager.trackAgentAbort(sid, ctx.signal);
   try {
     const newTab = bool(args, 'newTab');
-    const page = newTab ? (await browserManager.openInNewTab()).page : await browserManager.getActivePage();
-    await page.goto(url.toString(), { waitUntil: 'commit', timeout: 30_000 });
-    await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => undefined);
-    try {
-      await page.waitForLoadState('networkidle', { timeout: 4_000 });
-    } catch {
-    }
+    const page = newTab ? (await browserManager.openInNewTab(sid)).page : await browserManager.getActivePage(sid);
+    await raceWithAbort(page.goto(url.toString(), { waitUntil: 'commit', timeout: 30_000 }), tracker.signal);
+    await raceWithAbort(page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => undefined), tracker.signal);
+    await raceWithAbort(page.waitForTimeout(150), tracker.signal);
     const title = await page.title().catch(() => '');
-    browserManager.logAction('open', `${page.url()}${newTab ? ' (new tab)' : ''} — "${title.slice(0, 60)}"`);
-    const panelQuery = ctx.sessionId ? `?session=${encodeURIComponent(ctx.sessionId)}` : '';
+    browserManager.logAction('open', `${page.url()}${newTab ? ' (new tab)' : ''} — "${title.slice(0, 60)}"`, sid);
+    const panelQuery = sid ? `?session=${encodeURIComponent(sid)}` : '';
     return {
       ok: true,
       isError: false,
@@ -100,29 +93,34 @@ export async function browserOpenTool(
       text: `Opened ${page.url()} — title: "${title || '(untitled)'}"`,
     };
   } catch (error) {
+    if (tracker.signal.aborted && browserManager.isTakeover(sid)) {
+      return takeoverRefusal(sid);
+    }
     return {
       ok: false,
       isError: true,
       text: `browser_open failed: ${error instanceof Error ? error.message : String(error)}`,
     };
+  } finally {
+    tracker.dispose();
   }
 }
 
 
 export async function browserReadTool(
   args: Record<string, unknown>,
-  _ctx: AgentToolContext,
+  ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  void _ctx;
+  const sid = ctx.sessionId;
   try {
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const selector = str(args, 'selector');
     const frameSel = str(args, 'frame');
     // form previews and devtools-style pages DO echo them back; belt and
     const maskSensitive = args.maskSensitive === undefined ? true : args.maskSensitive === true;
 
     const cacheKey = `read:${selector || 'body'}:${maskSensitive ? 'm' : 'r'}`;
-    const cached = browserManager.getCachedDom<string>(cacheKey, page.url());
+    const cached = browserManager.getCachedDom<string>(cacheKey, page.url(), sid);
     if (cached !== undefined) {
       return { ok: true, isError: false, text: truncateOutput(cached) };
     }
@@ -166,7 +164,7 @@ export async function browserReadTool(
           : 'Page body has no visible text yet — it may still be loading (call browser_wait first).',
       };
     }
-    browserManager.putCachedDom(cacheKey, page.url(), trimmed);
+    browserManager.putCachedDom(cacheKey, page.url(), trimmed, sid);
     return { ok: true, isError: false, text: truncateOutput(trimmed) };
   } catch (error) {
     return {
@@ -182,6 +180,7 @@ export async function browserScreenshotTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
+  const sid = ctx.sessionId;
   const meta = ctx.modelId ? lookupModelMetadata(ctx.modelId) : undefined;
   if (meta && !meta.imageIn) {
     return {
@@ -195,7 +194,7 @@ export async function browserScreenshotTool(
     };
   }
   try {
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const fullPage = bool(args, 'fullPage');
     const selector = str(args, 'selector');
 
@@ -231,11 +230,12 @@ const WAIT_STATES = new Set(['attached', 'detached', 'hidden', 'visible']);
 
 export async function browserWaitTool(
   args: Record<string, unknown>,
-  _ctx: AgentToolContext,
+  ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  void _ctx;
+  const sid = ctx.sessionId;
+  const tracker = browserManager.trackAgentAbort(sid, ctx.signal);
   try {
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const timeoutMs = Math.min(Math.max(num(args, 'timeoutMs') ?? 15_000, 1_000), 60_000);
     const selector = str(args, 'selector');
     const loadState = str(args, 'loadState');
@@ -248,28 +248,34 @@ export async function browserWaitTool(
       const predicate = urlPattern.startsWith('/') && urlPattern.endsWith('/') && urlPattern.length > 2
         ? new RegExp(urlPattern.slice(1, -1))
         : new RegExp(`^${urlPattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\\*/g, '[\\s\\S]*')}$`);
-      await page.waitForURL(predicate, { timeout: timeoutMs });
+      await raceWithAbort(page.waitForURL(predicate, { timeout: timeoutMs }), tracker.signal);
       return { ok: true, isError: false, text: `URL now matches: ${page.url()}` };
     }
     if (textWanted) {
-      await page.waitForFunction(
-        ((t: string) => ((globalThis as unknown as { document?: { body?: { innerText: string } } }).document?.body?.innerText ?? '').includes(t)) as unknown as () => boolean,
-        textWanted,
-        { timeout: timeoutMs },
+      await raceWithAbort(
+        page.waitForFunction(
+          ((t: string) => ((globalThis as unknown as { document?: { body?: { innerText: string } } }).document?.body?.innerText ?? '').includes(t)) as unknown as () => boolean,
+          textWanted,
+          { timeout: timeoutMs },
+        ),
+        tracker.signal,
       );
       return { ok: true, isError: false, text: `Text "${textWanted.slice(0, 80)}" appeared.` };
     }
     if (fnSource) {
-      await page.waitForFunction(`(() => { const fn = ${fnSource}; return typeof fn === 'function' ? fn() : Boolean(fn); })()`, { timeout: timeoutMs } as { timeout: number });
+      await raceWithAbort(
+        page.waitForFunction(`(() => { const fn = ${fnSource}; return typeof fn === 'function' ? fn() : Boolean(fn); })()`, { timeout: timeoutMs } as { timeout: number }),
+        tracker.signal,
+      );
       return { ok: true, isError: false, text: 'Function predicate returned truthy.' };
     }
     if (selector) {
       const state = WAIT_STATES.has(str(args, 'state')) ? str(args, 'state') : 'visible';
       if (frameSel) {
-        await page.frameLocator(frameSel).locator(selector).waitFor({ state: state as 'visible', timeout: timeoutMs });
+        await raceWithAbort(page.frameLocator(frameSel).locator(selector).waitFor({ state: state as 'visible', timeout: timeoutMs }), tracker.signal);
         return { ok: true, isError: false, text: `Selector "${selector}" is ${state} inside frame "${frameSel}".` };
       }
-      await page.waitForSelector(selector, { state: state as 'visible', timeout: timeoutMs });
+      await raceWithAbort(page.waitForSelector(selector, { state: state as 'visible', timeout: timeoutMs }), tracker.signal);
       return { ok: true, isError: false, text: `Selector "${selector}" is ${state}.` };
     }
     if (loadState) {
@@ -281,7 +287,7 @@ export async function browserWaitTool(
           text: `loadState must be one of commit | domcontentloaded | load | networkidle (got "${loadState}").`,
         };
       }
-      await page.waitForLoadState(loadState as 'load', { timeout: timeoutMs });
+      await raceWithAbort(page.waitForLoadState(loadState as 'load', { timeout: timeoutMs }), tracker.signal);
       return { ok: true, isError: false, text: `Load state "${loadState}" reached.` };
     }
     return {
@@ -291,22 +297,28 @@ export async function browserWaitTool(
       text: 'browser_wait needs one of: selector | loadState | url | text | function.',
     };
   } catch (error) {
+    if (tracker.signal.aborted && browserManager.isTakeover(sid)) {
+      return takeoverRefusal(sid);
+    }
     return {
       ok: false,
       isError: true,
       text: `browser_wait failed: ${error instanceof Error ? error.message : String(error)}`,
     };
+  } finally {
+    tracker.dispose();
   }
 }
 
 
 export async function browserEvalTool(
   args: Record<string, unknown>,
-  _ctx: AgentToolContext,
+  ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  void _ctx;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   try {
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const script = str(args, 'script');
     const frameSel = str(args, 'frame');
     if (!script.trim()) {
@@ -322,7 +334,7 @@ export async function browserEvalTool(
     } else {
       result = await page.evaluate(script);
     }
-    browserManager.invalidateDomCache();
+    browserManager.invalidateDomCache(sid);
     return {
       ok: true,
       isError: false,
@@ -342,10 +354,10 @@ export async function browserUrlTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  void ctx;
+  const sid = ctx.sessionId;
   void args;
   try {
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const url = page.url();
     const title = await page.title().catch(() => '');
     return { ok: true, isError: false, text: `${url}\nTitle: ${title || '(untitled)'}` };
@@ -363,10 +375,10 @@ export async function browserClickTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  if (browserManager.isTakeover()) return takeoverRefusal();
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   try {
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const selector = str(args, 'selector');
     const hasCoords = args.x !== undefined || args.y !== undefined;
 
@@ -376,10 +388,10 @@ export async function browserClickTool(
       const buttonArg = str(args, 'button');
       const button = buttonArg === 'right' || buttonArg === 'middle' ? buttonArg : 'left';
       const clickCount = Math.max(1, Math.min(3, num(args, 'clickCount') ?? 1));
-      await browserManager.moveCursor(x, y);
+      await browserManager.moveCursor(x, y, 1, sid);
       await page.mouse.click(x, y, { button, clickCount });
-      browserManager.broadcastClick(x, y);
-      browserManager.logAction('click', `(${Math.round(x)}, ${Math.round(y)})${button !== 'left' ? ` [${button}]` : ''}${clickCount !== 1 ? ` ×${clickCount}` : ''}${selector ? ` on ${selector}` : ''}`);
+      browserManager.broadcastClick(x, y, sid);
+      browserManager.logAction('click', `(${Math.round(x)}, ${Math.round(y)})${button !== 'left' ? ` [${button}]` : ''}${clickCount !== 1 ? ` ×${clickCount}` : ''}${selector ? ` on ${selector}` : ''}`, sid);
       return {
         ok: true,
         isError: false,
@@ -390,7 +402,7 @@ export async function browserClickTool(
       if (str(args, 'frame')) {
         const frameSel = str(args, 'frame') as string;
         await page.frameLocator(frameSel).locator(selector).click({ timeout: 15_000 });
-        browserManager.logAction('click', `${selector} in frame "${frameSel}"`);
+        browserManager.logAction('click', `${selector} in frame "${frameSel}"`, sid);
         return { ok: true, isError: false, text: `Clicked "${selector}" inside frame "${frameSel}".` };
       }
       await page.click(selector, { timeout: 15_000 });
@@ -405,8 +417,8 @@ export async function browserClickTool(
           selector,
         );
         if (box) {
-          browserManager.moveCursor(box.x, box.y).catch(() => undefined);
-          browserManager.broadcastClick(box.x, box.y);
+          browserManager.moveCursor(box.x, box.y, 1, sid).catch(() => undefined);
+          browserManager.broadcastClick(box.x, box.y, sid);
         }
       } catch {
       }
@@ -432,10 +444,10 @@ export async function browserTypeTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  if (browserManager.isTakeover()) return takeoverRefusal();
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   try {
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const text = str(args, 'text');
     if (text.length === 0 && !bool(args, 'pressEnter')) {
       return { ok: false, isError: true, errorCode: 'schema_error', text: 'browser_type needs a "text" (or pressEnter: true).' };
@@ -447,13 +459,13 @@ export async function browserTypeTool(
     if (selector) {
       await page.fill(selector, text, { timeout: 15_000 });
       if (pressEnter) await page.keyboard.press('Enter');
-      browserManager.logAction('type', `${text.length} char(s) into "${selector}"${pressEnter ? ' + Enter' : ''}`);
+      browserManager.logAction('type', `${text.length} char(s) into "${selector}"${pressEnter ? ' + Enter' : ''}`, sid);
       return { ok: true, isError: false, text: `Typed ${text.length} char(s) into "${selector}"${pressEnter ? ' + Enter' : ''}.` };
     }
 
     await page.keyboard.type(text, { delay });
     if (pressEnter) await page.keyboard.press('Enter');
-    browserManager.logAction('type', `${text.length} char(s) at cursor${pressEnter ? ' + Enter' : ''}`);
+    browserManager.logAction('type', `${text.length} char(s) at cursor${pressEnter ? ' + Enter' : ''}`, sid);
     return { ok: true, isError: false, text: `Typed ${text.length} char(s) at the cursor position${pressEnter ? ' + Enter' : ''}.` };
   } catch (error) {
     return {
@@ -469,9 +481,8 @@ export async function browserCursorMoveTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  if (browserManager.isTakeover()) return takeoverRefusal();
-  void ctx;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   try {
     const x = num(args, 'x');
     const y = num(args, 'y');
@@ -480,7 +491,7 @@ export async function browserCursorMoveTool(
     }
     const stepsArg = num(args, 'steps');
     const stepCount = stepsArg !== undefined ? Math.max(1, Math.min(100, Math.round(stepsArg))) : 1;
-    const cursor = await browserManager.moveCursor(x, y, stepCount);
+    const cursor = await browserManager.moveCursor(x, y, stepCount, sid);
     return {
       ok: true,
       isError: false,
@@ -500,10 +511,10 @@ export async function browserScrollTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  if (browserManager.isTakeover()) return takeoverRefusal();
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   try {
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const direction = str(args, 'direction') || 'down';
     const amount = Math.min(Math.max(num(args, 'amount') ?? 900, 50), 5000);
     const deltaY = direction === 'up' ? -amount : direction === 'down' ? amount : 0;
@@ -518,7 +529,7 @@ export async function browserScrollTool(
     }
 
     await page.mouse.wheel(deltaX, deltaY);
-    browserManager.broadcast({ type: 'scrolled', deltaX, deltaY });
+    browserManager.broadcast({ type: 'scrolled', deltaX, deltaY }, sid);
 
     await page.evaluate('(() => { delete globalThis.__morikoScrollSettle; return true; })()').catch(() => undefined);
     await page
@@ -552,13 +563,13 @@ export async function browserScrollTool(
 }
 
 
-export function browserStatusText(): string {
-  const cursor = browserManager.getCursor();
-  const live = browserManager.isLive();
-  const vp = browserManager.getViewport();
+export function browserStatusText(sessionId?: string): string {
+  const cursor = browserManager.getCursor(sessionId);
+  const live = browserManager.isLive(sessionId);
+  const vp = browserManager.getViewport(sessionId);
   return [
     `Browser live: ${live ? 'yes' : 'no (launched on first use)'}`,
-    `Mode: ${browserManager.isTakeover() ? 'TAKEOVER (user driving)' : 'agent'}`,
+    `Mode: ${browserManager.isTakeover(sessionId) ? 'TAKEOVER (user driving)' : 'agent'}`,
     `Cursor: (${Math.round(cursor.x)}, ${Math.round(cursor.y)}) ${cursor.visible ? 'visible' : 'hidden'}`,
     `Viewport: ${vp.width}×${vp.height}`,
   ].join('\n');
@@ -569,12 +580,12 @@ export async function browserHandoverTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  if (browserManager.isTakeover()) {
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) {
     return { ok: true, isError: false, text: 'Takeover is already active — the user is already in control.' };
   }
-  browserManager.startTakeover(`agent:${ctx.sessionId ?? 'unknown'}`);
   const message = str(args, 'message');
+  browserManager.startTakeover(`agent:${sid ?? 'unknown'}`, message, sid);
   return {
     ok: true,
     isError: false,
@@ -589,12 +600,12 @@ export async function browserReleaseTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
   void args;
-  if (!browserManager.isTakeover()) {
+  const sid = ctx.sessionId;
+  if (!browserManager.isTakeover(sid)) {
     return { ok: true, isError: false, text: 'No takeover was active — you already have control.' };
   }
-  browserManager.endTakeover();
+  browserManager.endTakeover(sid);
   return {
     ok: true,
     isError: false,
@@ -607,10 +618,10 @@ export async function browserTabsTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
   void args;
+  const sid = ctx.sessionId;
   try {
-    const tabs = await browserManager.listTabs();
+    const tabs = await browserManager.listTabs(sid);
     if (tabs.length === 0) {
       return { ok: true, isError: false, text: 'No open tabs — call browser_open to start one.' };
     }
@@ -636,7 +647,8 @@ export async function browserSwitchTabTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   try {
     const tabId = str(args, 'tabId');
     if (!tabId) {
@@ -647,8 +659,8 @@ export async function browserSwitchTabTool(
         text: 'browser_switch_tab needs a "tabId" — list them with browser_tabs first.',
       };
     }
-    await browserManager.switchTo(tabId);
-    const page = await browserManager.getActivePage();
+    await browserManager.switchTo(tabId, sid);
+    const page = await browserManager.getActivePage(sid);
     const title = await page.title().catch(() => '');
     return {
       ok: true,
@@ -668,16 +680,17 @@ export async function browserCloseTabTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   try {
     const tabId = str(args, 'tabId');
-    const tabs = await browserManager.listTabs();
+    const tabs = await browserManager.listTabs(sid);
     if (tabs.length === 0) {
       return { ok: true, isError: false, text: 'No tabs are open.' };
     }
     const target = tabId || tabs.find((t) => t.active)?.id || tabs[0].id;
-    await browserManager.closePage(target);
-    const remaining = await browserManager.listTabs();
+    await browserManager.closePage(target, sid);
+    const remaining = await browserManager.listTabs(sid);
     return {
       ok: true,
       isError: false,
@@ -697,7 +710,8 @@ export async function browserClearDataTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   try {
     const cookiesWanted = args.cookies === undefined ? true : args.cookies === true;
     const storageWanted = args.storage === undefined ? true : args.storage === true;
@@ -706,9 +720,38 @@ export async function browserClearDataTool(
       return { ok: false, isError: true, text: 'browser_clear_data: nothing requested — pass cookies/storage/cache (default all true).' };
     }
 
-    const session = await browserManager.ensureContext();
-    const page = await browserManager.getActivePage();
-    const origin = new URL(page.url()).origin;
+    const session = await browserManager.ensureContext(sid);
+    const page = await browserManager.getActivePage(sid);
+    const pageUrl = page.url();
+    const targets = [
+      cookiesWanted ? 'cookies' : '',
+      storageWanted ? 'localStorage/sessionStorage' : '',
+      cacheWanted ? 'HTTP cache' : '',
+    ].filter(Boolean).join(', ');
+    const { granted, reason } = await requestApproval(
+      {
+        tool: 'browser_clear_data',
+        paths: [],
+        root: approvalRoot(ctx),
+        intent: 'write',
+        command: `Clear browser ${targets}${pageUrl ? ` (${pageUrl})` : ''}`,
+      },
+      ctx,
+    );
+    if (!granted) {
+      return {
+        ok: false,
+        isError: true,
+        errorCode: 'approval_denied',
+        text: `DENIED: user did not approve clearing browser data.${reason ? ` Reason: "${reason}".` : ''}`,
+      };
+    }
+
+    let origin = pageUrl;
+    try {
+      origin = new URL(pageUrl).origin;
+    } catch {
+    }
     const cleared: string[] = [];
 
     if (cookiesWanted) {
@@ -756,18 +799,13 @@ function parseButton(args: Record<string, unknown>): 'left' | 'right' | 'middle'
   return b === 'right' || b === 'middle' ? b : 'left';
 }
 
-/**
- * agent__browser_drag — interpolated drag: down → N× move → up.
- * Draws smooth lines on canvas apps (steps interpolate the stroke), drags
- * sliders, rearranges drag-drop lists. steps=24 default = smooth visible line.
- */
+
 export async function browserDragTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  if (browserManager.isTakeover()) return takeoverRefusal();
-  void ctx;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   try {
     const fromX = num(args, 'fromX');
     const fromY = num(args, 'fromY');
@@ -781,7 +819,7 @@ export async function browserDragTool(
         text: 'browser_drag needs fromX, fromY, toX, toY (viewport CSS px, 0,0 = top-left).',
       };
     }
-    if (browserManager.isMouseDown()) {
+    if (browserManager.isMouseDown(sid)) {
       return {
         ok: false,
         isError: true,
@@ -792,8 +830,8 @@ export async function browserDragTool(
     const steps = Math.max(1, Math.min(200, num(args, 'steps') ?? 24));
     const delayMs = Math.max(0, Math.min(100, num(args, 'delayMs') ?? 8));
     const button = parseButton(args);
-    await browserManager.performDrag(fromX, fromY, toX, toY, steps, button, delayMs);
-    browserManager.logAction('drag', `(${Math.round(fromX)}, ${Math.round(fromY)}) → (${Math.round(toX)}, ${Math.round(toY)}) ×${steps}`);
+    await browserManager.performDrag(fromX, fromY, toX, toY, steps, button, delayMs, sid);
+    browserManager.logAction('drag', `(${Math.round(fromX)}, ${Math.round(fromY)}) → (${Math.round(toX)}, ${Math.round(toY)}) ×${steps}`, sid);
     return {
       ok: true,
       isError: false,
@@ -808,14 +846,13 @@ export async function browserDragTool(
   }
 }
 
-/** agent__browser_mouse_down — press-and-hold (start of a multi-segment stroke). */
+
 export async function browserMouseDownTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  if (browserManager.isTakeover()) return takeoverRefusal();
-  void ctx;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   try {
     const x = num(args, 'x');
     const y = num(args, 'y');
@@ -823,7 +860,7 @@ export async function browserMouseDownTool(
       return { ok: false, isError: true, errorCode: 'schema_error', text: 'browser_mouse_down needs both "x" and "y".' };
     }
     const button = parseButton(args);
-    await browserManager.performMouseDown(x, y, button);
+    await browserManager.performMouseDown(x, y, button, sid);
     return {
       ok: true,
       isError: false,
@@ -838,17 +875,16 @@ export async function browserMouseDownTool(
   }
 }
 
-/** agent__browser_mouse_up — release the held button (ends a stroke). */
+
 export async function browserMouseUpTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  if (browserManager.isTakeover()) return takeoverRefusal();
-  void ctx;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   try {
     const button = parseButton(args);
-    await browserManager.performMouseUp(num(args, 'x'), num(args, 'y'), button);
+    await browserManager.performMouseUp(num(args, 'x'), num(args, 'y'), button, sid);
     return {
       ok: true,
       isError: false,
@@ -863,16 +899,15 @@ export async function browserMouseUpTool(
   }
 }
 
-/** agent__browser_hover — move over a selector/point: :hover CSS + mouseenter JS fire. */
+
 export async function browserHoverTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  if (browserManager.isTakeover()) return takeoverRefusal();
-  void ctx;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   try {
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const selector = str(args, 'selector');
     const x = num(args, 'x');
     const y = num(args, 'y');
@@ -888,13 +923,13 @@ export async function browserHoverTool(
           }) as unknown as (sel: string) => { x: number; y: number } | null,
           selector,
         );
-        if (box) await browserManager.moveCursor(box.x, box.y);
+        if (box) await browserManager.moveCursor(box.x, box.y, 1, sid);
       } catch {
       }
       return { ok: true, isError: false, text: `Hovered "${selector}" — hover states and mouseenter handlers have fired.` };
     }
     if (x !== undefined && y !== undefined) {
-      await browserManager.moveCursor(x, y);
+      await browserManager.moveCursor(x, y, 1, sid);
       return { ok: true, isError: false, text: `Hovering (${Math.round(x)}, ${Math.round(y)}).` };
     }
     return {
@@ -912,25 +947,20 @@ export async function browserHoverTool(
   }
 }
 
-/**
- * agent__browser_press — key press / chord / hold. 'Escape', 'Tab', 'Control+a',
- * 'Meta+s', 'ArrowDown' (Playwright key names; chord = modifier+key). holdMs
- * presses-and-holds (games, long-press UIs).
- */
+
 export async function browserPressTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  if (browserManager.isTakeover()) return takeoverRefusal();
-  void ctx;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   try {
     const key = str(args, 'key');
     if (!key) {
       return { ok: false, isError: true, errorCode: 'schema_error', text: 'browser_press needs "key" (e.g. Escape, Tab, Control+a, ArrowDown).' };
     }
     const holdMs = Math.max(0, Math.min(5000, num(args, 'holdMs') ?? 0));
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     if (holdMs > 0) {
       await page.keyboard.down(key);
       await new Promise((r) => setTimeout(r, holdMs));
@@ -949,90 +979,98 @@ export async function browserPressTool(
 }
 
 
-/** agent__browser_back — history back (page.goBack). */
+
 export async function browserBackTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  if (browserManager.isTakeover()) return takeoverRefusal();
-  void ctx;
   void args;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
+  const tracker = browserManager.trackAgentAbort(sid, ctx.signal);
   try {
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const url = page.url();
-    await page.goBack({ waitUntil: 'commit', timeout: 30_000 });
+    await raceWithAbort(page.goBack({ waitUntil: 'commit', timeout: 30_000 }), tracker.signal);
     return { ok: true, isError: false, text: `Navigated back: ${url} → ${page.url()}` };
   } catch (error) {
+    if (tracker.signal.aborted && browserManager.isTakeover(sid)) return takeoverRefusal(sid);
     return {
       ok: false,
       isError: true,
       text: `browser_back failed (no history entry?): ${error instanceof Error ? error.message : String(error)}`,
     };
+  } finally {
+    tracker.dispose();
   }
 }
 
-/** agent__browser_forward — history forward (page.goForward). */
+
 export async function browserForwardTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  if (browserManager.isTakeover()) return takeoverRefusal();
-  void ctx;
   void args;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
+  const tracker = browserManager.trackAgentAbort(sid, ctx.signal);
   try {
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const url = page.url();
-    await page.goForward({ waitUntil: 'commit', timeout: 30_000 });
+    await raceWithAbort(page.goForward({ waitUntil: 'commit', timeout: 30_000 }), tracker.signal);
     return { ok: true, isError: false, text: `Navigated forward: ${url} → ${page.url()}` };
   } catch (error) {
+    if (tracker.signal.aborted && browserManager.isTakeover(sid)) return takeoverRefusal(sid);
     return {
       ok: false,
       isError: true,
       text: `browser_forward failed (no forward entry?): ${error instanceof Error ? error.message : String(error)}`,
     };
+  } finally {
+    tracker.dispose();
   }
 }
 
-/** agent__browser_reload — reload the active page. */
+
 export async function browserReloadTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  if (browserManager.isTakeover()) return takeoverRefusal();
-  void ctx;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
+  const tracker = browserManager.trackAgentAbort(sid, ctx.signal);
   try {
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const ignoreCache = bool(args, 'ignoreCache') === true;
-    await page.reload({ waitUntil: 'commit', timeout: 30_000 });
-    browserManager.logAction('reload', page.url());
+    await raceWithAbort(page.reload({ waitUntil: 'commit', timeout: 30_000 }), tracker.signal);
+    browserManager.logAction('reload', page.url(), sid);
     return { ok: true, isError: false, text: `Reloaded ${page.url()}${ignoreCache ? ' (cache kept — hard-reload needs CDP Page.reload with ignoreCache)' : ''}.` };
   } catch (error) {
+    if (tracker.signal.aborted && browserManager.isTakeover(sid)) return takeoverRefusal(sid);
     return {
       ok: false,
       isError: true,
       text: `browser_reload failed: ${error instanceof Error ? error.message : String(error)}`,
     };
+  } finally {
+    tracker.dispose();
   }
 }
 
 
-/** agent__browser_inspect — "what is at (x,y)?" — reverse of a coordinate click. */
+
 export async function browserInspectTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
+  const sid = ctx.sessionId;
   try {
     const x = num(args, 'x');
     const y = num(args, 'y');
     if (x === undefined || y === undefined) {
       return { ok: false, isError: true, errorCode: 'schema_error', text: 'browser_inspect needs both "x" and "y" (viewport CSS px).' };
     }
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const info = (await page.evaluate(
       `(() => {
         const el = document.elementFromPoint(${Number(x)}, ${Number(y)});
@@ -1063,15 +1101,14 @@ export async function browserInspectTool(
   }
 }
 
-/** agent__browser_semantic — structured list of interactive elements + headings. */
+
 export async function browserSemanticTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
+  const sid = ctx.sessionId;
   try {
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const selector = str(args, 'selector') || undefined;
     const maxDepth = Math.max(1, Math.min(30, num(args, 'maxDepth') ?? 8));
     const maxElements = Math.max(1, Math.min(500, num(args, 'maxElements') ?? 200));
@@ -1124,15 +1161,15 @@ export async function browserSemanticTool(
         return { selector: ${JSON.stringify(selector)}, count: Math.min(items.length, ${maxElements}), truncated: Math.max(0, items.length - ${maxElements}), items: items.slice(0, ${maxElements}) };
       })()`,
     )) as unknown as { error?: string; selector: string; count: number; truncated: number; items: Array<Record<string, unknown>> };
+    if (out.error) {
+      return { ok: false, isError: true, text: `browser_semantic: ${out.error}` };
+    }
     if (secrets.length) {
       let serialized = JSON.stringify(out);
       for (const secret of secrets) {
         serialized = serialized.split(secret).join('••••••••');
       }
-      return { ok: true, isError: false, text: JSON.parse(serialized) && serialized } as unknown as HarnessToolResult;
-    }
-    if (out.error) {
-      return { ok: false, isError: true, text: `browser_semantic: ${out.error}` };
+      return { ok: true, isError: false, text: serialized };
     }
     const suffix = out.truncated > 0 ? `\n… ${out.truncated} more (raise maxElements or narrow the selector)` : '';
     return { ok: true, isError: false, text: JSON.stringify(out, null, 1) + suffix };
@@ -1141,15 +1178,14 @@ export async function browserSemanticTool(
   }
 }
 
-/** agent__browser_form — structured form comprehension (fields, labels, options). */
+
 export async function browserFormTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
+  const sid = ctx.sessionId;
   try {
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const selector = str(args, 'selector') || undefined;
     const out = (await page.evaluate(
       `(() => {
@@ -1200,19 +1236,14 @@ export async function browserFormTool(
   }
 }
 
-/**
- * agent__browser_read_article — readability extraction: strips nav/footer/ads
- * and returns the MAIN content as clean markdown-ish text. Heuristic: prefer
- * <article>, [role=main], main, or score blocks by text/link density.
- */
+
 export async function browserReadArticleTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
+  const sid = ctx.sessionId;
   try {
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const selector = str(args, 'selector');
     const out = (await page.evaluate(
       `(() => {
@@ -1278,19 +1309,19 @@ export async function browserReadArticleTool(
   }
 }
 
-/** agent__browser_watch — snapshot an element's state (call BEFORE the action). */
+
 export async function browserWatchTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
+  const sid = ctx.sessionId;
   try {
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const selector = str(args, 'selector');
     if (!selector) {
       return { ok: false, isError: true, errorCode: 'schema_error', text: 'browser_watch needs a "selector" to monitor.' };
     }
+    await browserManager.enableWatchObserver(page, selector);
     const snapshot = (await page.evaluate(
       `(() => {
         const el = document.querySelector(${JSON.stringify(selector)});
@@ -1299,14 +1330,14 @@ export async function browserWatchTool(
       })()`,
     )) as unknown as { html: string; text: string; cls: string; exists: boolean } | null;
     if (snapshot) {
-      browserManager.setWatchSnapshot(selector, snapshot);
+      browserManager.setWatchSnapshot(selector, snapshot, sid);
       return {
         ok: true,
         isError: false,
         text: `Watching "${selector}" — snapshot stored (${snapshot.text.length} chars of text). Perform your action, then call browser_watch_result to see what changed.`,
       };
     }
-    browserManager.setWatchSnapshot(selector, null);
+    browserManager.setWatchSnapshot(selector, null, sid);
     return {
       ok: true,
       isError: false,
@@ -1317,22 +1348,20 @@ export async function browserWatchTool(
   }
 }
 
-/** agent__browser_watch_result — diff the current state against the snapshot. */
+
 export async function browserWatchResultTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
-  void args;
+  const sid = ctx.sessionId;
   try {
-    const watched = browserManager.listWatched();
+    const watched = browserManager.listWatched(sid);
     const selector = str(args, 'selector') || watched?.selector;
     const before = watched?.snapshot;
     if (selector === undefined) {
       return { ok: false, isError: true, text: 'No watch snapshot — call browser_watch({ selector }) first, then act, then this.' };
     }
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const current = (await page.evaluate(
       `(() => {
         const el = document.querySelector(${JSON.stringify(selector)});
@@ -1340,6 +1369,7 @@ export async function browserWatchResultTool(
         return { html: el.innerHTML.slice(0, 4000), text: (el.textContent || '').trim().slice(0, 2000), cls: el.className, exists: true };
       })()`,
     )) as unknown as { html: string; text: string; cls: string; exists: boolean } | null;
+    await browserManager.disableWatchObserver(page).catch(() => undefined);
     const changed: Record<string, unknown> = { selector };
     let any = false;
     if (!before && current) { changed.elementAppeared = true; any = true; }
@@ -1360,7 +1390,7 @@ export async function browserWatchResultTool(
         any = true;
       }
     }
-    browserManager.setWatchSnapshot(selector, undefined);
+    browserManager.setWatchSnapshot(selector, undefined, sid);
     if (!any) {
       return { ok: true, isError: false, text: `No change in "${String(selector)}" since the snapshot.` };
     }
@@ -1370,16 +1400,15 @@ export async function browserWatchResultTool(
   }
 }
 
-/** agent__browser_metadata — meta tags, OpenGraph, JSON-LD, canonical, favicon. */
+
 export async function browserMetadataTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
   void args;
+  const sid = ctx.sessionId;
   try {
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const out = (await page.evaluate(
       `(() => {
         const meta = {};
@@ -1410,13 +1439,13 @@ export async function browserMetadataTool(
 }
 
 
-/** agent__browser_block_requests — abort matching requests (speed + privacy). */
+
 export async function browserBlockRequestsTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   try {
     const patterns = Array.isArray(args.patterns)
       ? args.patterns.filter((p): p is string => typeof p === 'string' && p.trim().length > 0)
@@ -1424,11 +1453,11 @@ export async function browserBlockRequestsTool(
     if (!patterns.length) {
       return { ok: false, isError: true, errorCode: 'schema_error', text: 'browser_block_requests needs "patterns" — URL glob(s) to abort, e.g. ["**/*.woff2", "**/google-analytics.com/**"].' };
     }
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     for (const pattern of patterns) {
       await page.route(pattern, (route) => void route.abort());
     }
-    browserManager.logAction('block_requests', patterns.join(', '));
+    browserManager.logAction('block_requests', patterns.join(', '), sid);
     return {
       ok: true,
       isError: false,
@@ -1442,34 +1471,33 @@ export async function browserBlockRequestsTool(
   }
 }
 
-/** agent__browser_unblock_requests — clears every route registered on the page. */
+
 export async function browserUnblockRequestsTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
   void args;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   try {
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     await page.unrouteAll({ behavior: 'ignoreErrors' });
-    browserManager.logAction('unblock_requests', 'all patterns cleared');
+    browserManager.logAction('unblock_requests', 'all patterns cleared', sid);
     return { ok: true, isError: false, text: 'All request blocks cleared — pages load fully again.' };
   } catch (error) {
     return { ok: false, isError: true, text: `browser_unblock_requests failed: ${error instanceof Error ? error.message : String(error)}` };
   }
 }
 
-/** agent__browser_audit_log — the session's browser action trail (oldest first). */
+
 export async function browserAuditLogTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
   void args;
+  const sid = ctx.sessionId;
   try {
-    const log = browserManager.getAuditLog();
+    const log = browserManager.getAuditLog(sid);
     if (!log.length) {
       return { ok: true, isError: false, text: 'Audit log is empty — no browser actions recorded yet this session.' };
     }
@@ -1487,17 +1515,12 @@ export async function browserAuditLogTool(
   }
 }
 
-/**
- * agent__browser_request_approval — ask the USER before a destructive browser
- * action ("click Delete Account", "submit the payment form"). Uses the same
- * permission pipeline as out-of-workspace file ops: the request rides the
- * stream to the UI, the user approves/denies, timeout = denied (fail closed).
- */
+
 export async function browserRequestApprovalTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
+  const sid = ctx.sessionId;
   try {
     const action = str(args, 'action');
     if (!action) {
@@ -1505,45 +1528,41 @@ export async function browserRequestApprovalTool(
     }
     let pageUrl = '';
     try {
-      pageUrl = (await browserManager.getActivePage()).url();
+      pageUrl = (await browserManager.getActivePage(sid)).url();
     } catch {
     }
-    browserManager.logAction('approval_requested', action);
-    const granted = await requestApproval(
+    browserManager.logAction('approval_requested', action, sid);
+    const { granted, reason } = await requestApproval(
       {
         tool: 'browser_action',
         paths: [],
-        root: requireWorkspace(ctx).root,
+        root: approvalRoot(ctx),
         command: `${action}${pageUrl ? ` — on ${pageUrl}` : ''}`,
       },
       ctx,
     );
     if (granted) {
-      browserManager.logAction('approval_granted', action);
+      browserManager.logAction('approval_granted', action, sid);
       return { ok: true, isError: false, text: `APPROVED: the user consented to "${action}". Proceed with the action now.` };
     }
-    browserManager.logAction('approval_denied', action);
+    browserManager.logAction('approval_denied', action, sid);
     return {
       ok: false,
       isError: true,
       errorCode: 'approval_denied',
-      text: `DENIED: the user did not approve "${action}". Do NOT perform it — ask what they would like instead.`,
+      text: `DENIED: the user did not approve "${action}".${reason ? ` Their reason: "${reason}".` : ''} Do NOT perform it — ask what they would like instead.`,
     };
   } catch (error) {
     return { ok: false, isError: true, text: `browser_request_approval failed: ${error instanceof Error ? error.message : String(error)}` };
   }
 }
 
-/**
- * agent__browser_plan — plan-then-act: submit the numbered step list you
- * intend to run; the user approves/edits/rejects BEFORE anything executes.
- * The user sees the plan as a permission card in the UI.
- */
+
 export async function browserPlanTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
+  const sid = ctx.sessionId;
   try {
     const steps = Array.isArray(args.steps)
       ? args.steps.filter((s): s is string => typeof s === 'string' && s.trim().length > 0).slice(0, 20)
@@ -1552,26 +1571,26 @@ export async function browserPlanTool(
       return { ok: false, isError: true, errorCode: 'schema_error', text: 'browser_plan needs "steps" — the ordered list of actions you intend to take, e.g. ["Click Login","Fill email","Fill password","Click Submit"].' };
     }
     const planText = steps.map((s, i) => `${i + 1}. ${s}`).join('\n');
-    browserManager.logAction('plan_submitted', `${steps.length} step(s)`);
-    const granted = await requestApproval(
+    browserManager.logAction('plan_submitted', `${steps.length} step(s)`, sid);
+    const { granted, reason } = await requestApproval(
       {
         tool: 'browser_plan',
         paths: [],
-        root: requireWorkspace(ctx).root,
+        root: approvalRoot(ctx),
         command: planText,
       },
       ctx,
     );
     if (granted) {
-      browserManager.logAction('plan_approved', `${steps.length} step(s)`);
+      browserManager.logAction('plan_approved', `${steps.length} step(s)`, sid);
       return { ok: true, isError: false, text: `PLAN APPROVED — execute the steps in order:\n${planText}` };
     }
-    browserManager.logAction('plan_rejected', `${steps.length} step(s)`);
+    browserManager.logAction('plan_rejected', `${steps.length} step(s)`, sid);
     return {
       ok: false,
       isError: true,
       errorCode: 'plan_rejected',
-      text: `PLAN REJECTED — do not execute this plan. Ask the user what to change.\nPlan was:\n${planText}`,
+      text: `PLAN REJECTED — do not execute this plan.${reason ? ` The user's reason: "${reason}".` : ''} Ask the user what to change.\nPlan was:\n${planText}`,
     };
   } catch (error) {
     return { ok: false, isError: true, text: `browser_plan failed: ${error instanceof Error ? error.message : String(error)}` };
@@ -1580,20 +1599,15 @@ export async function browserPlanTool(
 
 // Phase 9 — agent-native innovation: self-debug, persistent scripting, visual
 
-/**
- * agent__browser_debug — the diagnostic bundle SINCE the last agent action:
- * console errors/warnings, pageerrors, HTTP 4xx/5xx, DOM mutation count, and
- * (optionally) what sits on top at a click point ("why did my click miss?").
- */
+
 export async function browserDebugTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
+  const sid = ctx.sessionId;
   try {
-    const page = await browserManager.getActivePage();
-    const diag = browserManager.getDiagnostics();
+    const page = await browserManager.getActivePage(sid);
+    const diag = browserManager.getDiagnostics(undefined, sid);
     const url = page.url();
 
     const mutations = (await page.evaluate(
@@ -1638,18 +1652,13 @@ export async function browserDebugTool(
   }
 }
 
-/**
- * agent__browser_install_script — PERSISTENT automation: the script injects on
- * EVERY matching page load (this session AND future sessions — it persists in
- * ~/.moriko/browser-scripts.json). The agent doesn't just USE the browser, it
- * PROGRAMS it. Scripts are wrapped in a matches-glob guard and a try/catch.
- */
+
 export async function browserInstallScriptTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   try {
     const name = str(args, 'name');
     const matches = str(args, 'matches');
@@ -1660,8 +1669,26 @@ export async function browserInstallScriptTool(
     if (script.length > 20_000) {
       return { ok: false, isError: true, text: `browser_install_script: script is ${script.length} chars — cap is 20,000. Keep injected automation small.` };
     }
-    await browserManager.installScript({ name, matches, script });
-    browserManager.logAction('install_script', `${name} on ${matches}`);
+    const { granted, reason } = await requestApproval(
+      {
+        tool: 'browser_install_script',
+        paths: [],
+        root: approvalRoot(ctx),
+        intent: 'write',
+        command: `Install persistent init script "${name}" matching "${matches}" (${script.length} chars)`,
+      },
+      ctx,
+    );
+    if (!granted) {
+      return {
+        ok: false,
+        isError: true,
+        errorCode: 'approval_denied',
+        text: `DENIED: user did not approve installing persistent script "${name}".${reason ? ` Reason: "${reason}".` : ''}`,
+      };
+    }
+    await browserManager.installScript({ name, matches, script }, sid);
+    browserManager.logAction('install_script', `${name} on ${matches}`, sid);
     return {
       ok: true,
       isError: false,
@@ -1675,12 +1702,11 @@ export async function browserInstallScriptTool(
   }
 }
 
-/** agent__browser_list_scripts — the persistent userscript registry. */
+
 export async function browserListScriptsTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
   void ctx;
   void args;
   try {
@@ -1695,18 +1721,18 @@ export async function browserListScriptsTool(
   }
 }
 
-/** agent__browser_remove_script — drop from the registry (active contexts keep it until relaunch). */
+
 export async function browserRemoveScriptTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   try {
     const name = str(args, 'name');
     if (!name) return { ok: false, isError: true, errorCode: 'schema_error', text: 'browser_remove_script needs "name".' };
     const removed = browserManager.removeScript(name);
-    browserManager.logAction('remove_script', name);
+    browserManager.logAction('remove_script', name, sid);
     return removed
       ? { ok: true, isError: false, text: `Script "${name}" removed from the registry — already-loaded contexts keep it until the next relaunch (addInitScript cannot be un-installed); new sessions will not load it.` }
       : { ok: false, isError: true, text: `No script named "${name}" in the registry (browser_list_scripts shows what exists).` };
@@ -1715,42 +1741,33 @@ export async function browserRemoveScriptTool(
   }
 }
 
-/**
- * agent__browser_baseline — save the current page as a PNG baseline in the
- * workspace for later visual regression diffs.
- */
+
 export async function browserBaselineTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
+  const sid = ctx.sessionId;
   try {
     const rel = str(args, 'path');
     if (!rel) return { ok: false, isError: true, errorCode: 'schema_error', text: 'browser_baseline needs "path" — a workspace-relative .png path for the baseline image.' };
     const { root, abs } = resolveBridgePath(ctx, rel);
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const buffer = await page.screenshot({ type: 'png' });
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.writeFileSync(abs, buffer);
-    browserManager.logAction('baseline', `${path.relative(root, abs)} (${buffer.length} bytes)`);
+    browserManager.logAction('baseline', `${path.relative(root, abs)} (${buffer.length} bytes)`, sid);
     return { ok: true, isError: false, text: `Baseline saved: **${path.relative(root, abs).replace(/\\/g, '/')}** (${buffer.length} bytes). Compare later with browser_visual_diff against the same path.` };
   } catch (error) {
     return { ok: false, isError: true, text: `browser_baseline failed: ${error instanceof Error ? error.message : String(error)}` };
   }
 }
 
-/**
- * agent__browser_visual_diff — screenshot now, load the baseline, pixel-compare
- * BOTH INSIDE THE BROWSER (canvas — no Node PNG dependency), return diff % +
- * a red-highlighted diff image (vision-capable models see it inline).
- */
+
 export async function browserVisualDiffTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
+  const sid = ctx.sessionId;
   try {
     const rel = str(args, 'path');
     if (!rel) return { ok: false, isError: true, errorCode: 'schema_error', text: 'browser_visual_diff needs "path" — the workspace .png baseline to compare against (browser_baseline saved it).' };
@@ -1758,7 +1775,7 @@ export async function browserVisualDiffTool(
     if (!fs.existsSync(abs)) {
       return { ok: false, isError: true, text: `Baseline "${rel}" does not exist in the workspace — save one first with browser_baseline.` };
     }
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const current = await page.screenshot({ type: 'png' });
     const baseline = fs.readFileSync(abs);
 
@@ -1792,7 +1809,7 @@ export async function browserVisualDiffTool(
       })('data:image/png;base64,${baseline.toString('base64')}', 'data:image/png;base64,${current.toString('base64')}')`,
     )) as unknown as { resized: { baseline: { w: number; h: number }; current: { w: number; h: number } } | null; diff: number; total: number; diffPng: string | null };
 
-    browserManager.logAction('visual_diff', `${path.relative(root, abs)} — ${result.resized ? 'RESIZED' : `${result.diff}/${result.total} px differ`}`);
+    browserManager.logAction('visual_diff', `${path.relative(root, abs)} — ${result.resized ? 'RESIZED' : `${result.diff}/${result.total} px differ`}`, sid);
     if (result.resized) {
       return { ok: true, isError: false, text: `Page size CHANGED since the baseline — baseline ${result.resized.baseline.w}×${result.resized.baseline.h}, current ${result.resized.current.w}×${result.resized.current.h}. Re-baseline if the new size is correct.` };
     }
@@ -1812,19 +1829,19 @@ export async function browserVisualDiffTool(
   }
 }
 
-/** agent__browser_merge_tabs — run one extractor across MULTIPLE open tabs. */
+
 export async function browserMergeTabsTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   try {
     const extract = str(args, 'extract');
     if (!extract) return { ok: false, isError: true, errorCode: 'schema_error', text: 'browser_merge_tabs needs "extract" — a JS function string applied to each tab (e.g. "(() => ({ title: document.title, price: document.querySelector(\'.price\')?.textContent }))()").' };
     const tabIds = Array.isArray(args.tabIds) ? args.tabIds.filter((t): t is string => typeof t === 'string') : undefined;
 
-    const tabs = await browserManager.listTabs();
+    const tabs = await browserManager.listTabs(sid);
     const targets = tabIds?.length ? tabs.filter((t) => tabIds.includes(t.id)) : tabs;
     if (!targets.length) return { ok: false, isError: true, text: 'No tabs to merge — open them first (browser_tabs lists what exists).' };
 
@@ -1832,7 +1849,7 @@ export async function browserMergeTabsTool(
     const errors: string[] = [];
     for (const tab of targets) {
       try {
-        const page = await browserManager.getTabPage(tab.id);
+        const page = await browserManager.getTabPage(tab.id, sid);
         const value = (await page.evaluate(`(() => { const fn = ${extract}; return typeof fn === 'function' ? fn() : fn; })()`)) as unknown;
         results.push({ tabId: tab.id, url: tab.url, ...(typeof value === 'object' && value !== null ? value as Record<string, unknown> : { value }) });
       } catch (err) {
@@ -1849,7 +1866,7 @@ export async function browserMergeTabsTool(
       savedNote = ` Merged dataset saved to **${path.relative(root, abs).replace(/\\/g, '/')}**.`;
     }
 
-    browserManager.logAction('merge_tabs', `${results.length} tab(s)${errors.length ? `, ${errors.length} failed` : ''}`);
+    browserManager.logAction('merge_tabs', `${results.length} tab(s)${errors.length ? `, ${errors.length} failed` : ''}`, sid);
     return {
       ok: results.length > 0,
       isError: results.length === 0,
@@ -1863,20 +1880,21 @@ export async function browserMergeTabsTool(
   }
 }
 
-/** agent__browser_fan_out — open N tabs, run an extractor on each, merge. */
+
 export async function browserFanOutTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
+  const tracker = browserManager.trackAgentAbort(sid, ctx.signal);
   try {
     const urls = Array.isArray(args.urls) ? args.urls.filter((u): u is string => typeof u === 'string' && u.trim().length > 0).slice(0, 10) : [];
     const extract = str(args, 'extract');
     if (!urls.length || !extract) {
       return { ok: false, isError: true, errorCode: 'schema_error', text: 'browser_fan_out needs "urls" (1-10) and "extract" (JS function string applied per tab).' };
     }
-    const session = await browserManager.ensureContext();
+    await browserManager.ensureContext(sid);
 
     const results: Array<{ url: string; ok: boolean; data?: unknown; error?: string }> = [];
     const tempPages: Array<Page> = [];
@@ -1885,11 +1903,19 @@ export async function browserFanOutTool(
         urls.map(async (rawUrl) => {
           let page: Page | null = null;
           try {
-            const url = browserManager.assertUrl(rawUrl.trim());
-            page = await session.context.newPage();
+            const blocked = checkWebAccessUrl(rawUrl.trim(), ctx, 'agent__browser_fan_out');
+            if (blocked) {
+              results.push({ url: rawUrl, ok: false, error: blocked });
+              return;
+            }
+            const url = browserManager.assertUrl(rawUrl.trim(), true, sid);
+            page = await browserManager.openEphemeralPage(sid);
             tempPages.push(page);
-            await page.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: 30_000 });
-            const value = (await page.evaluate(`(() => { const fn = ${extract}; return typeof fn === 'function' ? fn() : fn; })()`)) as unknown;
+            await raceWithAbort(page.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: 30_000 }), tracker.signal);
+            const value = await raceWithAbort(
+              page.evaluate(`(() => { const fn = ${extract}; return typeof fn === 'function' ? fn() : fn; })()`),
+              tracker.signal,
+            );
             results.push({ url: url.toString(), ok: true, data: value });
           } catch (err) {
             results.push({ url: rawUrl, ok: false, error: err instanceof Error ? err.message : String(err) });
@@ -1899,6 +1925,7 @@ export async function browserFanOutTool(
     } finally {
       for (const p of tempPages) await p.close().catch(() => undefined);
     }
+    if (tracker.signal.aborted && browserManager.isTakeover(sid)) return takeoverRefusal(sid);
     results.sort((a, b) => urls.indexOf(a.url) - urls.indexOf(b.url));
 
     let savedNote = '';
@@ -1911,34 +1938,33 @@ export async function browserFanOutTool(
     }
 
     const okCount = results.filter((r) => r.ok).length;
-    browserManager.logAction('fan_out', `${okCount}/${urls.length} url(s) extracted`);
+    browserManager.logAction('fan_out', `${okCount}/${urls.length} url(s) extracted`, sid);
     return {
       ok: okCount > 0,
       isError: okCount === 0,
       text: `Fan-out: ${okCount}/${urls.length} url(s) extracted in parallel (ephemeral tabs, already closed).${savedNote}\n${JSON.stringify(results, null, 1)}`,
     };
   } catch (error) {
+    if (tracker.signal.aborted && browserManager.isTakeover(sid)) return takeoverRefusal(sid);
     return { ok: false, isError: true, text: `browser_fan_out failed: ${error instanceof Error ? error.message : String(error)}` };
+  } finally {
+    tracker.dispose();
   }
 }
 
-/**
- * agent__browser_mark — invisible annotation memory: attach a note to an
- * element (dataset.morikoNote) and/or persist it per-URL in localStorage so a
- * future session "remembers" ("this form was already filled yesterday").
- */
+
 export async function browserMarkTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   try {
     const selector = str(args, 'selector');
     const note = str(args, 'note');
     if (!selector || !note) return { ok: false, isError: true, errorCode: 'schema_error', text: 'browser_mark needs "selector" and "note".' };
     const persistent = bool(args, 'persistent') === true;
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const applied = (await page.evaluate(
       `(() => {
         const el = document.querySelector(${JSON.stringify(selector)});
@@ -1955,23 +1981,22 @@ export async function browserMarkTool(
       })()`,
     )) as unknown as { tag: string; id?: string } | null;
     if (!applied) return { ok: false, isError: true, text: `No element matches "${selector}" — nothing marked.` };
-    browserManager.logAction('mark', `${selector}: ${note.slice(0, 60)}${persistent ? ' (persistent)' : ''}`);
+    browserManager.logAction('mark', `${selector}: ${note.slice(0, 60)}${persistent ? ' (persistent)' : ''}`, sid);
     return { ok: true, isError: false, text: `Marked ${applied.tag}${applied.id ? `#${applied.id}` : ''} — "${note.slice(0, 120)}"${persistent ? ' + persisted in localStorage for THIS url across sessions.' : ' (page-lifetime only; persistent: true survives navigation).'}` };
   } catch (error) {
     return { ok: false, isError: true, text: `browser_mark failed: ${error instanceof Error ? error.message : String(error)}` };
   }
 }
 
-/** agent__browser_marks — read every note on the page (+ persisted ones for this URL). */
+
 export async function browserMarksTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
   void args;
+  const sid = ctx.sessionId;
   try {
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const out = (await page.evaluate(
       `(() => {
         const live = [];
@@ -1998,17 +2023,13 @@ export async function browserMarksTool(
   }
 }
 
-/**
- * agent__browser_record — record the USER's takeover actions into a replayable
- * macro (~/.moriko/browser-macros/<name>.json). Start recording, let the user
- * (or agent via takeover) drive, then record:false to save.
- */
+
 export async function browserRecordTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   try {
     const name = str(args, 'name');
     const record = bool(args, 'record');
@@ -2016,36 +2037,36 @@ export async function browserRecordTool(
       return { ok: false, isError: true, errorCode: 'schema_error', text: 'browser_record needs "name" and "record" (true to start, false to stop+save).' };
     }
     if (record) {
-      if (browserManager.isRecording()) {
+      if (browserManager.isRecording(sid)) {
         return { ok: false, isError: true, text: 'Already recording — call browser_record({ name, record: false }) first to save the current macro.' };
       }
-      browserManager.startRecording(name);
-      browserManager.logAction('record_start', name);
+      browserManager.startRecording(name, sid);
+      browserManager.logAction('record_start', name, sid);
       return {
         ok: true,
         isError: false,
         text:
           `Recording macro "${name}". Actions are captured while the USER drives the panel (takeover): clicks, typing, key presses, scrolls — each with inter-action timing. ` +
-          'When done, call browser_record({ name, record: false }) to save, then browser_replay({ name }) replays it anytime.',
+          'When done, hand control back and call browser_record({ name, record: false }) to save, then browser_replay({ name }) replays it anytime.',
       };
     }
-    const saved = browserManager.stopRecording();
+    const saved = browserManager.stopRecording(sid);
     if (!saved) return { ok: false, isError: true, text: `Not recording — start with browser_record({ name: "${name}", record: true }).` };
-    browserManager.logAction('record_stop', `${name}: ${saved.steps} step(s)`);
+    browserManager.logAction('record_stop', `${name}: ${saved.steps} step(s)`, sid);
     return { ok: true, isError: false, text: `Macro "${name}" saved: ${saved.steps} step(s) → ${saved.file}. Replay with browser_replay({ name: "${name}" }).` };
   } catch (error) {
     return { ok: false, isError: true, text: `browser_record failed: ${error instanceof Error ? error.message : String(error)}` };
   }
 }
 
-/** agent__browser_replay — re-execute a saved macro's steps on the live page. */
+
 export async function browserReplayTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  if (browserManager.isTakeover()) return takeoverRefusal();
-  void ctx;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
+  const tracker = browserManager.trackAgentAbort(sid, ctx.signal);
   try {
     const name = str(args, 'name');
     if (!name) return { ok: false, isError: true, errorCode: 'schema_error', text: 'browser_replay needs "name".' };
@@ -2053,94 +2074,96 @@ export async function browserReplayTool(
     const steps = browserManager.loadMacro(name);
     if (!steps?.length) return { ok: false, isError: true, text: `No macro named "${name}" (~/.moriko/browser-macros/<name>.json) — record one first.` };
 
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     let executed = 0;
     const skipped: string[] = [];
     for (const raw of steps) {
+      if (tracker.signal.aborted) break;
       const step = raw as { type?: string; x?: number; y?: number; button?: string; text?: string; key?: string; deltaX?: number; deltaY?: number; dt?: number };
       const wait = Math.min(1500, Math.max(0, step.dt ?? 0)) / speed;
-      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      if (wait > 0) {
+        await raceWithAbort(new Promise<void>((r) => setTimeout(r, wait)), tracker.signal);
+      }
+      if (tracker.signal.aborted) break;
       try {
         if (step.type === 'click' && typeof step.x === 'number' && typeof step.y === 'number') {
-          await browserManager.moveCursor(step.x, step.y);
-          await page.mouse.click(step.x, step.y, { button: (step.button as 'left' | 'right' | 'middle') ?? 'left' });
-          browserManager.broadcastClick(step.x, step.y);
+          await raceWithAbort(browserManager.moveCursor(step.x, step.y, 1, sid), tracker.signal);
+          await raceWithAbort(
+            page.mouse.click(step.x, step.y, { button: (step.button as 'left' | 'right' | 'middle') ?? 'left' }),
+            tracker.signal,
+          );
+          browserManager.broadcastClick(step.x, step.y, sid);
         } else if (step.type === 'type' && typeof step.text === 'string') {
-          await page.keyboard.type(step.text, { delay: 8 });
+          await raceWithAbort(page.keyboard.insertText(step.text), tracker.signal);
         } else if (step.type === 'press' && typeof step.key === 'string') {
-          await page.keyboard.press(step.key);
+          await raceWithAbort(page.keyboard.press(step.key), tracker.signal);
         } else if (step.type === 'scroll' && (typeof step.deltaX === 'number' || typeof step.deltaY === 'number')) {
-          await page.mouse.wheel(step.deltaX ?? 0, step.deltaY ?? 0);
+          await raceWithAbort(page.mouse.wheel(step.deltaX ?? 0, step.deltaY ?? 0), tracker.signal);
         } else {
           skipped.push(`unknown step type: ${String(step.type)}`);
           continue;
         }
         executed += 1;
       } catch (err) {
+        if (tracker.signal.aborted) break;
         skipped.push(`step ${executed + 1} failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    browserManager.logAction('replay', `${name}: ${executed}/${steps.length} step(s)`);
+    if (tracker.signal.aborted && browserManager.isTakeover(sid)) return takeoverRefusal(sid);
+    browserManager.logAction('replay', `${name}: ${executed}/${steps.length} step(s)`, sid);
     return {
       ok: executed > 0,
       isError: executed === 0,
       text: `Replayed "${name}": ${executed}/${steps.length} step(s) at ${speed}×.${skipped.length ? `\nSkipped/failed:\n- ${skipped.join('\n- ')}` : ''}`,
     };
   } catch (error) {
+    if (tracker.signal.aborted && browserManager.isTakeover(sid)) return takeoverRefusal(sid);
     return { ok: false, isError: true, text: `browser_replay failed: ${error instanceof Error ? error.message : String(error)}` };
+  } finally {
+    tracker.dispose();
   }
 }
 
 
-/**
- * agent__browser_touch_tap — taps at (x,y) with the TOUCHSCREEN (not the
- * mouse). Mobile-emulated sites and touch-only handlers (touchstart) need
- * this; the context launches with hasTouch so it works out of the box.
- */
+
 export async function browserTouchTapTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  if (browserManager.isTakeover()) return takeoverRefusal();
-  void ctx;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   try {
     const x = num(args, 'x');
     const y = num(args, 'y');
     if (x === undefined || y === undefined) {
       return { ok: false, isError: true, errorCode: 'schema_error', text: 'browser_touch_tap needs both "x" and "y" (viewport CSS px).' };
     }
-    const page = await browserManager.getActivePage();
-    await browserManager.moveCursor(x, y);
+    const page = await browserManager.getActivePage(sid);
+    await browserManager.moveCursor(x, y, 1, sid);
     await page.touchscreen.tap(x, y);
-    browserManager.broadcastClick(x, y);
-    browserManager.logAction('touch_tap', `(${Math.round(x)}, ${Math.round(y)})`);
+    browserManager.broadcastClick(x, y, sid);
+    browserManager.logAction('touch_tap', `(${Math.round(x)}, ${Math.round(y)})`, sid);
     return { ok: true, isError: false, text: `Tapped (${Math.round(x)}, ${Math.round(y)}) via touchscreen.` };
   } catch (error) {
     return { ok: false, isError: true, text: `browser_touch_tap failed: ${error instanceof Error ? error.message : String(error)}` };
   }
 }
 
-/**
- * agent__browser_dialog — set the session dialog policy BEFORE the action
- * that triggers a JS alert/confirm/prompt: 'accept' (+ prompt text),
- * 'dismiss', or 'default' (clears back to auto-dismiss). The in-page listener
- * applies it to every dialog; each handling lands in the diagnostics log.
- */
+
 export async function browserDialogTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   try {
     const action = str(args, 'action') ?? 'default';
     if (!['accept', 'dismiss', 'default'].includes(action)) {
       return { ok: false, isError: true, errorCode: 'schema_error', text: 'browser_dialog: "action" must be accept | dismiss | default.' };
     }
     const text = str(args, 'text');
-    browserManager.setDialogPolicy(action === 'default' ? null : { action: action as 'accept' | 'dismiss', text });
-    browserManager.logAction('dialog_policy', action);
+    browserManager.setDialogPolicy(action === 'default' ? null : { action: action as 'accept' | 'dismiss', text }, sid);
+    browserManager.logAction('dialog_policy', action, sid);
     return {
       ok: true,
       isError: false,
@@ -2156,21 +2179,16 @@ export async function browserDialogTool(
   }
 }
 
-/**
- * agent__browser_annotations — the user drew rectangles on the PANEL (Draw
- * mode) to point at things. Returns the pending shapes with viewport coords
- * and CLEARS them — the visual conversation channel: agent looks, agent acts.
- */
+
 export async function browserAnnotationsTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
   void args;
+  const sid = ctx.sessionId;
   try {
-    const shapes = browserManager.takeAnnotations();
-    const cursor = browserManager.getUserCursor();
+    const shapes = browserManager.takeAnnotations(sid);
+    const cursor = browserManager.getUserCursor(sid);
     if (!shapes.length && !cursor.visible) {
       return { ok: true, isError: false, text: 'No pending annotations or user-cursor hints — the user has not pointed at anything since you last checked.' };
     }
@@ -2185,8 +2203,7 @@ export async function browserAnnotationsTool(
 }
 
 
-/** Resolves a workspace-relative path against the session's workspace root
- *  and refuses anything that escapes it (same safety as the file tools). */
+
 function resolveBridgePath(ctx: AgentToolContext, rel: string): { root: string; abs: string } {
   const { root } = requireWorkspace(ctx);
   const abs = path.resolve(root, rel);
@@ -2196,30 +2213,25 @@ function resolveBridgePath(ctx: AgentToolContext, rel: string): { root: string; 
   return { root, abs };
 }
 
-/** Sanitizes a filename for the filesystem: keeps dots/dashes, drops the rest. */
+
 function sanitizeFilename(name: string): string {
   const cleaned = name.replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '');
   return cleaned.slice(0, 80) || 'file';
 }
 
-/**
- * agent__browser_save_page — extract the main content (Phase 6 readability
- * walker) → convert to Markdown → write to the workspace. Returns a diff-style
- * confirmation like the file tools (created vs updated + size).
- */
+
 export async function browserSavePageTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
+  const sid = ctx.sessionId;
   try {
     const rel = str(args, 'path');
     if (!rel) {
       return { ok: false, isError: true, errorCode: 'schema_error', text: 'browser_save_page needs "path" — a workspace-relative path for the .md file (e.g. "notes/article.md").' };
     }
     const { abs } = resolveBridgePath(ctx, rel);
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const selector = str(args, 'selector');
     const out = (await page.evaluate(
       `(() => {
@@ -2286,17 +2298,12 @@ export async function browserSavePageTool(
   }
 }
 
-/**
- * agent__browser_save_images — collect <img> srcs (relative resolved against
- * the page URL), fetch each server-side, save into a workspace directory with
- * sanitized filenames. minWidth filters icons/tracking pixels.
- */
+
 export async function browserSaveImagesTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
+  const sid = ctx.sessionId;
   try {
     const dir = str(args, 'dir');
     if (!dir) {
@@ -2305,7 +2312,7 @@ export async function browserSaveImagesTool(
     const minWidth = Math.max(0, num(args, 'minWidth') ?? 100);
     const limit = Math.max(1, Math.min(100, num(args, 'limit') ?? 30));
     const { root, abs: absDir } = resolveBridgePath(ctx, dir);
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const pageUrl = page.url();
     const srcs = (await page.evaluate(
       `(() => {
@@ -2337,11 +2344,15 @@ export async function browserSaveImagesTool(
       index += 1;
       try {
         const abs = new URL(src, srcs.pageUrl).href;
-        if (!/^https?:/i.test(abs)) {
-          if (!/^data:/i.test(abs)) {
-            errors.push(`${src} (skipped: ${abs.split(':')[0]}: URL)`);
+        if (/^https?:/i.test(abs)) {
+          const blocked = checkWebAccessUrl(abs, ctx, 'agent__browser_save_images');
+          if (blocked) {
+            errors.push(`${src} (${blocked})`);
             continue;
           }
+        } else if (!/^data:/i.test(abs)) {
+          errors.push(`${src} (skipped: ${abs.split(':')[0]}: URL)`);
+          continue;
         }
         const response = await fetch(abs, { signal: AbortSignal.timeout(15_000) });
         if (!response.ok) {
@@ -2377,17 +2388,13 @@ export async function browserSaveImagesTool(
   }
 }
 
-/**
- * agent__browser_upload — set a workspace file into a page file input.
- * Takeover-guarded (it mutates page state) and workspace-jail-checked.
- */
+
 export async function browserUploadTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  if (browserManager.isTakeover()) return takeoverRefusal();
-  void ctx;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   try {
     const selector = str(args, 'selector');
     const rel = str(args, 'path');
@@ -2398,7 +2405,7 @@ export async function browserUploadTool(
     if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
       return { ok: false, isError: true, text: `File not found in the workspace: ${rel}` };
     }
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     await page.setInputFiles(selector, abs, { timeout: 15_000 });
     const size = fs.statSync(abs).size;
     return {
@@ -2411,17 +2418,14 @@ export async function browserUploadTool(
   }
 }
 
-/**
- * agent__browser_download — atomic click+capture: races the click against
- * page.waitForEvent('download'), saves into the workspace, returns path+size.
- */
+
 export async function browserDownloadTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  if (browserManager.isTakeover()) return takeoverRefusal();
-  void ctx;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
+  const endDownload = browserManager.beginAgentDownload(sid);
   try {
     const selector = str(args, 'selector');
     const x = num(args, 'x');
@@ -2430,46 +2434,47 @@ export async function browserDownloadTool(
       return { ok: false, isError: true, errorCode: 'schema_error', text: 'browser_download needs either { selector } or { x, y } — the element that TRIGGERS the download.' };
     }
     const dir = str(args, 'dir');
-    const { root, abs: absDir } = dir ? { ...resolveBridgePath(ctx, dir) } : { root: requireWorkspace(ctx).root, abs: requireWorkspace(ctx).root };
-    const page = await browserManager.getActivePage();
+    const safeSid = (sid ?? 'default').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 64) || 'default';
+    const ws = getActiveWorkspace(sid);
+    const defaultDir = ws?.path ?? path.join(os.homedir(), '.moriko', 'browser-downloads', safeSid);
+    const { root, abs: absDir } = dir ? resolveBridgePath(ctx, dir) : { root: defaultDir, abs: defaultDir };
+    const page = await browserManager.getActivePage(sid);
     fs.mkdirSync(absDir, { recursive: true });
 
     const downloadPromise = page.waitForEvent('download', { timeout: 30_000 });
     if (selector) {
       await page.click(selector, { timeout: 15_000 });
     } else {
-      await browserManager.moveCursor(x!, y!);
+      await browserManager.moveCursor(x!, y!, 1, sid);
       await page.mouse.click(x!, y!);
-      browserManager.broadcastClick(x!, y!);
+      browserManager.broadcastClick(x!, y!, sid);
     }
     const download = await downloadPromise;
     const filename = sanitizeFilename(download.suggestedFilename() || 'download.bin');
     const target = path.join(absDir, filename);
     await download.saveAs(target);
     const size = fs.statSync(target).size;
+    const displayPath = dir || ws?.path ? path.relative(root, target).replace(/\\/g, '/') : target;
     return {
       ok: true,
       isError: false,
-      text:
-        `Downloaded **${path.relative(root, target).replace(/\\/g, '/')}** (${size} bytes) from ${page.url()}.`,
+      text: `Downloaded **${displayPath}** (${size} bytes) from ${page.url()}.`,
     };
   } catch (error) {
     return { ok: false, isError: true, text: `browser_download failed (no download started within 30s?): ${error instanceof Error ? error.message : String(error)}` };
+  } finally {
+    endDownload();
   }
 }
 
-/**
- * agent__browser_table — extract <table> (or [role=grid]) content as
- * JSON / CSV / TSV. Best-effort for report-style pages.
- */
+
 export async function browserTableTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  void ctx;
+  const sid = ctx.sessionId;
   try {
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     const selector = str(args, 'selector') || 'table';
     const format = (str(args, 'format') || 'json').toLowerCase();
     if (!['json', 'csv', 'tsv'].includes(format)) {
@@ -2503,17 +2508,13 @@ export async function browserTableTool(
   }
 }
 
-/**
- * agent__browser_pdf — print the current page to a workspace PDF.
- * page.pdf() works in headless Chromium/Edge (which this harness runs).
- */
+
 export async function browserPdfTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  if (browserManager.isTakeover()) return takeoverRefusal();
-  void ctx;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
   try {
     const rel = str(args, 'path');
     if (!rel) {
@@ -2524,7 +2525,7 @@ export async function browserPdfTool(
       return { ok: false, isError: true, errorCode: 'schema_error', text: `browser_pdf format "${format}" not supported — use A4 (default), Letter, Legal, A3, or A5.` };
     }
     const { root, abs } = resolveBridgePath(ctx, rel);
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     await page.pdf({ path: abs, format: format as 'A4', printBackground: true });
     const size = fs.statSync(abs).size;
@@ -2534,17 +2535,14 @@ export async function browserPdfTool(
   }
 }
 
-/**
- * agent__browser_crawl — paginated collection: extract items, click next,
- * repeat until no next / maxPages. Saves the dataset to the workspace.
- */
+
 export async function browserCrawlTool(
   args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<HarnessToolResult> {
-  requireWorkspace(ctx);
-  if (browserManager.isTakeover()) return takeoverRefusal();
-  void ctx;
+  const sid = ctx.sessionId;
+  if (browserManager.isTakeover(sid)) return takeoverRefusal(sid);
+  const tracker = browserManager.trackAgentAbort(sid, ctx.signal);
   try {
     const itemSelector = str(args, 'itemSelector');
     const nextSelector = str(args, 'nextSelector');
@@ -2562,13 +2560,14 @@ export async function browserCrawlTool(
     const maxPages = Math.max(1, Math.min(50, num(args, 'maxPages') ?? 10));
     const rel = str(args, 'path');
     const { abs } = rel ? resolveBridgePath(ctx, rel) : { abs: '' };
-    const page = await browserManager.getActivePage();
+    const page = await browserManager.getActivePage(sid);
     new Function(`return (${extract})`)();
     const seenUrls = new Set<string>();
     const items: Array<Record<string, unknown>> = [];
     const pages: Array<{ url: string; count: number }> = [];
 
     for (let pageNum = 1; pageNum <= maxPages; pageNum += 1) {
+      if (tracker.signal.aborted) break;
       const url = page.url();
       if (seenUrls.has(url)) break;
       seenUrls.add(url);
@@ -2577,26 +2576,33 @@ export async function browserCrawlTool(
       const count = Math.min(await elements.count(), 200);
       const pageItems: Array<Record<string, unknown>> = [];
       for (let i = 0; i < count; i += 1) {
-        const row = (await elements.nth(i).evaluate(
-          ((el: unknown, fn: string) => {
-            const userFn = new Function(`return (${fn})`)() as (e: unknown) => Record<string, unknown>;
-            return userFn(el);
-          }) as unknown as (el: never, fn: string) => Record<string, unknown>,
-          extract,
+        if (tracker.signal.aborted) break;
+        const row = (await raceWithAbort(
+          elements.nth(i).evaluate(
+            ((el: unknown, fn: string) => {
+              const userFn = new Function(`return (${fn})`)() as (e: unknown) => Record<string, unknown>;
+              return userFn(el);
+            }) as unknown as (el: never, fn: string) => Record<string, unknown>,
+            extract,
+          ),
+          tracker.signal,
         )) as unknown as Record<string, unknown>;
         if (row && typeof row === 'object') pageItems.push(row);
       }
+      if (tracker.signal.aborted) break;
       items.push(...pageItems);
       pages.push({ url, count: pageItems.length });
 
       const next = page.locator(nextSelector).first();
       if ((await next.count()) === 0) break;
-      await next.click({ timeout: 10_000 });
+      await raceWithAbort(next.click({ timeout: 10_000 }), tracker.signal);
       try {
-        await page.waitForLoadState('load', { timeout: 10_000 });
+        await raceWithAbort(page.waitForLoadState('load', { timeout: 10_000 }), tracker.signal);
       } catch {
+        if (tracker.signal.aborted) break;
       }
     }
+    if (tracker.signal.aborted && browserManager.isTakeover(sid)) return takeoverRefusal(sid);
 
     const summary = { pages: pages.length, items: items.length, perPage: pages, savedTo: rel || undefined };
     if (rel) {
@@ -2612,6 +2618,9 @@ export async function browserCrawlTool(
         `\n${JSON.stringify(summary, null, 1)}`,
     };
   } catch (error) {
+    if (tracker.signal.aborted && browserManager.isTakeover(sid)) return takeoverRefusal(sid);
     return { ok: false, isError: true, text: `browser_crawl failed: ${error instanceof Error ? error.message : String(error)}` };
+  } finally {
+    tracker.dispose();
   }
 }

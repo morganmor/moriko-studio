@@ -1,25 +1,8 @@
-/**
- * SERVER-SIDE RUN TRIGGER — start a generation for a conversation WITHOUT a
- * browser round-trip.
- *
- * The council wake used to ride the addon bus → SSE → browser bridge →
- * client send(). That chain is fragile (SSE frames never reached the client in
- * one verified live test, so orchestrator messages to idle sub-sessions sat
- * forever — the "orchestrator message never arrives" bug). The run engine is
- * already fully server-side: POST /api/chat builds StreamParams, registers the
- * stream in streamRegistry, and streams via publishFrame. So waking a session
- * is now a plain self-POST to /api/chat from here, with a keeper connection
- * that releases its concurrency slot and re-attaches nothing.
- *
- * The keeper: /api/chat ties the run to an SSE response, but the run survives
- * disconnects (GRACE_MS = 180s before the registry aborts an unwatched run).
- * A long agent round can outlive that, so the keeper holds the response open,
- * drains frames, and ends the run cleanly.
- */
+
 
 import { getStoredConversation, applyTurnPatches, listStoredConversationSummaries } from './conversationStore.js';
 
-/** Settings shared by every server-triggered run (agent mode on, tools ready). */
+
 const WAKE_SETTINGS = {
   agentMode: true,
   webAccess: true,
@@ -36,8 +19,7 @@ interface StoredTurnShape {
   attachments?: Array<Record<string, unknown>>;
 }
 
-/** Map a stored conversation record into /api/chat messages. An EMPTY
- *  conversation is valid — the injected text is its first user turn. */
+
 function toChatMessages(conversationId: string, injectedText: string): Array<{ role: string; content: string }> | null {
   const record = getStoredConversation(conversationId);
   if (!record) return null;
@@ -54,7 +36,7 @@ function toChatMessages(conversationId: string, injectedText: string): Array<{ r
   return out;
 }
 
-/** Append the injected instruction as a user turn (persists via patches). */
+
 function appendUserTurn(conversationId: string, text: string): void {
   const turn: StoredTurnShape = {
     id: `turn_wake_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
@@ -65,7 +47,7 @@ function appendUserTurn(conversationId: string, text: string): void {
   applyTurnPatches([{ conversationId, turnId: turn.id, turn }]);
 }
 
-/** Live streams registry already knows how to check this. */
+
 async function isGenerating(conversationId: string): Promise<boolean> {
   try {
     const { listLiveStreams } = await import('./streamRegistry.js');
@@ -74,10 +56,7 @@ async function isGenerating(conversationId: string): Promise<boolean> {
     return false;
   }
 }
-/**
- * Start a run for `conversationId` with `text` as the user turn.
- * Resolves { started: true } once the upstream accepted, or an error string.
- */
+
 export async function startServerRun(
   conversationId: string,
   text: string,
@@ -111,12 +90,7 @@ export async function startServerRun(
   return await keepRunAlive(body);
 }
 
-/**
- * Self-POST the run body to our own /api/chat (the run engine). The keeper
- * connection drains frames until done so the run never hits the 180s
- * no-subscriber abort; a result within 1.5s is authoritative, otherwise the
- * run was accepted and the keeper logs any late failure.
- */
+
 async function keepRunAlive(body: string): Promise<{ started: boolean; error?: string }> {
   const origin = `http://127.0.0.1:${process.env.PORT ?? 8826}`;
   const controller = new AbortController();

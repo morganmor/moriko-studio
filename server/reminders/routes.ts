@@ -3,14 +3,7 @@ import { Router } from 'express';
 import { asyncRoute, HttpError } from '../http.js';
 import { createReminder, deleteReminder, listReminders } from './store.js';
 
-/**
- * REST surface for scheduled reminders (the user-facing side; the agent uses
- * the `agent__remind` harness tool):
- *
- *   GET    /api/reminders?session=…        — list (pending + delivered)
- *   POST   /api/reminders                  — create { session, label, at | inMinutes }
- *   DELETE /api/reminders/:id?session=…    — cancel one
- */
+
 export function remindersRouter(): Router {
   const router = Router();
 

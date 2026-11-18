@@ -1,16 +1,4 @@
-/**
- * Council store — persistence under `<workspace>/.moriko/council/`.
- *
- *   councils.json  brief text per council id (what every member shares)
- *
- * The council GROUPING itself lives on the host's conversation records
- * (councilId / councilRole / councilAgentId) — this file only holds what a
- * conversation cannot carry: the shared brief the user writes in the panel.
- *
- * The session→council PROJECTION (needed by the agent tools and the prompt
- * fragment, which run server-side and cannot see conversations) is synced
- * client-side by the panel through the `syncSessions` RPC.
- */
+
 import path from 'node:path';
 
 const DIR = '.moriko/council';
@@ -19,21 +7,21 @@ const FILE = `${DIR}/councils.json`;
 interface CouncilMeta {
   brief?: string;
   updatedAt?: number;
-  /** RSAT agent id designated as the orchestrator (main session agent). */
+  
   orchestratorAgentId?: string;
-  /** PERSISTED membership projection (panel sync) — survives server restarts. */
+  
   projection?: unknown;
 }
 interface CouncilDoc {
   rev?: number;
   councils?: Record<string, CouncilMeta>;
-  /** sessionId → queued dispatch directive (cleared by council_ack). */
+  
   directives?: Record<string, { councilId: string; text: string; at: number }>;
 }
 
-/** workspace root → cached doc. */
+
 const cache = new Map<string, CouncilDoc>();
-/** workspace root → tail of the in-flight write chain. */
+
 const queues = new Map<string, Promise<unknown>>();
 
 function enqueue<T>(root: string, job: () => T | Promise<T>): Promise<T> {
@@ -76,7 +64,7 @@ function rootOf(api, sessionId): string | null {
   } catch { return null; }
 }
 
-/** The shared brief for one council ('' when the user never wrote one). */
+
 export function getBrief(api, sessionId, councilId: string): string {
   if (!councilId) return '';
   try {
@@ -85,7 +73,7 @@ export function getBrief(api, sessionId, councilId: string): string {
   } catch { return ''; }
 }
 
-/** Persist the brief (user edit from the panel). */
+
 export async function setBrief(api, sessionId, councilId: string, brief: string): Promise<void> {
   if (!councilId) throw new Error('No active council.');
   const doc = read(api, sessionId);
@@ -96,7 +84,7 @@ export async function setBrief(api, sessionId, councilId: string, brief: string)
   await write(api, sessionId, doc);
 }
 
-/** The orchestrator agent id for one council ('' when none designated). */
+
 export function getOrchestrator(api, sessionId, councilId: string): string {
   if (!councilId) return '';
   try {
@@ -105,7 +93,7 @@ export function getOrchestrator(api, sessionId, councilId: string): string {
   } catch { return ''; }
 }
 
-/** Persist the orchestrator designation (user → panel → RPC → here). */
+
 export async function setOrchestrator(api, sessionId, councilId: string, agentId: string): Promise<void> {
   if (!councilId) throw new Error('No active council.');
   const doc = read(api, sessionId);
@@ -117,9 +105,7 @@ export async function setOrchestrator(api, sessionId, councilId: string, agentId
   await write(api, sessionId, doc);
 }
 
-/** Persist the panel-synced membership projection for one council — the
- *  in-memory maps die with the server process, and a graceful reload mid-run
- *  must not strip every member of its council identity. */
+
 export async function saveProjection(api, sessionId, councilId: string, projection: unknown): Promise<void> {
   if (!councilId) return;
   const doc = read(api, sessionId);
@@ -129,7 +115,7 @@ export async function saveProjection(api, sessionId, councilId: string, projecti
   await write(api, sessionId, doc);
 }
 
-/** Every persisted projection in this workspace (rehydration after restart). */
+
 export function loadProjections(api, sessionId): Array<{ councilId: string; projection: unknown }> {
   try {
     const doc = read(api, sessionId);
@@ -141,7 +127,7 @@ export function loadProjections(api, sessionId): Array<{ councilId: string; proj
   } catch { return []; }
 }
 
-/** The queued dispatch directive for one sub session (null when none). */
+
 export function getDirective(api, sessionId): { councilId: string; text: string; at: number } | null {
   if (!sessionId) return null;
   try {
@@ -151,12 +137,7 @@ export function getDirective(api, sessionId): { councilId: string; text: string;
   } catch { return null; }
 }
 
-/**
- * Queue the dispatch directive. It rides the council PROMPT FRAGMENT (context
- * channel) — delivered at the sub session's first fetch, no user message, no
- * auto-started round. File-backed, so it survives restarts (unlike the
- * injection queue, whose idle delivery is not wired).
- */
+
 export async function setDirective(api, sessionId, councilId: string, text: string): Promise<void> {
   if (!sessionId || !councilId || !text) throw new Error('setDirective requires sessionId, councilId, text.');
   const doc = read(api, sessionId);
@@ -165,7 +146,7 @@ export async function setDirective(api, sessionId, councilId: string, text: stri
   await write(api, sessionId, doc);
 }
 
-/** council_ack: the agent absorbed the directive — drop it from context. */
+
 export async function clearDirective(api, sessionId): Promise<void> {
   if (!sessionId) return;
   const doc = read(api, sessionId);

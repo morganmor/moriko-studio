@@ -1,26 +1,14 @@
-/**
- * .ENV UPDATER — the write side of the storage-location feature.
- *
- * MORIKO_HOME is read ONCE at boot (see paths.ts), so "the user picks a new
- * location in Settings" can only mean: persist the choice in the repo's .env
- * and let the harness reload pick it up. dotenv already loaded the file at
- * boot; this module edits the FILE without losing hand-written comments,
- * blank lines, or quoted values.
- *
- * Mirrors dotenv's parsing rules loosely (KEY=VALUE, optional quotes, `#`
- * comments, blank lines preserved) and never rewrites values it does not
- * touch.
- */
+
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-/** The repo .env (same file dotenv loaded at boot). */
+
 export const envFilePath = path.resolve(process.cwd(), '.env');
 
 interface EnvLine {
   kind: 'comment' | 'blank' | 'entry';
-  /** Raw text for comment/blank lines. */
+  
   raw?: string;
   key?: string;
   value?: string;
@@ -72,7 +60,7 @@ function readLines(): { lines: EnvLine[]; trailingNewline: boolean } {
   return { lines: parseEnv(text), trailingNewline: text.endsWith('\n') || text === '' };
 }
 
-/** Upsert one KEY=VALUE line, preserving comments, blanks and order. */
+
 export function setEnvValue(key: string, value: string): void {
   const { lines, trailingNewline } = readLines();
   const entry = lines.find((line) => line.kind === 'entry' && line.key === key);
@@ -86,7 +74,7 @@ export function setEnvValue(key: string, value: string): void {
   writeFileSync(envFilePath, serializeEnv(lines, trailingNewline));
 }
 
-/** Remove a KEY line entirely (used to reset to the default home). */
+
 export function removeEnvValue(key: string): void {
   const { lines, trailingNewline } = readLines();
   const filtered = lines.filter((line) => !(line.kind === 'entry' && line.key === key));
@@ -94,7 +82,7 @@ export function removeEnvValue(key: string): void {
   writeFileSync(envFilePath, serializeEnv(filtered, trailingNewline));
 }
 
-/** Read one value without writing (null when absent). */
+
 export function getEnvValue(key: string): string | null {
   const { lines } = readLines();
   const entry = lines.find((line) => line.kind === 'entry' && line.key === key);

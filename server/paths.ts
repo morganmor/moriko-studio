@@ -5,138 +5,102 @@ import path from 'node:path';
 import { atomicWriteJson } from './atomicWrite.js';
 import { findBuiltIn } from './providers.js';
 
-/**
- * ON-DISK LAYOUT — the single source of truth for where every persisted file
- * lives. Every store module imports its paths from here instead of hand-
- * rolling `path.join(process.cwd(), '.data', …)`, so the layout can never
- * drift between modules.
- *
- * ONE root: `~/.moriko-studio` (override with `MORIKO_HOME`). Everything the app
- * persists — provider definitions, the API-key vault, MCP servers, vision
- * settings, agent/settings/preferences, reminders, the agent harness's
- * session state (audit, jobs, read-state, vault) AND the project runtime
- * data (conversation archive, Image Studio sessions, gallery) — lives under
- * that one folder, so a fresh checkout of the repo starts clean and nothing
- * is ever buried inside the source tree.
- *
- * `DATA_DIR` is LEGACY: it only names where the pre-restructure stores were
- * (the project's old `.data/`), as the SOURCE for the boot migration.
- *
- * MIGRATION: `migrateLegacyLayout()` runs once at boot, BEFORE any store
- * touches disk. It moves the old files into this layout and renames the
- * originals to `<name>.migrated` (never deletes), so a pre-restructure
- * install keeps every byte and the pass is a no-op afterwards.
- */
+
 
 
 const HOME_ROOT = path.resolve(
   process.env.MORIKO_HOME?.trim() || path.join(os.homedir(), '.moriko-studio'),
 );
 
-/** The resolved app data root (absolute) — EVERYTHING lives under this. */
+
 export const morikoHome = HOME_ROOT;
 
-/** The app data root as displayed to the user (forward slashes). */
+
 export function morikoHomeDisplay(): string {
   return HOME_ROOT.replace(/\\/g, '/');
 }
 
-/** The DEFAULT app data root — `~/.moriko-studio` — as an absolute path. */
+
 export function morikoHomeDefault(): string {
   return path.join(os.homedir(), '.moriko-studio');
 }
 
 
-/** Custom provider DEFINITIONS (no secrets). */
+
 export const providersFile = path.join(HOME_ROOT, 'providers.json');
-/** API-key vault: EVERY provider key (custom + built-in) with its endpoint. */
+
 export const apiKeysFile = path.join(HOME_ROOT, 'api-keys.json');
-/** Which provider + model answers agent__vision. */
+
 export const visionFile = path.join(HOME_ROOT, 'vision.json');
-/** User-registered MCP tool servers. */
+
 export const mcpFile = path.join(HOME_ROOT, 'mcp.json');
-/** Figma MCP OAuth tokens (machine-level, like mcp.json). */
+
 export const figmaAuthFile = path.join(HOME_ROOT, 'figma-auth.json');
-/** Agent harness settings + allowed-directory allowlist. */
+
 export const agentsFile = path.join(HOME_ROOT, 'agents.json');
-/** Server-wide user settings (image retention window…). */
+
 export const settingsFile = path.join(HOME_ROOT, 'settings.json');
-/** Scheduled agent reminders. */
+
 export const remindersFile = path.join(HOME_ROOT, 'reminders.json');
-/** User-authored / user-customized agent workflows. */
+
 export const workflowsFile = path.join(HOME_ROOT, 'workflows.json');
-/** Global agent skills (SKILL.md folders, open Agent Skills spec). */
+
 export const skillsDir = path.join(HOME_ROOT, 'skills');
-/**
- * CLIENT/UI STATE — the small per-device preferences that used to live in the
- * browser's localStorage: theme, zoom, font, sidebar, saved prompts, the last
- * provider/model, the active conversation and Image Studio session, and the
- * client's run journal. The browser stores NOTHING now; it hydrates this at
- * boot and patches it back on every change (see /api/ui-state).
- */
+
 export const uiStateFile = path.join(HOME_ROOT, 'ui-state.json');
 
 
-/** Per-session tool-call audit trails (JSONL). */
+
 export const auditDir = path.join(HOME_ROOT, 'audit');
-/** Per-run agent job journals. */
+
 export const jobsDir = path.join(HOME_ROOT, 'jobs');
-/**
- * Per-run SSE frame journals (`<streamId>.jsonl`) — the replay buffer that
- * survives a PROXY CRASH (see streamRegistry). A run whose in-memory buffer
- * died with the process replays from here on the next boot.
- */
+
 export const runsDir = path.join(HOME_ROOT, 'runs');
-/** Per-session read-before-edit tracking. */
+
 export const readStateDir = path.join(HOME_ROOT, 'read-state');
-/** Pre-destructive file snapshots (vault). */
+
 export const vaultDir = path.join(HOME_ROOT, 'vault');
-/** Realtime project-structure snapshots (tree index per workspace). */
+
 export const treeIndexDir = path.join(HOME_ROOT, 'tree-index');
 
 
 export const conversationDir = path.join(HOME_ROOT, 'conversation');
-/** Compact per-chat summaries (the list view). */
+
 export const conversationIndexFile = path.join(conversationDir, 'index.json');
-/** Structural truth: folder mapping, chat order, next sequence number. */
+
 export const conversationManifestFile = path.join(conversationDir, 'manifest.json');
-/** Goals of sessions with no chat folder (synthetic/test session ids). */
+
 export const detachedGoalsDir = path.join(conversationDir, 'detached');
-/** Standalone todos of sessions with no chat folder (synthetic/test session ids). */
+
 export const detachedTodosDir = path.join(conversationDir, 'detached');
 
-/**
- * P2 EXTERNALIZATION — the byte store for everything a conversation record
- * used to carry inline as base64/HTML: attachment images, rendered visuals,
- * inline tool images. One shared directory keyed by the payload's content
- * hash, so the same image referenced by three chats occupies one file.
- */
+
 export const attachmentsStoreDir = path.join(HOME_ROOT, 'attachments');
 
 export const imageSessionDir = path.join(HOME_ROOT, 'image-session');
-/** Image Studio sessions (named, ordered generation history). */
+
 export const imageSessionsFile = path.join(imageSessionDir, 'data.json');
-/** Generated image files + per-image sidecar JSON. */
+
 export const imagesDir = path.join(imageSessionDir, 'images');
-/** In-flight provider task records (survive restarts). */
+
 export const imageTaskStateFile = path.join(imageSessionDir, 'task-state.json');
-/** Append-only image-task lifecycle journal. */
+
 export const imageTaskJournalFile = path.join(imageSessionDir, 'tasks.jsonl');
 
 export const galleryDir = path.join(HOME_ROOT, 'gallery');
-/** User-curated permanent image collection. */
+
 export const galleryFile = path.join(galleryDir, 'data.json');
 
-/** Kept as a string for legacy imports that still reference it. */
+
 export const appDataDir = HOME_ROOT;
 
 
-/** Where the pre-restructure stores lived: the project's old `.data/`. */
 
-/** Where the pre-restructure stores lived: the project's old `.data/`. */
+
+
 const LEGACY_DIR = path.resolve(process.cwd(), process.env.DATA_DIR?.trim() || './.data');
 
-/** Moves one legacy path into its new home; never deletes (renames to .migrated on copy). */
+
 function migrateOne(from: string, to: string, label: string, report: string[]): void {
   if (!existsSync(from)) return;
   if (existsSync(to)) {
@@ -158,18 +122,7 @@ function migrateOne(from: string, to: string, label: string, report: string[]): 
   }
 }
 
-/**
- * Normalizes the provider + key stores into the final shape:
- *
- *   providers.json  — definitions ONLY (no apiKey on records, no builtInKeys)
- *   api-keys.json   — { version, keys: { [id]: { apiKey, baseUrl? } } }
- *
- * Accepts every historical shape on either side: providers.json with
- * `builtInKeys` and/or apiKey-carrying records, and api-keys.json as a raw
- * id→string map, a `{ version, keys }` wrapper with raw strings, or the
- * current objects. Runs wherever the files are (legacy `.data` or already
- * under `~/.moriko`).
- */
+
 function normalizeProviderStores(root: string, report: string[]): void {
   const providersPath = path.join(root, 'providers.json');
   const keysPath = path.join(root, 'api-keys.json');
@@ -266,7 +219,7 @@ function normalizeProviderStores(root: string, report: string[]): void {
   );
 }
 
-/** Boot-time layout migration. Synchronous; run before any store touches disk. */
+
 export function migrateLegacyLayout(): void {
   const report: string[] = [];
 

@@ -1,8 +1,4 @@
-/**
- * F3.1 — agent__diagnostics: TypeScript diagnostics PER FILE in milliseconds
- * (in-process LanguageService, no full tsc). scope "touched" re-checks the
- * files edited this session.
- */
+
 import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { AgentToolContext, HarnessToolResult } from './shared.js';
@@ -11,7 +7,7 @@ import { getLanguageService } from '../lsp-service.js';
 import * as ts from 'typescript';
 import { defineTool } from './registry.js';
 
-/** Files edited this session (populated by the pipeline post-edit hook, F3.2). */
+
 const touched = new Map<string, number>();
 
 export function markTouched(absolute: string): void {

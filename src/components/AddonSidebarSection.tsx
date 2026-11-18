@@ -1,26 +1,4 @@
-/**
- * AddonSidebarSection (Addon v2, A6) — the "Addons" section in the left
- * sidebar. Rendered INSIDE the sidebar's scroll <nav> and built from the
- * SAME primitives as every other section (SectionLabel / NavGroup / SubItem),
- * so collapse behavior, spacing, hover and active states match exactly.
- *
- * NON-MONOLITH: setiap addon punya identitas sendiri —
- *   • ikon diturunkan dari identitas addon (id/kind/nama), bukan icon blaze
- *     puzzle yang sama untuk semua;
- *   • subtitle status (Needs approval / Disabled / Failed to load / vX.Y);
- *   • tail badge (legacy / Approve / off / error) sesuai lifecycle;
- *   • addon tanpa sub-view tampil sebagai baris polos (leaf), bukan grup
- *     kosong yang memaksa animasi chevron.
- *
- *   ADDONS
- *   ├ ◈ RSA/T  ⟨views⟩   active · 2 agents live
- *   │   ├ Board              ← SubItem per contributed sidebar view
- *   │   └ Live activity
- *   └ ➤ git-pulse  [Approve]
- *
- * The header row opens the Addon Hub (ViewId "addons"); each view navigates
- * to addon:<id>/<view>. Hidden entirely when no addons are installed.
- */
+
 
 import { memo, useEffect, useState, type ReactNode } from 'react';
 
@@ -41,11 +19,7 @@ function statusDotClass(addon: AddonClientEntry): string {
   }
 }
 
-/**
- * IKON PER ADDON — derivasi dari identitas addon, bukan satu ikon untuk semua.
- * Prioritas: (1) penanda eksplisit di id/kind, (2) kata kunci di nama/deskripsi.
- * RSA/T = gem (ciri khas quest/achievement), sisanya di-mapping dari domain.
- */
+
 function addonIcon(doc: AddonClientEntry): string {
   const id = doc.id.toLowerCase();
   const name = (doc.name + ' ' + doc.shortName + ' ' + (doc.kind ?? '') + ' ' + doc.description).toLowerCase();
@@ -61,7 +35,7 @@ function addonIcon(doc: AddonClientEntry): string {
   return 'puzzle';
 }
 
-/** Tail chip per addon — ciri khas lifecycle (persis gaya desain sidebar-addons). */
+
 function addonTail(addon: AddonClientEntry): ReactNode {
   if (addon.status === 'needs-consent') return <span className="addon-tail warn">Approve</span>;
   if (addon.status === 'error' || addon.status === 'invalid' || addon.status === 'blocked') return <span className="addon-tail danger">error</span>;
@@ -70,7 +44,7 @@ function addonTail(addon: AddonClientEntry): ReactNode {
   return null;
 }
 
-/** Subtitle satu baris di bawah nama addon — status singkat / versi. */
+
 function addonSubtitle(addon: AddonClientEntry): string {
   if (addon.status === 'needs-consent') return 'Needs approval';
   if (addon.loadError) return 'Failed to load';
@@ -80,9 +54,7 @@ function addonSubtitle(addon: AddonClientEntry): string {
   return `v${addon.version}${addon.author ? ` · ${addon.author}` : ''}`;
 }
 
-/** Logo BAWAAN addon: manifest `icon` (mis. resources/icon.svg) disajikan
- *  server lewat /api/addons/:id/client/<rel>; di-mask + currentColor supaya
- *  mengikuti tema, bukan selalu hitam. Tanpa icon → glyph turunan identitas. */
+
 function AddonLogo({ addon }: { addon: AddonClientEntry }) {
   const src = addon.icon && /\.svg$/i.test(addon.icon)
     ? `/api/addons/${addon.id}/client/${addon.icon.replace(/^\.?\//, '')}`

@@ -1,55 +1,41 @@
-/**
- * VISION TOOL — eyes for blind models.
- *
- * A text-only model receives images on the wire (see wireUserContent:
- * `image_url` parts) but cannot see them. This module hands the image to a
- * MULTIMODAL model the user configured (any OpenAI-compatible chat endpoint —
- * Mistral, OpenAI, Groq, local…), and returns that model's description as
- * plain text. The blind model then "sees" through the second model's words.
- *
- * Credentials: the user configures the vision provider ONCE, from the UI or
- * via /api/vision/config — providerId + model + optional key. The endpoint and
- * key resolve through the SAME resolveCredentials path as chat, so .env keys,
- * UI-saved keys and browser-supplied keys all work here too.
- */
+
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { deadline } from '../liveness.js';
 
 export interface VisionConfig {
-  /** Provider id — built-in ('openai', …) or a custom one from the store. */
+  
   providerId: string;
-  /** Multimodal model id, e.g. 'mistral-small-latest' / 'gpt-4o-mini'. */
+  
   model: string;
-  /** Optional key supplied from the browser; the store/env one wins. */
+  
   apiKey?: string;
-  /** Optional baseUrl override — when absent, the provider's own is used. */
+  
   baseUrl?: string;
 }
 
 export interface VisionRequest {
-  /** Image bytes + detected mime, resolved from a path/URL/data-URL input. */
+  
   buffer: Buffer;
   mime: string;
-  /** What the blind model wants to know about the image. */
+  
   question: string;
 }
 
 export interface VisionResult {
   ok: boolean;
-  /** The multimodal model's description (already bounded). */
+  
   text: string;
-  /** Which provider/model answered — shown to the model + UI. */
+  
   by: string;
 }
 
-/** Max bytes of image payload we will upload to the vision model. */
+
 const MAX_IMAGE_BYTES = 20_000_000;
-/** Cap on the returned description — unlimited (the model's own max_tokens is
- *  the only bound). */
+
 const MAX_ANSWER_CHARS = Infinity;
-/** Wall-clock budget for the vision call. */
+
 const VISION_TIMEOUT_MS = 90_000;
 
 const IMAGE_EXTENSIONS = new Set([
@@ -63,11 +49,7 @@ const IMAGE_EXTENSIONS = new Set([
   '.tif',
 ]);
 
-/**
- * Loads an image from the filesystem (relative to the workspace root), a
- * public URL, or a data: URL. Returns null when the input is not an image the
- * vision model can accept — the tool then reports a readable reason.
- */
+
 export async function resolveImageSource(
   input: string,
   fetchPublicBuffer: (url: string) => Promise<{ buffer: Buffer; contentType: string }>,
@@ -127,10 +109,7 @@ function buildVisionBody(config: VisionConfig, request: VisionRequest): Record<s
   };
 }
 
-/**
- * Calls the multimodal model and returns its description. Errors are thrown as
- * plain Error objects with a provider-prefixed message — the tool wraps them.
- */
+
 export async function callVisionModel(
   config: VisionConfig,
   request: VisionRequest,
@@ -155,7 +134,6 @@ export async function callVisionModel(
 
   const bound = deadline(undefined, VISION_TIMEOUT_MS, 'VISION_TIMEOUT');
   try {
-    // Gemini's own wire: inlineData parts, candidates[].content.parts[].text.
     if (credentials.kind === 'gemini') {
       const endpoint = `${base}/models/${encodeURIComponent(config.model)}:generateContent`;
       const response = await fetch(endpoint, {

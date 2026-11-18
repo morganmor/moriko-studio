@@ -1,12 +1,4 @@
-/**
- * Addon v2 permissions (A2) — the consent fence.
- *
- * Trust model (honest): addons are code from the user's disk running IN the
- * server process. Permissions are a fence + consent UX, NOT a security
- * sandbox (until worker isolation exists). Grants persist in
- * ~/.moriko-studio/addons-state.json; builtin addons (addons-src/) are
- * pre-granted with trust "builtin".
- */
+
 
 import { readFileSync } from 'node:fs';
 
@@ -21,7 +13,7 @@ interface PermissionSpec {
   description: string;
 }
 
-/** Known permission catalog. Unknown permissions = sensitive (require consent). */
+
 const PERMISSIONS: Record<string, PermissionSpec> = {
   'tools.register': { level: 'normal', description: 'Register agent tools' },
   'commands': { level: 'normal', description: 'Register slash commands' },
@@ -43,7 +35,7 @@ const PERMISSIONS: Record<string, PermissionSpec> = {
   'tools.catalogue.mutate': { level: 'dangerous', description: 'Hide or alter the tool catalogue' },
 };
 
-/** workspace.read[:glob] / workspace.write[:glob] — sensitive, glob-scoped. */
+
 const GLOB_PERMISSIONS = ['workspace.read', 'workspace.write'];
 
 export function permissionLevel(perm: string): PermissionSpec {
@@ -65,7 +57,7 @@ export function isNormal(perm: string): boolean {
   return permissionLevel(perm).level === 'normal';
 }
 
-/** Which permissions need explicit consent for this addon. */
+
 export function consentNeeded(perms: string[]): string[] {
   return perms.filter((p) => !isNormal(p));
 }
@@ -75,8 +67,7 @@ export interface AddonPermRecord {
   granted: string[];
   denied: string[];
   enabled: boolean;
-  /** Hash of the manifest at consent time — a manifest that ADDS permissions
-   *  re-asks for consent. */
+  
   manifestHash?: string;
   trust?: 'builtin' | 'user';
 }
@@ -141,8 +132,7 @@ export function isBuiltin(addonId: string): boolean {
   return getPermRecord(addonId).trust === 'builtin';
 }
 
-/** True when the addon may activate: every consent-needed permission granted.
- *  Builtin addons are pre-granted (markBuiltin seeds them at install time). */
+
 export function consentSatisfied(addonId: string, perms: string[]): boolean {
   const needed = consentNeeded(perms);
   if (needed.length === 0) return true;
@@ -150,8 +140,7 @@ export function consentSatisfied(addonId: string, perms: string[]): boolean {
   return needed.every((p) => rec.granted.includes(p));
 }
 
-/** The permission gate the $ facade calls. Throws PermissionError with a
- *  readable message (recorded in the addon log), never fails silently. */
+
 export class PermissionError extends Error {
   constructor(addonId: string, perm: string) {
     super(`Addon "${addonId}" lacks permission "${perm}"${permissionLevel(perm).description ? ` — ${permissionLevel(perm).description}` : ''}. Grant it in the Addon Hub → Permissions.`);

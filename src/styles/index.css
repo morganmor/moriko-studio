@@ -454,10 +454,7 @@
 .eye .pupil{transform:translate(var(--px,0),var(--py,0));transition:transform .12s}
 .pill{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 10px;border-radius:999px;border:1px solid var(--line);font-size:12.5px;font-weight:500;color:var(--muted);transition:border-color .15s,color .15s,background .15s;max-width:100%}
 .pill:hover,.pill[aria-expanded=true]{color:rgb(var(--c-ink));border-color:rgb(var(--c-accent)/.5)}
-/* Active pill — same accent treatment as .ib[aria-expanded=true]. */
 .pill.on{color:rgb(var(--c-accent));border-color:rgb(var(--c-accent)/.5);background:rgb(var(--c-accent)/.12)}
-/* PLAN MODE — a hard gate, so the chip is filled, not merely tinted: it must
-   stay legible while the user reads the thread, not only when hovered. */
 .pill.plan{color:rgb(var(--c-accent-ink));background:rgb(var(--c-accent));border-color:rgb(var(--c-accent))}
 .pill.plan:hover{color:rgb(var(--c-accent-ink));background:rgb(var(--c-accent));border-color:rgb(var(--c-accent));opacity:.9}
 .pill .ic{width:14px;height:14px}
@@ -780,9 +777,6 @@ mark{background:rgb(var(--c-accent)/.25);color:inherit;border-radius:3px;padding
 .modal.open .mpanel{transform:none}
 .mpanel.sm{width:min(440px,100%)}
 .mpanel.wide{width:min(768px,100%)}
-/* Extra-wide panel for two-pane editors whose right side carries a full table
-   (Providers → Models matrix). Sized so a 240px list + the ~700px capability
-   grid both fit with no horizontal scroll at 1280px and up. */
 .mpanel.xl{width:min(96vw,1120px)}
 #m-palette{align-items:flex-start;padding-top:12vh}
 .mh{display:flex;align-items:center;gap:8px;padding:14px 14px 10px 18px;border-bottom:1px solid var(--line)}
@@ -1353,12 +1347,7 @@ code{font-family:var(--f-mono)}
   }
 }
 
-/**
- * ACTIVITY PILL (spec v2) — ONE pill panel per assistant turn. A conic-gradient
- * comet rotates around the PANEL border while running; collapsed it reads as a
- * small chip ([▼ Doing Work ●●●]), expanding animates the panel height open.
- * The label swaps status words every 2s with a soft fade while RUNNING.
- */
+
 .activity-ticker {
   position: relative;
   border-radius: 14px;
@@ -1382,7 +1371,6 @@ code{font-family:var(--f-mono)}
   transition:border-color .2s}
 .cp-card::before{content:"";position:absolute;inset:0 auto 0 0;width:3px;
   background:linear-gradient(180deg,rgb(var(--c-accent)),transparent 85%)}
-/* LIVE COMPACTION — border indicator while the model writes the summary. */
 .cp-card[data-live]{border-color:rgb(var(--c-accent)/.65);
   box-shadow:0 0 0 1px rgb(var(--c-accent)/.22),0 0 18px rgb(var(--c-accent)/.16);
   animation:cp-live 1.6s ease-in-out infinite}
@@ -1879,8 +1867,6 @@ code{font-family:var(--f-mono)}
 .call.steer .tg { color: rgb(var(--c-ink)); font-family: var(--f); }
 .call .sz { flex: none; font-variant-numeric: tabular-nums; font-size: 10.5px; color: rgb(var(--c-ink) / 0.42); }
 
-/* PENDING TOOL STUB — a call whose name is known and whose arguments are still
-   arriving. Deliberately a plain .call row: no size, no container. */
 .call.pending .cn { color: rgb(var(--c-ink) / 0.82); }
 
 .call .spin { width: 11px; height: 11px; }
@@ -2016,15 +2002,7 @@ code{font-family:var(--f-mono)}
   }
 }
 
-/**
- * CHECKPOINT RAIL — fish-eye turn dots on the thread's right edge.
- * Foreground marks, NOT borders: the inactive dot used to reuse bg-hairline
- * (226,228,235 on the light canvas 246 → invisible in light mode, made worse
- * by a 0.7 opacity; komplain user 2026-10). Every theme carries its own
- * --c-rail-dot; active/hover reuse the theme's accent/ink tokens. Unlayered
- * on purpose — it outranks Tailwind's layered utilities, and no bg-* utility
- * competes here anymore.
- */
+
 .rail-dot {
   background-color: rgb(var(--c-rail-dot));
   opacity: 0.7;
@@ -2807,9 +2785,6 @@ kbd {
 .tip-fill{min-width:0;flex:1}
 .md\:grid2col{display:grid;grid-template-columns:minmax(0,1fr)}
 @media (min-width:768px){.md\:grid2col{grid-template-columns:240px minmax(0,1fr)}}
-/* Providers editor: keep the catalogue list compact (240px) so the detail pane
-   inherits the rest of the xl panel — room for the capability matrix columns
-   without any horizontal scroll. */
 .providers-grid{display:grid;grid-template-columns:minmax(0,1fr)}
 @media (min-width:900px){.providers-grid{grid-template-columns:236px minmax(0,1fr)}}
 .prov-side{border-right:1px solid var(--line);min-width:0}
@@ -2838,9 +2813,6 @@ kbd {
 .att-chip .att-s{color:var(--faint);flex:none}
 .att-chip button{width:18px;height:18px;display:grid;place-items:center;border-radius:5px;color:var(--faint)}
 .att-chip button:hover{background:rgb(var(--c-ink)/.08);color:rgb(var(--c-ink))}
-/* ── capability matrix (Providers → Models) ───────────────────────────────
-   Sticky header + sticky model column, theme-tokenised so it reads in light,
-   dark and mocha. Only what inline styles cannot express lives here. */
 .mcap{display:flex;flex-direction:column;gap:8px;margin-top:8px;min-width:0}
 .mcap-bar{display:flex;align-items:center;gap:8px;min-width:0}
 .mcap-search{display:flex;align-items:center;gap:6px;flex:1;min-width:0;height:28px;padding:0 8px;border-radius:8px;border:1px solid rgb(var(--c-mcap-line));background:rgb(var(--c-field))}
@@ -2849,41 +2821,23 @@ kbd {
 .mcap-search input::placeholder{color:var(--faint)}
 .mcap-count{flex:none;font-size:10.5px;color:var(--faint);font-variant-numeric:tabular-nums}
 .mcap-scroll{overflow-x:auto;overflow-y:auto;border:1px solid rgb(var(--c-mcap-line));border-radius:10px;background:rgb(var(--c-mcap-row));overscroll-behavior:contain}
-/* No scrollbar at all on desktop: the columns sum to ~718px and the right pane
-   is ~840px at the xl panel width. The auto axis only engages on narrow
-   viewports, where scrolling beats clipping the flag columns away. */
 
-/* Fixed layout: every column has a declared width, so the name column can never
-   grow and push the flag columns out of view. */
 .mcap-table{width:100%;min-width:746px;table-layout:fixed;border-collapse:separate;border-spacing:0;font-size:11.5px}
 .mcap-table thead th{position:sticky;top:0;z-index:2;background:rgb(var(--c-mcap-head));border-bottom:1px solid rgb(var(--c-mcap-line));padding-block:10px;padding-inline:4px;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:0;color:var(--faint);white-space:nowrap;text-align:center;overflow:hidden}
 .mcap-table thead th.mcap-name-h{text-align:left;left:0;z-index:3;width:210px}
-/* The table is fixed-layout, so the widths below are authoritative:
-   210 + 6×62 + 96 + 68 = 746px — the name column wraps instead of stretching
-   the row, and the flags never leave the viewport. */
 .mcap-table thead th.mcap-flag-h{width:62px}
 .mcap-table thead th.mcap-ctx-h{width:96px}
 .mcap-table thead th.mcap-act-h{width:68px}
 .mcap-table tbody th,.mcap-table tbody td{padding-block:12px;padding-inline:6px;border-bottom:1px solid rgb(var(--c-mcap-line));vertical-align:middle}
-/* Breathing room at both walls of the table: the first cell never touches the
-   left border, the last never touches the right one. */
 .mcap-table th:first-child,.mcap-table td:first-child{padding-left:18px}
 .mcap-table th:last-child,.mcap-table td:last-child{padding-right:16px}
 .mcap-table tbody tr:last-child th,.mcap-table tbody tr:last-child td{border-bottom:0}
 .mcap-table tbody tr:hover th,.mcap-table tbody tr:hover td{background:rgb(var(--c-ink)/.03)}
 
-/* NAME CELL — wraps to as many lines as the id needs. This is what keeps the
-   flag columns on screen: a long slug folds downward instead of stretching
-   rightward. No ellipsis, no nowrap, no clipped overflow (clipped overflow was
-   what painted the id underneath the neighbouring sticky cell, reading as
-   doubled/ghosted text). */
 .mcap-name{position:sticky;left:0;z-index:1;background:rgb(var(--c-mcap-row));text-align:left;width:210px;white-space:normal;overflow:visible}
 .mcap-table tbody tr:hover .mcap-name{background:color-mix(in srgb,rgb(var(--c-ink)) 3%,rgb(var(--c-mcap-row)))}
 .mcap-id{display:block;font-family:var(--f-mono);font-size:10.5px;line-height:1.35;color:rgb(var(--c-ink));white-space:normal;overflow-wrap:anywhere;word-break:break-word;text-overflow:clip;overflow:visible}
 .mcap-badges{display:inline-flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:nowrap;max-width:100%}
-/* The <Tip> anchor is `inline-flex` (max-content) by design; inside a fixed-width
-   cell that width is meaningless and the text spills over the neighbouring
-   column. Contain it to the cell so the id stays where it belongs. */
 .mcap-name [data-tip-anchor]{display:block;width:100%;max-width:100%;min-width:0}
 .mcap-badge{display:inline-flex;align-items:center;height:14px;padding:0 5px;border-radius:999px;font-size:9px;font-weight:600;letter-spacing:.02em;white-space:nowrap;background:rgb(var(--c-ink)/.08);color:rgb(var(--c-mcap-badge-ink))}
 .mcap-badge.src-user{background:rgb(var(--c-mcap-pin)/.16);color:rgb(var(--c-mcap-pin))}
@@ -2904,8 +2858,6 @@ kbd {
 .mcap-ctx-input:focus{outline:0;border-color:rgb(var(--c-accent)/.7)}
 .mcap-ctx-input.pinned{border-color:rgb(var(--c-mcap-pin)/.55);color:rgb(var(--c-mcap-pin))}
 .mcap-act{white-space:nowrap;text-align:right}
-/* Fixed-layout tables break if a <td> becomes a flex container, so the action
-   buttons get their own flex row inside the cell instead. */
 .mcap-act-inner{display:flex;align-items:center;justify-content:flex-end;gap:6px}
 .mcap-icon-btn{width:20px;height:20px;display:inline-grid;place-items:center;border-radius:6px;color:var(--faint);background:transparent;border:0;cursor:pointer;vertical-align:middle;padding:0}
 .mcap-icon-btn:hover:not(:disabled){background:rgb(var(--c-ink)/.08);color:rgb(var(--c-ink))}
@@ -3318,14 +3270,13 @@ kbd {
 }
 .addon-perm-table { width: 100%; margin-top: 8px; border-collapse: collapse; font-size: 12px; }
 .addon-perm-table td { padding: 4px 8px 4px 0; border-bottom: 1px solid rgb(var(--c-line) / .6); color: var(--muted); }
-/* ── Addon terminal (Hub Logs tab) — CMD/UNIX console styling ─────────── */
 .aterm {
   display: flex;
   flex-direction: column;
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   overflow: hidden;
-  background: #14120f; /* fixed dark console — reads like a real terminal in every theme */
+  background: #14120f;
   color: #d4d0c8;
 }
 .aterm-bar {
@@ -3427,8 +3378,6 @@ kbd {
   border-radius: 999px;
   background: rgb(var(--c-rail-dot));
 }
-/* Topbar addon launch buttons (AddonTopbarButtons) — icon masked from the
-   addon's own resources/icon.svg, themed via currentColor. */
 .tb-addon-ic {
   display: block;
   width: 16px;

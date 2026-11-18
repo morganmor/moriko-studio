@@ -3,14 +3,7 @@ import { Router } from 'express';
 import { asyncRoute, HttpError } from '../http.js';
 import { listSkills, loadSkill, listSkillFiles } from '../skills/store.js';
 
-/**
- * REST surface for AGENT SKILLS (open Agent Skills format, dual-scope
- * discovery: ~/.moriko-studio/skills + <workspace>/.moriko/skills + the
- * ecosystem compat roots .agents/.claude):
- *
- *   GET /api/skills?sessionId=…      — catalogue (metadata only)
- *   GET /api/skills/:name?sessionId=… — one skill + body + companion files
- */
+
 export function skillsRouter(): Router {
   const router = Router();
 

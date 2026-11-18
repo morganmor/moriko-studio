@@ -6,27 +6,9 @@ import { buildUnifiedDiff, diffStatFromOps } from './diff.js';
 import { morikoHome } from '../paths.js';
 import { getActiveWorkspace, listWorkspaces } from './workspace.js';
 
-/**
- * FILE VAULT — the safety net under destructive harness operations.
- *
- * Every overwrite (edit_file) and every delete snapshots the affected FILE
- * into the OWNING WORKSPACE's `<workspace>/.moriko/vault/<sessionId>/` before
- * the destructive step runs, with a metadata index per session. Restores copy
- * the snapshot back to the original path (or anywhere else, through the normal
- * permission gate). Because the vault lives INSIDE the workspace, the agent
- * can inspect it with the regular file tools (glob/grep/read_file on
- * `.moriko/vault/…`) — no special read tool needed.
- *
- * Files OUTSIDE any registered workspace (addon installs, harness home) still
- * snapshot to the legacy home vault `~/.moriko-studio/vault/` so nothing loses
- * its safety net; those snapshots remain listable/restorable.
- *
- * Retention keeps vault growth bounded: at most MAX_PER_FILE snapshots per
- * original file and nothing older than MAX_AGE_DAYS; the sweep runs at boot
- * and after each snapshot.
- */
 
-/** Pre-per-workspace vault — read fallback for snapshots taken before the move. */
+
+
 const LEGACY_ROOT = path.join(morikoHome, 'vault');
 const MAX_PER_FILE = 20;
 const MAX_AGE_DAYS = 7;
@@ -34,11 +16,11 @@ const MAX_SNAPSHOT_BYTES = 100_000_000;
 
 export interface VaultEntryMeta {
   id: string;
-  /** Original absolute path the snapshot was taken from. */
+  
   originalPath: string;
-  /** Snapshot file on disk (inside the vault). */
+  
   storedPath: string;
-  /** Human operation label: "edit_file", "delete", "pre-restore", … */
+  
   operation: string;
   size: number;
   createdAt: number;
@@ -52,7 +34,7 @@ function normalizedRoot(candidate: string): string | null {
   }
 }
 
-/** The workspace root that owns a path (longest prefix match), or null. */
+
 function owningWorkspaceRoot(absolutePath: string): string | null {
   const target = normalizedRoot(absolutePath);
   if (!target) return null;
@@ -69,7 +51,7 @@ function owningWorkspaceRoot(absolutePath: string): string | null {
   return best;
 }
 
-/** Vault root for a file's snapshot: its workspace's .moriko/vault, or the legacy home vault. */
+
 function vaultRootFor(absolutePath: string): string {
   const owner = owningWorkspaceRoot(absolutePath);
   return owner ? path.join(owner, '.moriko', 'vault') : LEGACY_ROOT;
@@ -112,12 +94,7 @@ function writeIndex(vaultRoot: string, sessionId: string | undefined, entries: V
   writeFileSync(indexPath(vaultRoot, sessionId), JSON.stringify(entries, null, 2), 'utf8');
 }
 
-/**
- * Every vault root that may hold this session's snapshots: the active
- * workspace first, then every other registered workspace, then the legacy
- * home vault. Lookup/list merge across them so switching workspaces never
- * hides a snapshot.
- */
+
 function vaultRoots(sessionId: string | undefined): string[] {
   const roots: string[] = [];
   const pushVaultDir = (candidate: string | null | undefined): void => {
@@ -136,7 +113,7 @@ function vaultRoots(sessionId: string | undefined): string[] {
   return roots;
 }
 
-/** Never vault the vault itself (a vault file edit would nest snapshots). */
+
 function insideAVault(absolutePath: string): boolean {
   const key = (normalizedRoot(absolutePath) ?? '').toLowerCase();
   return key.includes(`${path.sep}.moriko${path.sep}vault${path.sep}`);
@@ -144,11 +121,11 @@ function insideAVault(absolutePath: string): boolean {
 
 export interface SnapshotOutcome {
   entry: VaultEntryMeta | null;
-  /** Why no snapshot was taken (only when entry is null). */
+  
   skipped?: string;
 }
 
-/** Looks up ONE snapshot by id across this session's vault roots (no side effects). */
+
 export function findSnapshot(sessionId: string | undefined, snapshotId: string): VaultEntryMeta | undefined {
   for (const root of vaultRoots(sessionId)) {
     const hit = readIndex(root, sessionId).find((candidate) => candidate.id === snapshotId);
@@ -157,11 +134,7 @@ export function findSnapshot(sessionId: string | undefined, snapshotId: string):
   return undefined;
 }
 
-/**
- * Snapshots ONE file before a destructive operation. Directories are not
- * vaulted recursively here (delete handles them entry by entry); missing
- * files snapshot as null (nothing to protect).
- */
+
 export function snapshotFile(
   sessionId: string | undefined,
   absolutePath: string,
@@ -207,7 +180,7 @@ export function snapshotFile(
   return { entry };
 }
 
-/** Snapshots every file of a directory tree (bounded) before recursive delete. */
+
 export function snapshotTree(
   sessionId: string | undefined,
   absolutePath: string,
@@ -282,7 +255,7 @@ export function listSnapshots(sessionId: string | undefined, query?: string): Va
   return [...filtered].sort((a, b) => b.createdAt - a.createdAt);
 }
 
-/** Line range (1-based, inclusive) for a surgical range restore. */
+
 export interface RestoreRange {
   from: number;
   to: number;
@@ -291,13 +264,13 @@ export interface RestoreRange {
 export interface RestoreOutcome {
   target: string;
   entry: VaultEntryMeta;
-  /** Unified diff of current-file-content → restored content (text files only). */
+  
   diff?: string;
-  /** Line counts from the same ops the diff renders. */
+  
   diffstat?: { added: number; removed: number };
-  /** Content of the file that was overwritten by the restore (already snapshotted). */
+  
   previousEntryId?: string;
-  /** Present when only a line range was spliced back in. */
+  
   range?: RestoreRange;
 }
 
@@ -305,15 +278,7 @@ function splitLines(text: string): string[] {
   return text.split(/\r\n|\n|\r/);
 }
 
-/**
- * Restores a snapshot to its original path (or an explicit target). When a
- * file already exists at the target it is snapshotted FIRST ("pre-restore"),
- * so a restore can itself be undone.
- *
- * With `range`, only the snapshot's lines [from..to] are spliced into the
- * target at the SAME line positions — a surgical repair that leaves the rest
- * of the live file untouched. Full-file restore stays the default.
- */
+
 export function restoreSnapshot(
   sessionId: string | undefined,
   snapshotId: string,
@@ -340,7 +305,6 @@ export function restoreSnapshot(
   }
 
   if (range) {
-    // Surgical splice: replace target[from..to] with snapshot[from..to].
     const before = readFileSync(target, 'utf8');
     const snapshotText = readFileSync(entry.storedPath, 'utf8');
     const cur = splitLines(before);
@@ -382,7 +346,7 @@ export function restoreSnapshot(
   return { target, entry, diff, diffstat, previousEntryId };
 }
 
-/** Permanently removes one snapshot (its file + index entry, wherever it lives). */
+
 export function purgeSnapshot(sessionId: string | undefined, snapshotId: string): boolean {
   for (const root of vaultRoots(sessionId)) {
     const entries = readIndex(root, sessionId);
@@ -398,7 +362,7 @@ export function purgeSnapshot(sessionId: string | undefined, snapshotId: string)
   return false;
 }
 
-/** Retention: drop snapshots older than MAX_AGE_DAYS and beyond MAX_PER_FILE. */
+
 export function sweepVault(sessionId: string | undefined): void {
   const cutoff = Date.now() - MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
   for (const root of vaultRoots(sessionId)) {

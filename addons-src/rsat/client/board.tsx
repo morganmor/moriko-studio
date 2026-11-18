@@ -1,9 +1,4 @@
-/**
- * RSA/T board — satu modul untuk SEMUA view sidebar (addon.json contributes.views).
- * Port 1:1 dari design/rsat-panel-pixel.html (markup baris 405–443).
- * State backend: initRsat() memuat rpc('state'), useAddonBus('rsat.changed')
- * menyegarkan saat agent lain mengubah board (R4 — realtime antar sesi).
- */
+
 import { useEffect, useRef, useState } from 'react';
 import Canvas from './canvas.tsx';
 import Dock from './dock.tsx';
@@ -16,7 +11,7 @@ import { RSAT_CSS } from './shared.tsx';
 import { initRsat, refreshRsat, setLang, useRsat } from './store.tsx';
 import { useAddonBus } from '@moriko/host';
 
-/** View ids yang dideklarasikan addon.json (contributes.views). */
+
 const VIEW_IDS = ['overview', 'board', 'tree', 'interlinked', 'activity', 'files', 'settings', 'create'];
 
 export default function Board({ viewName }: { viewName?: string }) {

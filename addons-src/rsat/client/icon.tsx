@@ -1,12 +1,4 @@
-/**
- * RSA/T icon system — registry TERPUSAT (satu komponen Ic untuk semua panel).
- * Aturan utama: setiap <svg> WAJIB punya viewBox="0 0 24 24" → path 24-unit
- * tidak pernah terpotong pada ukuran CSS apa pun.
- * Mekanisme ukur dinamis (lihat RSAT_CSS): default mengikuti desain
- * (.i = 18px, .i.sm = 14px), tetapi DI DALAM kontrol (btn/chip/tab/slot/
- * icon-btn) ikon memakai unit em → otomatis mengikuti ukuran/font tombol.
- * Ikon baru: tambahkan path di sini saja — tidak perlu komponen lokal lagi.
- */
+
 
 const ICONS: Record<string, string> = {
   play: 'M8 5l11 7-11 7z',

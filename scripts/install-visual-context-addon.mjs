@@ -1,15 +1,4 @@
-/**
- * Install the visual-context addon into the running Moriko app data root.
- *
- * The addon root is <MORIKO_HOME>/addons, where MORIKO_HOME resolves exactly
- * like server/paths.ts: process.env.MORIKO_HOME (loaded from the repo .env via
- * dotenv) or ~/.moriko-studio. The harness itself never reads .env
- * (self-host guard) - dotenv does the loading inside this Node script.
- *
- * Idempotent: re-running overwrites the addon files in place.
- *
- * Usage: node scripts/install-visual-context-addon.mjs
- */
+
 import { readFileSync, mkdirSync, copyFileSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';

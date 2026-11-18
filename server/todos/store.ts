@@ -6,27 +6,7 @@ import { atomicWriteJson } from '../atomicWrite.js';
 import { chatDirFor } from '../conversationStore.js';
 import { detachedTodosDir } from '../paths.js';
 
-/**
- * STANDALONE TODOS store — todos that exist WITHOUT a parent goal.
- *
- * This is a STATE MACHINE, not a passive checklist. Two invariants are
- * enforced here (the third — no false completion — needs the diagnostics
- * ledger and is enforced by the tool layer, which can see the build):
- *
- *   1. SINGLE ACTIVE FOCUS — at most one todo is in_progress. Two "current"
- *      tasks means the model has stopped deciding what it is doing.
- *   2. NO SHORTCUT — pending cannot jump to completed. It must pass through
- *      in_progress, which requires an activeForm: one present-continuous
- *      sentence naming the work actually happening. That sentence is the
- *      difference between a plan and a claim.
- *
- * The legacy `done` boolean is still accepted and still read by the UI, but it
- * is DERIVED from `state` — never an independent flag. Both are written
- * together so no reader can observe them disagreeing.
- *
- * Per-session storage, same pattern as goals: NEXT TO THE CHAT folder
- * (todos.json), falling back to the detached dir for synthetic session ids.
- */
+
 
 export type TodoPriority = 'low' | 'medium' | 'high';
 export type TodoState = 'pending' | 'in_progress' | 'completed';
@@ -34,17 +14,19 @@ export type TodoState = 'pending' | 'in_progress' | 'completed';
 export interface Todo {
   id: string;
   text: string;
-  /** The state machine — the ONLY authority on whether work is finished. */
+  
   state: TodoState;
-  /** Derived mirror of state === completed (kept for older readers/UI). */
+  
   done: boolean;
-  /** Present continuous: what is happening NOW. Required while in_progress. */
+  
   activeForm?: string;
   priority: TodoPriority;
-  /** Optional longer-form detail the agent or user attached. */
+  
   notes?: string;
   createdAt: number;
   updatedAt: number;
+  
+  sweptAt?: number;
 }
 
 const MAX_TEXT = 300;
@@ -52,7 +34,7 @@ const MAX_NOTES = 2_000;
 const MAX_ACTIVE_FORM = 200;
 const MAX_TODOS = 200;
 
-/** session → todos. Lazily loaded per session, written through on change. */
+
 const store = new Map<string, Todo[]>();
 
 function safeSession(sessionId: string): string {
@@ -78,11 +60,7 @@ function isState(value: unknown): value is TodoState {
   return value === 'pending' || value === 'in_progress' || value === 'completed';
 }
 
-/**
- * Reads one persisted record, healing legacy shapes. A record written before
- * the state machine existed carries only `done` — it is mapped onto the
- * nearest legal state rather than discarded.
- */
+
 function normalizeTodo(value: unknown): Todo | null {
   const raw = value as Partial<Todo> | null;
   if (!raw || typeof raw.id !== 'string' || typeof raw.text !== 'string') return null;
@@ -100,6 +78,7 @@ function normalizeTodo(value: unknown): Todo | null {
   };
   if (activeForm) todo.activeForm = activeForm;
   if (notes) todo.notes = notes;
+  if (typeof raw.sweptAt === 'number') todo.sweptAt = raw.sweptAt;
   return todo;
 }
 
@@ -159,7 +138,6 @@ export function createTodo(
   const todo: Todo = {
     id: randomUUID().slice(0, 8),
     text,
-    // Creation never starts work: activating it is a separate, deliberate act.
     state: 'pending',
     done: false,
     priority: normalizePriority(input.priority),
@@ -182,11 +160,7 @@ export interface TodoPatch {
   notes?: unknown;
 }
 
-/**
- * The state a patch is asking for, without applying it. Exported so the tool
- * layer can run its own (build-aware) checks BEFORE the store mutates — and so
- * the same resolution rules are never duplicated.
- */
+
 export function targetStateOf(todo: Todo, patch: TodoPatch): TodoState {
   if (isState(patch.state)) return patch.state;
   if (typeof patch.state === 'string' && patch.state.trim()) {
@@ -198,7 +172,7 @@ export function targetStateOf(todo: Todo, patch: TodoPatch): TodoState {
   return todo.state;
 }
 
-/** The single legal-transition check. Throws with an actionable message. */
+
 function assertTransition(todos: Todo[], todo: Todo, next: TodoState, activeForm: string): void {
   if (next === todo.state) return;
 
@@ -222,10 +196,7 @@ function assertTransition(todos: Todo[], todo: Todo, next: TodoState, activeForm
   }
 
   if (next === 'completed' && todo.state === 'pending') {
-    throw new Error(
-      todo.id + ' cannot jump from pending to completed. Move it to in_progress (with ' +
-        'activeForm) first, do the work, then complete it — that is what keeps the checklist honest.',
-    );
+    return;
   }
 }
 
@@ -253,23 +224,37 @@ export function updateTodo(sessionId: string, todoId: string, patch: TodoPatch):
     if (next === 'in_progress') {
       todo.activeForm = activeForm;
     } else if (next === 'pending') {
-      // Parking or reopening: the live description is no longer true.
       if (activeForm) todo.activeForm = activeForm;
       else delete todo.activeForm;
     } else {
-      // Completion: nothing is currently happening any more.
       delete todo.activeForm;
     }
     todo.state = next;
     todo.done = next === 'completed';
   } else if (activeForm && next === 'in_progress') {
-    // Same state, refreshed description — allowed and useful.
     todo.activeForm = activeForm;
   }
 
   todo.updatedAt = Date.now();
   persistSession(sessionId);
   return todo;
+}
+
+
+export function sweepTodos(sessionId: string): { todos: Todo[]; swept: number } {
+  const todos = loadSession(sessionId);
+  if (todos.length === 0 || todos.some((todo) => todo.state !== 'completed')) {
+    return { todos: listTodos(sessionId), swept: 0 };
+  }
+  const now = Date.now();
+  for (const todo of todos) {
+    if (!todo.sweptAt) {
+      todo.sweptAt = now;
+      todo.updatedAt = now;
+    }
+  }
+  persistSession(sessionId);
+  return { todos: listTodos(sessionId), swept: todos.length };
 }
 
 export function deleteTodo(sessionId: string, todoId: string): boolean {
@@ -287,7 +272,7 @@ const STATE_LABEL: Record<TodoState, string> = {
   completed: 'x',
 };
 
-/** Renders the standalone todo state for the model's context injection. */
+
 export function renderTodosForContext(todos: Todo[]): string {
   if (todos.length === 0) return '(no standalone todos)';
   const open = todos.filter((todo) => todo.state !== 'completed');

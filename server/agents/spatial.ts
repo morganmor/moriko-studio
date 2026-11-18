@@ -1,27 +1,4 @@
-/**
- * SPATIAL IR — layout map + collision detection, static tier (F0).
- *
- * Part of docs/plans/PLAN-SPATIAL-HARNESS.md. Principle: the agent edits UI in
- * "intent space"; the harness measures the result in "metric space". This
- * module is the deterministic foundation:
- *   - Layout IR types (region, collision, map)
- *   - pure geometry core (rect intersection, severity classification)
- *   - Tier-1 static extractor: absolutely positioned boxes out of CSS rules
- *     and JSX inline styles — zero dependencies, no browser
- *   - compact renderer for agent injection (F1 wires it into a tool)
- *
- * Honesty rules:
- *   - Static absolute coordinates are PARENT-RELATIVE and the parent is
- *     unknown without a runtime, so a static overlap is always a CANDIDATE
- *     (severity "soft"). "hard" is reserved for runtime truth (F4).
- *   - Percent / var() / calc() coordinates are non-deterministic here:
- *     flagged via magicNumbers, excluded from collision math.
- *   - Overlay semantics (modal, tooltip, popover, ...) are exempt from
- *     collision reporting — overlays are SUPPOSED to cover things.
- *
- * Scanner discipline follows deps.ts: string- and comment-aware, bounded,
- * line-anchored so every region reports a jumpable file:line.
- */
+
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -38,17 +15,17 @@ export type SpatialConstraint = 'absolute' | 'fixed' | 'flow' | 'unknown';
 
 export interface SpatialRegion {
   id: string;
-  /** workspace-relative source file */
+  
   file: string;
-  /** 1-based, jumpable */
+  
   line: number;
-  /** null = geometry not statically determinable (partial coordinates) */
+  
   rect: SpatialRect | null;
   constraint: SpatialConstraint;
-  /** px literals in positioning props — the "guessed pixel" smell (P1) */
+  
   magicNumbers: string[];
   zIndex: number | null;
-  /** true when role/id suggests overlay semantics (never a collision source) */
+  
   overlay: boolean;
   via: 'css-rule' | 'inline-style' | 'runtime' | 'mockup';
 }
@@ -62,9 +39,9 @@ export interface SpatialCollision {
 
 export interface SpatialMap {
   tier: 'static' | 'runtime' | 'mockup';
-  /** runtime tier only — the page the boxes were measured on */
+  
   url?: string;
-  /** runtime tier only — the viewport the geometry was measured at */
+  
   viewport?: { w: number; h: number };
   files: string[];
   regions: SpatialRegion[];
@@ -83,7 +60,7 @@ function looksLikeOverlay(id: string): boolean {
 }
 
 
-/** Closed-interval-on-both-axes intersection; touching edges is NOT overlap. */
+
 export function intersectionRect(a: SpatialRect, b: SpatialRect): SpatialRect | null {
   const x1 = Math.max(a.x, b.x);
   const y1 = Math.max(a.y, b.y);
@@ -93,11 +70,7 @@ export function intersectionRect(a: SpatialRect, b: SpatialRect): SpatialRect | 
   return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
 }
 
-/**
- * Pairwise overlap detection over regions with a complete rect.
- * Severity (static tier): every overlap is a CANDIDATE ("soft") because
- * static coords are parent-relative; "hard" is reserved for runtime (F4).
- */
+
 export function detectCollisions(regions: SpatialRegion[]): SpatialCollision[] {
   const solid = regions.filter(
     (r) => r.rect !== null && !r.overlay && !looksLikeOverlay(r.id),
@@ -117,10 +90,7 @@ export function detectCollisions(regions: SpatialRegion[]): SpatialCollision[] {
 }
 
 
-/**
- * Parse a CSS/JSX length literal into px. Accepts "260px", 260, and "-10px".
- * Percent ("50%"), var(), calc() → null (non-deterministic in static tier).
- */
+
 export function parsePx(value: string): number | null {
   const v = value.trim().replace(/^['"]|['"]$/g, '');
   if (v.endsWith('px')) {
@@ -139,12 +109,12 @@ type BoxProp = (typeof BOX_PROPS)[number];
 interface BoxProps {
   position?: 'absolute' | 'fixed' | 'relative' | 'static' | 'sticky';
   values: Partial<Record<BoxProp, number>>;
-  /** raw literals of non-deterministic values (%, var, calc) — for warnings */
+  
   nondet: string[];
   zIndex: number | null;
 }
 
-/** Parse `key: value` pairs from a CSS declaration body or JSX style object. */
+
 function parseBoxProps(body: string): BoxProps {
   const out: BoxProps = { values: {}, nondet: [], zIndex: null };
   const pairRe = /([A-Za-z-]+)\s*:\s*("[^"]*"|'[^']*'|[^,;}\n]+)/g;
@@ -178,11 +148,7 @@ function parseBoxProps(body: string): BoxProps {
   return out;
 }
 
-/**
- * Resolve positioning props into a rect. Static tier needs ALL of:
- * top + left + width + height (parent-relative, canvas unknown → right/
- * bottom-only or % sizes stay partial). Returns null rect when partial.
- */
+
 function resolveRect(p: BoxProps): { rect: SpatialRect | null; magic: string[] } {
   const magic: string[] = [];
   for (const [k, v] of Object.entries(p.values)) {
@@ -198,17 +164,12 @@ function resolveRect(p: BoxProps): { rect: SpatialRect | null; magic: string[] }
 }
 
 
-/** Blank out comments (keep newlines so line math stays honest). */
+
 function stripCssComments(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, ' '));
 }
 
-/**
- * Extract absolutely-positioned regions from CSS source.
- * One region per declaration block that sets position:absolute|fixed with
- * px coordinates. Nested @media blocks are handled (their rules inherit the
- * "media context unknown" caveat via warnings, counted once per file).
- */
+
 export function extractCssRegions(src: string, file: string): { regions: SpatialRegion[]; mediaBlocks: number } {
   const clean = stripCssComments(src);
   const regions: SpatialRegion[] = [];
@@ -241,7 +202,7 @@ export function extractCssRegions(src: string, file: string): { regions: Spatial
 }
 
 
-/** Find `style={{ ... }}` objects in JSX and return [start, end) spans. */
+
 function findStyleSpans(src: string): Array<[number, number]> {
   const spans: Array<[number, number]> = [];
   let i = 0;
@@ -290,7 +251,7 @@ function findStyleSpans(src: string): Array<[number, number]> {
   return spans;
 }
 
-/** Nearest JSX tag name before an offset: `<FilterPanel` → "FilterPanel". */
+
 function nearestTagBefore(src: string, offset: number): string | null {
   for (let i = offset - 1; i >= 0; i--) {
     if (src[i] === '>') return null;
@@ -307,11 +268,7 @@ function nearestTagBefore(src: string, offset: number): string | null {
   return null;
 }
 
-/**
- * Extract absolutely-positioned regions from JSX/TSX inline styles.
- * A string containing style={{...}}-shaped text is inert because
- * findStyleSpans skips string bodies — that is the whole point.
- */
+
 export function extractJsxRegions(src: string, file: string): SpatialRegion[] {
   const regions: SpatialRegion[] = [];
   for (const [start, end] of findStyleSpans(src)) {
@@ -338,10 +295,7 @@ export function extractJsxRegions(src: string, file: string): SpatialRegion[] {
 }
 
 
-/**
- * Build a static SpatialMap from file contents (pure core — the fs walker
- * and future runtime feeder both land here).
- */
+
 export function buildSpatialMap(sources: Array<{ path: string; content: string }>): SpatialMap {
   const regions: SpatialRegion[] = [];
   const warnings: string[] = [];
@@ -377,10 +331,7 @@ export function buildSpatialMap(sources: Array<{ path: string; content: string }
   };
 }
 
-/**
- * Compact agent-injectable rendering of a map. Kept deliberately terse:
- * pre-edit context (F1 "map" mode) must cost few tokens.
- */
+
 export function renderSpatialMap(map: SpatialMap): string {
   const lines: string[] = [];
   const label =
@@ -418,39 +369,39 @@ export type LayoutIntentType =
 
 export interface LayoutIntent {
   type: LayoutIntentType;
-  /** target region id (region.id from the spatial map) */
+  
   target: string;
-  /** reference region id — required for all intents except resize-relative/align */
+  
   reference?: string;
-  /** resize-relative and align only — negative grows left/up for resize */
+  
   scale?: number;
-  /** resize-relative only — which dimension to scale; default both */
+  
   axis?: 'x' | 'y' | 'both';
-  /** align only — which edge/axis to align the target onto the reference */
+  
   mode?: 'left' | 'top' | 'center-x' | 'center-y' | 'right' | 'bottom';
-  /** gap in px between the moved box and the reference box (default 0) */
+  
   gap?: number;
 }
 
 export interface LayoutIntentEdit {
   file: string;
-  /** exact old text of the positioning declaration to replace */
+  
   oldText: string;
   newText: string;
-  /** 1-based line of the declaration (for reporting) */
+  
   line: number;
 }
 
 export interface LayoutIntentPlan {
   edits: LayoutIntentEdit[];
-  /** human-readable explanation of the computed geometry */
+  
   explanation: string[];
   warnings: string[];
 }
 
 interface PositionedTarget {
   region: SpatialRegion;
-  /** character span of the positioning declaration inside the file */
+  
   span: [number, number];
   props: Record<BoxProp, number | undefined> & { position?: string };
 }
@@ -523,7 +474,7 @@ function parseIntentPositioned(src: string, file: string, id: string): Positione
   return null;
 }
 
-/** Rebuild a full CSS rule body with updated numeric props (px only). */
+
 function rewriteCssBody(body: string, updates: Partial<Record<BoxProp, number>>): string {
   let out = body;
   for (const [prop, value] of Object.entries(updates) as Array<[BoxProp, number]>) {
@@ -537,7 +488,7 @@ function rewriteCssBody(body: string, updates: Partial<Record<BoxProp, number>>)
   return out;
 }
 
-/** Rebuild a JSX inline style object with updated numeric props (px only). */
+
 function rewriteJsxBody(body: string, updates: Partial<Record<BoxProp, number>>): string {
   let out = body;
   for (const [prop, value] of Object.entries(updates) as Array<[BoxProp, number]>) {
@@ -551,16 +502,7 @@ function rewriteJsxBody(body: string, updates: Partial<Record<BoxProp, number>>)
   return out;
 }
 
-/**
- * Compile a layout intent into concrete text edits against ONE file's source.
- * Pure function — no fs, no terminal. The MODEL expresses relations
- * ("right of the canvas with a 16px gap"); this compiler computes every
- * coordinate, so no hallucinated pixels ever reach the code.
- *
- * Supported today (static tier): both target and reference must be
- * absolutely positioned with complete rects (top/left/width/height px),
- * declared in the SAME file (CSS rule or JSX inline style).
- */
+
 export function applyLayoutIntent(
   src: string,
   file: string,
@@ -745,10 +687,7 @@ function walkSpatialFiles(root: string, acc: string[] = []): string[] {
   return acc;
 }
 
-/**
- * Build a static SpatialMap for a workspace root. Cached 5 s per root so
- * repeated queries inside one tool loop stay instant (deps.ts pattern).
- */
+
 export function spatialMapForRoot(root: string, opts?: { refresh?: boolean }): SpatialMap {
   const cached = mapCache.get(root);
   if (!opts?.refresh && cached && Date.now() - cached.builtAt < SPATIAL_CACHE_TTL_MS) {
@@ -776,13 +715,13 @@ const collisionKey = (c: SpatialCollision): string => `${c.a}::${c.b}`;
 export interface SpatialDiff {
   added: SpatialRegion[];
   removed: SpatialRegion[];
-  /** same region id, different rect (line drift alone is NOT a change) */
+  
   changed: Array<{ id: string; file: string; before: SpatialRect | null; after: SpatialRect | null }>;
   newCollisions: SpatialCollision[];
   resolvedCollisions: SpatialCollision[];
 }
 
-/** Semantic region/collision diff — "requested change ✔ vs wild change ✘". */
+
 export function diffSpatialMaps(before: SpatialMap, after: SpatialMap): SpatialDiff {
   const beforeById = new Map(before.regions.map((r) => [regionKey(r), r]));
   const afterById = new Map(after.regions.map((r) => [regionKey(r), r]));
@@ -814,7 +753,7 @@ export function diffSpatialMaps(before: SpatialMap, after: SpatialMap): SpatialD
 const fmtRect = (r: SpatialRect | null): string =>
   r ? `rect(${r.x},${r.y},${r.w},${r.h})` : 'rect(partial)';
 
-/** Compact agent-injectable rendering of a spatial diff. */
+
 export function renderSpatialDiff(diff: SpatialDiff): string {
   const lines: string[] = [];
   lines.push(
@@ -840,12 +779,7 @@ export interface SpatialGateVerdict {
   report: string;
 }
 
-/**
- * The F3 gate verdict: compare the before/after maps of one edit. Blocked =
- * the edit CREATED new collision candidates (the requested move itself is
- * fine — only NEW pairs block; a resolved pair is celebrated). Null =
- * nothing spatial-relevant changed, so no report is appended at all.
- */
+
 export function evaluateSpatialGate(before: SpatialMap, after: SpatialMap): SpatialGateVerdict | null {
   const diff = diffSpatialMaps(before, after);
   const spatiallyQuiet =
@@ -872,11 +806,7 @@ export function evaluateSpatialGate(before: SpatialMap, after: SpatialMap): Spat
   };
 }
 
-/**
- * Drop the cached map for a workspace root (or ALL roots) — every direct
- * file write (edit_file, layout_edit, patch, restore) must invalidate so a
- * subsequent agent__spatial check never serves a stale field map.
- */
+
 export function invalidateSpatialMapCache(root?: string): void {
   if (root === undefined) mapCache.clear();
   else mapCache.delete(root);

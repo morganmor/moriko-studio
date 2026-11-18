@@ -1,17 +1,4 @@
-/**
- * ADDON v2 HOST GLOBAL (A5) — `window.__MORIKO_HOST__`.
- *
- * ONE React instance: addon client modules are transpiled server-side and
- * their bare imports ('react', 'react/jsx-runtime', '@moriko/host') are
- * rewritten to /api/addons/host-shim/* — tiny ES modules that re-export from
- * THIS object. Two React copies break hooks; this guarantees there is one.
- *
- * Installs react + react-dom + jsx-runtime + a host hook set:
- *  - useAddonState / useBus / useSettings — live SSE-backed state
- *  - invoke(addonId, name, body) — POST /api/addons/:id/rpc/:name (user actor)
- *  - notify / t — the notification + i18n channels
- *  - Icon/Card/Pill/Button/Modal/Tabs/ProgressBar — themed UI kit wrappers
- */
+
 
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
@@ -36,13 +23,13 @@ export interface AddonHostSurface {
   host: Record<string, unknown>;
 }
 
-/** Subscribe to addon SSE frames (same channel the visual re-bind uses). */
+
 export function onAddonBusFrame(listener: (frame: AddonBusPayload) => void): () => void {
   busListeners.add(listener);
   return () => busListeners.delete(listener);
 }
 
-/** Called by the boot SSE subscriber (main.tsx) for every frame. */
+
 export function dispatchAddonBusFrame(frame: AddonBusPayload): void {
   if (frame.topic === 'addons.registry') bumpAddonClientVersion();
   for (const listener of [...busListeners]) {
@@ -54,7 +41,7 @@ export function dispatchAddonBusFrame(frame: AddonBusPayload): void {
   }
 }
 
-/** useAddonBus — re-render on every matching SSE frame. */
+
 function useAddonBus(topic: string | null): AddonBusPayload | null {
   const last = useStore((state) => state.addonEvent);
   const [frame, setFrame] = React.useState<AddonBusPayload | null>(null);
@@ -66,7 +53,7 @@ function useAddonBus(topic: string | null): AddonBusPayload | null {
   return frame ?? (last && (topic === null || last.topic === topic) ? last : null);
 }
 
-/** useAddonState — fetch once, then keep in step with SSE invalidations. */
+
 function useAddonState<T>(addonId: string, initial: T, derive: (frame: AddonBusPayload | null) => T | null): T {
   const [state, setState] = React.useState<T>(initial);
   const [tick, setTick] = React.useState(0);
@@ -88,7 +75,7 @@ function useAddonState<T>(addonId: string, initial: T, derive: (frame: AddonBusP
   return state;
 }
 
-/** useSettings — schema-validated addon settings, live. */
+
 function useAddonSettings(addonId: string): { settings: Record<string, unknown> | null; set: (key: string, value: unknown) => void } {
   const [settings, setSettings] = React.useState<Record<string, unknown> | null>(null);
   const reload = React.useCallback(() => {
@@ -114,16 +101,14 @@ function useAddonSettings(addonId: string): { settings: Record<string, unknown> 
   return { settings, set };
 }
 
-/** useSession — the active conversation's harness session id (live). */
+
 function useSession(): { conversationId: string | null; running: boolean } {
   const activeId = useStore((state) => state.activeId);
   const genRunning = useStore((state) => state.genRunning);
   return { conversationId: activeId, running: Boolean(activeId && genRunning[activeId]) };
 }
 
-/** invoke — the addon's own RPC endpoint (server enforces actor = user).
- *  sessionId percakapan aktif ikut dikirim supaya RPC yang butuh konteks
- *  workspace (mis. RSA/T) me-resolve workspace CHAT ini, bukan global. */
+
 async function invoke<T = unknown>(addonId: string, name: string, body: Record<string, unknown> = {}): Promise<T> {
   const sessionId = useStore.getState().activeId ?? undefined;
   const resp = await fetch(`/api/addons/${addonId}/rpc/${name}`, {
@@ -136,7 +121,7 @@ async function invoke<T = unknown>(addonId: string, name: string, body: Record<s
   return payload.result as T;
 }
 
-/** i18n — key passthrough; bundles are resolved per-addon (A6 R6 wires ids). */
+
 function t(addonId: string, key: string, vars?: Record<string, string>): string {
   void addonId;
   let out = key;
@@ -144,12 +129,12 @@ function t(addonId: string, key: string, vars?: Record<string, string>): string 
   return out;
 }
 
-/** showNotice mirror for addon UIs (themed toasts, no browser alert). */
+
 function notify(text: string, kind: 'info' | 'warn' | 'error' = 'info'): void {
   useStore.getState().showNotice(kind === 'error' ? 'addon.notifyError' : 'addon.notify', undefined, { detail: text });
 }
 
-/** Appearance bridge — addon pages (RSA/T topbar) can flip the app theme/accent. */
+
 function setTheme(mode: 'light' | 'dark' | 'mocha' | 'system', ev?: { clientX: number; clientY: number }): void {
   useStore.getState().setTheme(mode, ev);
 }
@@ -161,13 +146,12 @@ function getAppearance(): { theme: string; accent: string } {
   return { theme: s.theme, accent: s.accent };
 }
 
-/** Navigate the SPA (addon topbar back button → chat). */
+
 function navigate(view: string): void {
   useStore.getState().setView(view as never);
 }
 
-/** Providers for addon UIs (RSAT Create Agent): id, label, models — NO keys.
- *  Hanya provider yang punya server key (usable untuk dispatch agent). */
+
 function getProviders(): Array<{ id: string; label: string; models: string[] }> {
   return useStore
     .getState()
@@ -175,12 +159,7 @@ function getProviders(): Array<{ id: string; label: string; models: string[] }> 
     .map((p) => ({ id: p.id, label: p.label, models: [...p.models] }));
 }
 
-/**
- * RSA/T dispatch: ask the host to spawn a NEW conversation bound to a named
- * agent and auto-send the task prompt. The event is handled in App.tsx where
- * newConversation + the chat controller's send live. detail carries NO
- * secrets — provider/model labels only; API keys stay host-side by design.
- */
+
 function dispatchAgent(detail: {
   providerId: string;
   model: string;
@@ -188,22 +167,19 @@ function dispatchAgent(detail: {
   agentName: string;
   questId: string;
   questTitle: string;
-  /** Reasoning effort pilihan user untuk agent ini ('' = ikut percakapan). */
+  
   thinkingLevel?: string;
   prompt: string;
 }): void {
   window.dispatchEvent(new CustomEvent('moriko:dispatch-agent', { detail }));
 }
 
-/** Toggle the HOST left rail (Moriko sidebar) from an addon page. */
+
 function toggleSidebar(): void {
   useStore.getState().toggleSidebar();
 }
 
-/**
- * COUNCIL (Council Agent addon) — the grouping read by the TopBar switcher.
- * Returns null when the active conversation is not part of a council.
- */
+
 function useCouncil(): {
   councilId: string | null;
   main: { id: string; title: string; agentId?: string } | null;
@@ -230,21 +206,17 @@ function useCouncil(): {
   };
 }
 
-/** Select an existing conversation (the switcher jumps between council members). */
+
 function openConversation(conversationId: string): void {
   useStore.getState().selectConversation(conversationId);
 }
 
-/**
- * Delete one sub session. The panel shows its own inline themed confirm, so
- * this takes the direct delete path (bypassing the host's confirmDel parking,
- * whose dialog lives in sidebar flows the sub session never renders in).
- */
+
 function deleteSubSession(conversationId: string): void {
   useStore.getState().executeDeleteConversation(conversationId);
 }
 
-/** Create a council: turns the ACTIVE conversation into its Main Session. */
+
 function createCouncil(): string | null {
   const store = useStore.getState();
   const active = store.activeConversation();
@@ -254,7 +226,7 @@ function createCouncil(): string | null {
   return councilId;
 }
 
-/** Create an empty sub session inside the ACTIVE conversation's council. */
+
 function createSubSession(options?: { agentId?: string; title?: string }): string | null {
   const store = useStore.getState();
   const active = store.activeConversation();
@@ -272,7 +244,7 @@ function createSubSession(options?: { agentId?: string; title?: string }): strin
   return subId;
 }
 
-/** Themed UI kit re-exports for addon client components. */
+
 const hostSurface: Record<string, unknown> = {
   useAddonBus,
   useAddonState,
@@ -319,7 +291,7 @@ const hostSurface: Record<string, unknown> = {
       React.createElement('div', { className: 'addon-progress-fill', style: { width: `${Math.max(0, Math.min(1, value)) * 100}%` } })),
 };
 
-/** Install once at boot — addon shim modules resolve everything from here. */
+
 export function installAddonHost(): void {
   const w = window as unknown as { __MORIKO_HOST__?: AddonHostSurface };
   if (w.__MORIKO_HOST__) return;

@@ -1,11 +1,4 @@
-/**
- * Aspect-ratio presets → concrete pixels, shared by every adapter that must
- * translate a preset into the size format its provider understands.
- *
- * The long edge keeps the provider-friendly default of 1280, a square uses
- * the standard 1024, and dimensions are rounded to even numbers (some
- * encoders reject odd sizes).
- */
+
 export function ratioToWxH(
   ratio: string,
   longEdge = 1280,
@@ -30,7 +23,7 @@ export function ratioToWxH(
   return { width, height };
 }
 
-/** "1280x720" form of {@link ratioToWxH}, or null when the ratio is invalid. */
+
 export function ratioToSize(ratio: string, longEdge?: number, squareEdge?: number): string | null {
   const wxh = ratioToWxH(ratio, longEdge, squareEdge);
   return wxh ? `${wxh.width}x${wxh.height}` : null;

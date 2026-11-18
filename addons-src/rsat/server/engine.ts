@@ -1,14 +1,4 @@
-/**
- * RSA/T engine (R1/R2) — every state transition lives here so the agent tools
- * and the UI RPC share ONE rule set:
- *  - Start (draft→running) is USER-only (P6.4) — the agent proposes, never starts.
- *  - Delete is USER-only (P3); agents can only `drop` (recoverable).
- *  - done: by default the user; an agent may mark done ONLY when every
- *    acceptance box is checked (user decision Q5) — otherwise it lands in
- *    `review` with the reason.
- *  - claim: PRD must be running, dependencies done, and the achievement not
- *    held by another live claim.
- */
+
 
 import {
   STATES, TIER_POINTS, unlocked, inScope, score, maxScore, MAX_HISTORY,
@@ -35,7 +25,7 @@ function isUser(actor) {
   return actor?.kind === 'user';
 }
 
-/** Constraints masuk sebagai string atau {text, mode} — dinormalisasi ke {text, mode}. */
+
 function normConstraints(list) {
   if (!Array.isArray(list)) return undefined;
   return list.slice(0, 30).map((c) => {
@@ -44,12 +34,12 @@ function normConstraints(list) {
   }).filter((c) => c.text);
 }
 
-/** Next free achievement number (1-based, gaps allowed). */
+
 export function nextNo(doc) {
   return doc.achievements.reduce((max, a) => Math.max(max, a.no ?? 0), 0) + 1;
 }
 
-/** Summary card for status tools/UI: PRD + one line per achievement. */
+
 export function summarize(doc) {
   const byState = {};
   for (const a of doc.achievements) byState[a.state] = (byState[a.state] ?? 0) + 1;
@@ -248,7 +238,7 @@ export async function restoreAchievement(api, sessionId, actor, id) {
   return saveDoc(api, sessionId, doc, { by: actor, type: 'restored', target: id });
 }
 
-/** USER-only hard delete (P3). */
+
 export async function deleteAchievement(api, sessionId, actor, id) {
   const doc = requireDoc(api, sessionId);
   if (!isUser(actor)) throw new EngineError('Only the user can delete — agents use drop.');
@@ -317,11 +307,7 @@ export async function progress(api, sessionId, actor, id, note) {
   return saveDoc(api, sessionId, doc, { by: actor, type: 'progress', target: id, data: note ? { note: String(note).slice(0, 80) } : {} });
 }
 
-/**
- * Complete: an agent may only mark `done` when every acceptance box is
- * checked (user decision Q5); otherwise the achievement goes to `review`
- * with the reason and the user finishes it from the board.
- */
+
 export async function complete(api, sessionId, actor, id, reason) {
   const doc = requireDoc(api, sessionId);
   const a = requireAchievement(doc, id);
@@ -353,13 +339,7 @@ export async function complete(api, sessionId, actor, id, reason) {
   return saveDoc(api, sessionId, doc, { by: actor, type: a.state === 'done' ? 'completed' : 'review_requested', target: id });
 }
 
-/**
- * STALE-LOCK SWEEP: after a state transition to/from done, recompute the
- * stored state of every dependent achievement. A stored 'locked' whose deps
- * are now all done becomes 'available' (and the reverse) — the persisted
- * state never lags the dependency rule again (agents were burning dozens of
- * steps investigating locked boards whose deps were already done).
- */
+
 function refreshDependents(doc) {
   for (const dep of doc.achievements) {
     if (dep.state !== 'locked' && dep.state !== 'available') continue;
@@ -367,7 +347,7 @@ function refreshDependents(doc) {
   }
 }
 
-/** User accepts a review → done. */
+
 export async function acceptReview(api, sessionId, actor, id) {
   if (!isUser(actor)) throw new EngineError('Only the user can accept a review.');
   const doc = requireDoc(api, sessionId);
@@ -382,7 +362,7 @@ export async function acceptReview(api, sessionId, actor, id) {
   return saveDoc(api, sessionId, doc, { by: actor, type: 'review_accepted', target: id });
 }
 
-/** User rejects a review → back to the claimant. */
+
 export async function rejectReview(api, sessionId, actor, id, reason) {
   if (!isUser(actor)) throw new EngineError('Only the user can reject a review.');
   const doc = requireDoc(api, sessionId);
@@ -414,7 +394,7 @@ export async function changeScope(api, sessionId, actor, id, op, paths, reason) 
   return saveDoc(api, sessionId, doc, { by: actor, type: 'scope_change', target: id, data: { op, approved: change.approved } });
 }
 
-/** Scope guard question: is this path inside the achievement's scope? */
+
 export function pathAllowed(doc, achievementId, relPath) {
   const a = doc?.achievements?.find((x) => x.id === achievementId);
   if (!a) return { ok: false, reason: 'no achievement' };
@@ -429,25 +409,25 @@ export function pathAllowed(doc, achievementId, relPath) {
   };
 }
 
-/** Which achievement (claimed by anyone) covers this path? For the guard. */
+
 export function coveringAchievements(doc, relPath) {
   return (doc.achievements || []).filter((a) => ['claimed', 'in_progress', 'review'].includes(a.state) && inScope(a.scope, relPath));
 }
 
-/** Effective state (design eff()): locked ↔ available follow the dependency rule. */
+
 export function effOf(doc, a) {
   if (a.state === 'locked' || a.state === 'available') return unlocked(doc, a) ? 'available' : 'locked';
   return a.state;
 }
 
-/** USER-only hard delete of the whole PRD (P3) — an archive copy stays in the project. */
+
 export function deletePrd(api, sessionId, actor) {
   const doc = requireDoc(api, sessionId);
   if (!isUser(actor)) throw new EngineError('Only the user can delete a PRD — agents can drop achievements.');
   return archiveAndDelete(api, sessionId, doc, actor);
 }
 
-/** User approves a pending (strict-mode) scope request — applies the change. */
+
 export async function approveScope(api, sessionId, actor, id, index) {
   const doc = requireDoc(api, sessionId);
   const a = requireAchievement(doc, id);
@@ -462,7 +442,7 @@ export async function approveScope(api, sessionId, actor, id, index) {
   return saveDoc(api, sessionId, doc, { by: actor, type: 'scope_approved', target: id, data: { op: change.op } });
 }
 
-/** One-line file summary from the board (pairs with the agent's rsat_note_file). */
+
 export async function setFileSummary(api, sessionId, actor, id, filePath, summary) {
   const doc = requireDoc(api, sessionId);
   const a = requireAchievement(doc, id);
@@ -475,9 +455,7 @@ export async function setFileSummary(api, sessionId, actor, id, filePath, summar
   return saveDoc(api, sessionId, doc, { by: actor, type: 'file_summary', target: id, data: { path: rel } });
 }
 
-/** R7: apply an imported RS-PRD doc after the dry-run preview.
- *  Claims from the source project are always reset (their sessions are gone);
- *  a running PRD arrives as paused — Start stays a user action. */
+
 export async function applyImport(api, sessionId, actor, incoming, mode) {
   const doc = requireDoc(api, sessionId);
   if (mode !== 'merge' && mode !== 'replace') throw new EngineError('mode must be "merge" or "replace".');
@@ -526,12 +504,7 @@ export function whoami(actor, sessionId) {
   return { actor, sessionId };
 }
 
-/**
- * AUTO-HEARTBEAT: refresh the claim heartbeat of every achievement held by
- * this session — called silently from every RSAT tool execution so an agent
- * actively working never loses its claim to the TTL reaper. No doc save if
- * nothing changed (cheap path). Returns the number of claims refreshed.
- */
+
 export async function autoHeartbeat(api, sessionId, actor) {
   if (!sessionId || isUser(actor)) return 0;
   const doc = loadDoc(api, sessionId);

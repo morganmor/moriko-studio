@@ -1,26 +1,11 @@
-/**
- * agent__ask_user — the model's DIRECT CHANNEL to the user.
- *
- * A run no longer has to guess when it is missing information: it calls this
- * tool with 1..N questions, the tool call PAUSES (the same pause/resolve
- * pattern as the sandbox permission gate in ../permissions.ts), the browser
- * shows an inline question card, and the answers ride back as the tool
- * result. Question types:
- *   - 'text'   — free-form answer (one or more lines).
- *   - 'choice' — one of the supplied options; `allowCustom` permits a typed
- *                answer that is not on the list.
- *
- * Fail-soft by design: a timeout or an aborted run resolves with the
- * unanswered questions marked `skipped` — the model is told to proceed with a
- * sensible default or re-ask later, never to treat silence as an error.
- */
+
 
 import { randomUUID } from 'node:crypto';
 
 import type { AgentToolContext, HarnessToolResult } from './shared.js';
 import { num } from './shared.js';
 
-/** How long the model waits for the user before marking the questions skipped. */
+
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_TIMEOUT_MS = 30 * 60 * 1000;
 const MAX_QUESTIONS = 8;
@@ -29,21 +14,21 @@ export interface AskQuestion {
   id: string;
   question: string;
   type: 'text' | 'choice';
-  /** For 'choice': the options to pick from. */
+  
   choices: string[];
-  /** For 'choice': true = a free-form answer is accepted too. */
+  
   allowCustom: boolean;
 }
 
 export interface AskAnswer {
   id: string;
-  /** The user's answer; absent when skipped. */
+  
   answer?: string;
-  /** True when the user dismissed the question (or it timed out). */
+  
   skipped?: boolean;
 }
 
-/** Public shape of one pending question batch (routes + UI). */
+
 export interface AskUserRequest {
   id: string;
   sessionId?: string;
@@ -53,9 +38,9 @@ export interface AskUserRequest {
 
 interface PendingAsk {
   request: AskUserRequest;
-  /** Resolves the paused tool call; the reason decides the shape of the result. */
+  
   resolve: (reason: 'timeout' | 'aborted' | 'answered') => void;
-  /** The user's answers — set by answerQuestions() just before resolve('answered'). */
+  
   finalAnswers?: AskAnswer[];
   timer: ReturnType<typeof setTimeout>;
   onAbort?: () => void;
@@ -63,7 +48,7 @@ interface PendingAsk {
 
 const pending = new Map<string, PendingAsk>();
 
-/** Validates + normalizes the model's question payload. Returns errors as text. */
+
 function normalizeQuestions(raw: unknown): { questions?: AskQuestion[]; error?: string } {
   if (!Array.isArray(raw) || raw.length === 0) {
     return { error: 'ask_user needs a "questions" array with at least one question.' };
@@ -110,7 +95,7 @@ function normalizeQuestions(raw: unknown): { questions?: AskQuestion[]; error?: 
   return { questions };
 }
 
-/** True when `value` answers the given question in a usable way. */
+
 function isValidAnswer(question: AskQuestion, value: unknown): boolean {
   if (typeof value !== 'string') return false;
   const trimmed = value.trim();
@@ -121,10 +106,7 @@ function isValidAnswer(question: AskQuestion, value: unknown): boolean {
   return true;
 }
 
-/**
- * Pauses the tool call until the user answers (or dismisses) EVERY question.
- * Timeout / abort / unknown ids all resolve with those questions skipped.
- */
+
 export async function askUserTool(args: Record<string, unknown>, ctx: AgentToolContext): Promise<HarnessToolResult> {
   const { questions, error } = normalizeQuestions(args.questions);
   if (error || !questions) {
@@ -213,7 +195,7 @@ export async function askUserTool(args: Record<string, unknown>, ctx: AgentToolC
   };
 }
 
-/** Applies the user's answers; false when the id is unknown or already settled. */
+
 export function answerQuestions(id: string, rawAnswers: unknown): boolean {
   const entry = pending.get(id);
   if (!entry) return false;
@@ -246,18 +228,12 @@ export function answerQuestions(id: string, rawAnswers: unknown): boolean {
   return true;
 }
 
-/** Currently undecided question batches (for polling / reconnects). */
+
 export function listPendingQuestions(): AskUserRequest[] {
   return [...pending.values()].map((entry) => entry.request);
 }
 
-/**
- * KEEPAUTO-SKIP PAUSE (C3) — pushes one pending batch's auto-skip deadline
- * forward. The browser tab calls this on hide + on a heartbeat while hidden:
- * a question the user literally CANNOT see must never time out underneath
- * them (the panel disappearing on tab switch bug). Returns false when the
- * batch already settled — harmless for the caller.
- */
+
 export function extendQuestionTimeout(id: string, ms: number): boolean {
   const entry = pending.get(id);
   if (!entry) return false;

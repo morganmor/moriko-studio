@@ -1,11 +1,4 @@
-/**
- * Moco Canvas — document state hook (P1).
- *
- * The panel is a VIEW of the engine: every mutation goes through the RPC
- * (`apply`), which persists to .moriko/moco-canvas/ and appends to the op log.
- * The scene arrives from the server, so agent edits and user edits are the same
- * document — no client-side copy of the truth.
- */
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAddonBus, useSession } from '@moriko/host';
 
@@ -53,8 +46,7 @@ interface StatePayload {
 
 const HISTORY_LIMIT = 30;
 
-/** RPC helper — thin POST wrapper. Call sites MUST include `sessionId` in the
- *  body (see below): the server resolves THIS chat's workspace from it. */
+
 async function rpc<T>(addonId: string, name: string, body: Record<string, unknown> = {}): Promise<T> {
   const resp = await fetch(`/api/addons/${addonId}/rpc/${name}`, {
     method: 'POST',
@@ -69,8 +61,6 @@ async function rpc<T>(addonId: string, name: string, body: Record<string, unknow
 const ADDON = 'moco-canvas';
 
 export function useCanvasDoc() {
-  // The active conversation's id — every RPC carries it so the server resolves
-  // THIS chat's workspace (sessionWorkspaces), not the global selection.
   const { conversationId } = useSession();
   const [scene, setScene] = useState<Scene | null>(null);
   const [docs, setDocs] = useState<DocSummary[]>([]);
@@ -115,8 +105,6 @@ export function useCanvasDoc() {
         return payload;
       } catch (error) {
         const message = error instanceof Error ? error.message : 'failed to load state';
-        // An engine that never registered its RPC is a LOAD failure, not an
-        // empty workspace — say so instead of showing "no documents yet".
         setEngineError(message);
         flash('error', message);
         return null;
@@ -125,23 +113,19 @@ export function useCanvasDoc() {
     [conversationId, adopt, flash],
   );
 
-  // First load.
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  // Live: an agent commit (tool call) or another tab's edit refreshes the view.
   const commitFrame = useAddonBus('moco-canvas.commit');
   useEffect(() => {
     if (!commitFrame) return;
     const frameDoc = (commitFrame as { payload?: { doc?: string } }).payload?.doc;
     if (frameDoc && docId && frameDoc !== docId) return;
     void refresh(docId);
-    // Refresh on the frame identity only — refreshing per render would loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [commitFrame]);
 
-  // Keep the selection valid when the scene changes under us.
   useEffect(() => {
     if (!scene || !selected) return;
     const exists = (() => {
@@ -167,7 +151,7 @@ export function useCanvasDoc() {
     return out;
   }, [scene]);
 
-  /** Run a batch through the engine; the server is the only writer. */
+  
   const runOps = useCallback(
     async (ops: CanvasOp[], label?: string) => {
       if (!scene || !docId || ops.length === 0) return;
@@ -256,7 +240,6 @@ export function useCanvasDoc() {
     [refresh],
   );
 
-  // In-place iframe DOM update: styles + body without reloading (no scroll jump).
   useEffect(() => {
     if (initialMount.current) {
       initialMount.current = false;
@@ -277,7 +260,6 @@ export function useCanvasDoc() {
       win.scrollTo(sx, sy);
       win.__mcvSync?.({ selected, showGrid });
     } catch {
-      // srcDoc fallback covers a cross-document failure.
     }
   }, [compiled, selected, showGrid]);
 
@@ -326,7 +308,7 @@ export function useCanvasDoc() {
   };
 }
 
-/** Bridge for messages posted by the preview document. */
+
 function usePreviewBridge(
   frameRef: React.RefObject<HTMLIFrameElement | null>,
   flat: FlatNode[],

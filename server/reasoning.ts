@@ -17,27 +17,16 @@ import {
   type ModelMeta,
 } from './modelMetadata.js';
 
-/**
- * Central reasoning-effort normalization.
- *
- * Every provider family exposes a different "how hard should the model
- * think" knob (OpenAI `reasoning_effort`, DeepSeek's clamped ladder,
- * Anthropic/Gemini token budgets), and vocabularies drift per release. All
- * of that lives HERE as data; adapters just call `applyReasoning*` and stay
- * dumb. Unknown levels resolve to the nearest supported value on a family's
- * ladder, so any UI choice works on any provider without per-vendor
- * if-trees — and genuinely unsupported choices surface as provider errors,
- * never silent misconfiguration.
- */
+
 
 export type ReasoningLevel = NonNullable<StreamParams['settings']['thinkingLevel']>;
 
-/** Canonical order, weakest → strongest. */
+
 const LADDER: readonly ReasoningLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 const index = (level: ReasoningLevel): number => LADDER.indexOf(level);
 
-/** The nearest supported level on a family ladder (ties resolve downward). */
+
 function nearest(ladder: readonly ReasoningLevel[], level: ReasoningLevel): ReasoningLevel {
   const target = index(level);
   return ladder.reduce((best, candidate) => {
@@ -47,12 +36,7 @@ function nearest(ladder: readonly ReasoningLevel[], level: ReasoningLevel): Reas
   });
 }
 
-/**
- * models.dev's effort spelling → our canonical level. `none` is the catalog's
- * word for "no reasoning" and maps to `off`; every other value is identical.
- * `default` (2 models) is a provider-default marker, not a level, and is
- * dropped — it names no amount of effort.
- */
+
 const FROM_MODELS_DEV: Record<string, ReasoningLevel> = {
   none: 'off',
   minimal: 'minimal',
@@ -63,32 +47,7 @@ const FROM_MODELS_DEV: Record<string, ReasoningLevel> = {
   max: 'max',
 };
 
-/**
- * THE MODEL'S OWN LADDER, straight from models.dev.
- *
- * The family ladders below are guesses made from a model name and a base URL;
- * models.dev publishes the real answer per provider+model, and it genuinely
- * differs — the same `deepseek-v4.1-flash` id is catalogued as
- * `[high, xhigh]` on one gateway, `[none, high]` on another and
- * `[low, medium, high]` on a third. Clamping against a guessed ladder is how
- * a UI choice got silently rewritten to a DIFFERENT level (picking Medium
- * landed on Low, because the guessed DeepSeek ladder had no medium at all).
- *
- * Resolution, in order:
- *  1. the provider IS catalogued AND published an entry for this model → that
- *     entry's ladder (the gateway's truth, restrictions included),
- *  2. otherwise → the model's own capability: the union of every catalogued
- *     deployment's vocabulary for that model id. This covers a custom gateway
- *     (nothing published) and a catalogued one that has not listed the model
- *     yet — in both cases the gateway has told us nothing to hide by,
- *  3. the catalog knows the model and says it does not reason → `['off']`,
- *     which makes the caller omit the parameter entirely,
- *  4. nothing catalogued at all → null — the caller sends the user's level
- *     verbatim. The catalog made no promise, so the harness invents none.
- *
- * The client mirrors these tiers exactly (thinkingLadderFor in
- * src/lib/modelMeta.ts): the dropdown and the wire must never disagree.
- */
+
 export function modelEffortLadder(
   model: string,
   providerId?: string,
@@ -108,16 +67,13 @@ export function modelEffortLadder(
   return null;
 }
 
-/**
- * The mapping itself, separated from the lookup so tests can pin the rules
- * without depending on what the live catalog happens to contain today.
- */
+
 export function effortLadderFromMeta(meta: ModelMeta | undefined): readonly ReasoningLevel[] | null {
   if (!meta || meta.reasoning !== true) return null;
   return effortLadderFromEfforts(meta.efforts);
 }
 
-/** models.dev's raw effort vocabulary → canonical levels, weakest → strongest. */
+
 export function effortLadderFromEfforts(
   efforts: readonly string[] | null | undefined,
 ): readonly ReasoningLevel[] | null {
@@ -131,24 +87,14 @@ export function effortLadderFromEfforts(
   return LADDER.filter((level) => mapped.has(level));
 }
 
-/** Whether the catalog knows this model to reason at all. */
+
 export function modelReasons(model: string, providerId?: string): boolean {
   const ladder = modelEffortLadder(model, providerId);
   if (ladder) return ladder.some((level) => level !== 'off');
   return lookupModelMetadata(model)?.reasoning === true;
 }
 
-/**
- * THE SWITCHES THAT ACTUALLY TURN THINKING OFF.
- *
- * `applyReasoningEffort` omitting `reasoning_effort` is not "off": every
- * thinking-first family ships with thinking ENABLED by default, so omitting
- * the knob quietly reasons at the provider default (DeepSeek documents
- * thinking-on as the default; its Chat Completions switch is the separate
- * `thinking` object). Each vendor gets its documented disable control here,
- * never an invented field, and only when the catalog says the model reasons
- * — an endpoint we know nothing about is left alone.
- */
+
 interface ThinkingOffVendor {
   id: string;
   matches: RegExp;
@@ -178,7 +124,7 @@ const THINKING_OFF_VENDORS: readonly ThinkingOffVendor[] = [
   },
 ];
 
-/** Which vendor's thinking-off control applies to this endpoint, if any. */
+
 function thinkingOffVendor(model: string, providerId: string | undefined, baseUrl?: string): ThinkingOffVendor | undefined {
   const identity = `${providerId ?? ''} ${model} ${baseUrl ?? ''}`;
   const vendor = THINKING_OFF_VENDORS.find((entry) => entry.matches.test(identity));
@@ -186,10 +132,7 @@ function thinkingOffVendor(model: string, providerId: string | undefined, baseUr
   return modelReasons(model, providerId) ? vendor : undefined;
 }
 
-/**
- * Sets the provider's own thinking-off control when the model reasons by
- * default. Exported so the branch is testable without a live provider.
- */
+
 export function applyThinkingDisabled(
   body: Record<string, unknown>,
   model: string,
@@ -199,17 +142,7 @@ export function applyThinkingDisabled(
   thinkingOffVendor(model, providerId, baseUrl)?.apply(body);
 }
 
-/**
- * Whether this endpoint documents `reasoning_content` as a REPLAY field on
- * assistant history.
- *
- * DeepSeek's tool contract makes it mandatory — an assistant turn without the
- * field is a 400, even when the turn has no thought to give back — so the
- * field must be fabricated as an empty string there. Every other family we
- * speak to does not accept the key on input, and inventing it would create the
- * exact error it is meant to prevent. Stored reasoning is replayed when it
- * exists for any thinking model; only the EMPTY one is vendor-gated.
- */
+
 export function replaysReasoningContent(
   model: string,
   providerId?: string,
@@ -219,11 +152,7 @@ export function replaysReasoningContent(
   return /deepseek|dpsk/i.test(`${providerId ?? ''} ${model} ${baseUrl ?? ''}`);
 }
 
-/**
- * Whether this request will actually think: the user asked for reasoning and
- * the model is capable of it. Used by adapters that must drop sampling knobs
- * the provider ignores or rejects in thinking mode.
- */
+
 export function thinkingActive(
   level: StreamParams['settings']['thinkingLevel'],
   model: string,
@@ -233,11 +162,7 @@ export function thinkingActive(
   return modelReasons(model, providerId);
 }
 
-/**
- * DeepSeek's thinking mode ignores `temperature` (all sampling penalties) and
- * fixes `top_p` for V4 Pro with tools. Sending them is not an error, but it
- * misreports what the request controls — so they are omitted instead.
- */
+
 export function thinkingSuppressesSampling(
   level: StreamParams['settings']['thinkingLevel'],
   model: string,
@@ -248,18 +173,7 @@ export function thinkingSuppressesSampling(
   return /deepseek|dpsk/i.test(`${providerId ?? ''} ${model} ${baseUrl ?? ''}`);
 }
 
-/**
- * Sets `reasoning_effort` on an OpenAI-compatible request body.
- *
- * THREE RULES. No name-based family guesses, no invented protocol fields:
- *  - 'off' sends the provider's own thinking-off control (see
- *    THINKING_OFF_VENDORS) — omitting the field is NOT off, because
- *    thinking-first models keep thinking at their default effort.
- *  - a level on the model's CATALOGUED ladder (models.dev, the same ladder
- *    the UI offers) is clamped to the nearest listed level.
- *  - anything else is sent VERBATIM — the user chose it; the provider that
- *    accepts or rejects it answers directly, and its error is relayed as-is.
- */
+
 export function applyReasoningEffort(
   body: Record<string, unknown>,
   level: StreamParams['settings']['thinkingLevel'],
@@ -280,12 +194,7 @@ export function applyReasoningEffort(
   if (resolved !== 'off') body.reasoning_effort = resolved;
 }
 
-/**
- * The lexer itself lives in `src/lib/reasoningLexer.ts` because the CLIENT
- * needs it too: a finished reply is re-split with the same rules the stream
- * used, and a boundary must never differ between what streamed and what is
- * replayed. Re-exported here so adapters keep importing one module.
- */
+
 export {
   createThinkingScrubState,
   flushNativeReasoning,
@@ -296,56 +205,48 @@ export {
   type ThinkingScrubState,
 };
 
-/* ------------------------------------------------------------------------- *
- * BLOCK LIFECYCLE
- *
- * Reasoning is a BLOCK, not a flat delta channel: it opens, it streams, and
- * it closes — before the answer starts, before a tool call, or at the end of
- * the round. The client needs those boundaries to render one strip per block
- * and to stop guessing "the reasoning ended because a different segment type
- * arrived". One emitter per run; ids are stable, so the same block keeps its
- * identity across the whole stream.
- * ------------------------------------------------------------------------- */
 
 export interface ReasoningBlockEmitter {
-  /** Route reasoning text, opening the block on first use. */
+  
   push: (text: string | null | undefined) => void;
-  /** Close the open block exactly once. Safe to call when nothing is open. */
+  
   end: () => void;
+  
+  readonly lastBlockText: string;
 }
 
 export function createReasoningBlockEmitter(onEvent: StreamHandler): ReasoningBlockEmitter {
   let counter = 0;
   let openId: string | null = null;
+  let current = '';
+  let lastClosed = '';
   return {
     push(text) {
       if (!text) return;
       if (openId === null) {
         counter += 1;
         openId = `reason-${counter}`;
+        current = '';
         onEvent({ type: 'reasoning_start', blockId: openId } satisfies StreamEvent);
       }
+      current += text;
       onEvent({ type: 'reasoning', delta: text, blockId: openId } satisfies StreamEvent);
     },
     end() {
       if (openId === null) return;
       const id = openId;
       openId = null;
+      if (current.trim()) lastClosed = current;
+      current = '';
       onEvent({ type: 'reasoning_end', blockId: id } satisfies StreamEvent);
+    },
+    get lastBlockText() {
+      return openId !== null ? current : lastClosed;
     },
   };
 }
 
-/**
- * Budget-style reasoning knobs (Anthropic `budget_tokens`, Gemini
- * `thinkingBudget`) are never hard-coded: the ceiling is the MODEL's own
- * max-output limit from the metadata snapshot, and the level picks a
- * proportion of that ceiling. A 64k-output model and a 512k-output model
- * therefore get genuinely different budgets for the same "High" setting.
- * `max` asks for the model's FULL allowance and is then capped by the tuned
- * provider tops below — Anthropic 128K, Gemini 64K (claude-opus-latest maxOut
- * is 128,000; Gemini's is 65,536 — Max lands exactly on both).
- */
+
 const BUDGET_SHARE: Record<Exclude<ReasoningLevel, 'off'>, number> = {
   minimal: 0.02,
   low: 0.05,
@@ -355,37 +256,26 @@ const BUDGET_SHARE: Record<Exclude<ReasoningLevel, 'off'>, number> = {
   max: 1,
 };
 
-/** Floors keep tiny models from producing budgets the API round-trips to 0. */
+
 const MIN_ANTHROPIC_BUDGET = 1024;
 const MIN_GEMINI_BUDGET = 512;
 
-/** Tuned provider thinking tops: Anthropic 128K, Gemini 64K. */
+
 const ANTHROPIC_TOP_THINKING = 128_000 - 1024;
 const GEMINI_TOP_THINKING = 65_536;
 
-/**
- * Resolves the model's max-output limit for budget scaling. Falls back to
- * 32,768 when the snapshot has no entry — the same default window the
- * Anthropic adapter sends, so an unknown model still gets a real budget
- * instead of a token-sized one (it used to be 8,192, which shrank every
- * level of the ladder to nothing).
- */
+
 function maxOutputFor(model: string, _baseUrl: string): number {
   const meta = lookupModelMetadata(model);
   return meta?.maxOut ?? 32_768;
 }
 
-/**
- * Anthropic's required `max_tokens` when the user picked Max. Reasoning lives
- * INSIDE this one window (completion_tokens counts thinking too), so Max = the
- * model's full ceiling covering reasoning + answer together. Unknown model →
- * 32,768: the API demands the field — it can never be omitted.
- */
+
 export function anthropicMaxOutput(model: string): number {
   return lookupModelMetadata(model)?.maxOut ?? 32_768;
 }
 
-/** Anthropic `thinking.budget_tokens`, or undefined when reasoning is off. */
+
 export function anthropicThinkingBudget(
   level: StreamParams['settings']['thinkingLevel'],
   model: string,
@@ -401,7 +291,7 @@ export function anthropicThinkingBudget(
   return Math.min(Math.max(budget, MIN_ANTHROPIC_BUDGET), top);
 }
 
-/** Gemini `thinkingConfig.thinkingBudget`; 0 disables thinking outright. */
+
 export function geminiThinkingBudget(
   level: StreamParams['settings']['thinkingLevel'],
   model: string,
@@ -413,13 +303,7 @@ export function geminiThinkingBudget(
   return Math.min(Math.max(Math.floor(ceiling * BUDGET_SHARE[level]), MIN_GEMINI_BUDGET), top);
 }
 
-/**
- * Test-only think tags. A transport that scrubs inline reasoning (Moriko's
- * own stream included) eats a COMPLETE tag written literally into source —
- * the earlier fixtures here arrived on disk stripped of theirs, which is how
- * the silent-mangling failure mode was caught. Composition from plain
- * constants is immune: the tag strings are built at runtime, never typed.
- */
+
 const T_OPEN = '<' + 'thinking' + '>';
 const T_CLOSE = '</' + 'thinking' + '>';
 const U_OPEN = '<' + 'think' + '>';
@@ -427,15 +311,7 @@ const U_CLOSE = '</' + 'think' + '>';
 const R_OPEN = '<' + 'reason' + 'ing>';
 const FENCE = '`' + '`' + '`';
 
-/**
- * Self-test for the lexer. Run with
- * `MORIKO_TEST_REASONING=1 npx tsx server/reasoning.ts`.
- *
- * The cases pin the two failure directions that produced the "the model is
- * bad at opening/closing reasoning" reports: a tag the model QUOTES must
- * never open a block or cut the answer short, and a channel that IS reasoning
- * must never be split by a closer it merely mentions.
- */
+
 export function runScrubs(): void {
   const cases: Array<{
     name: string;
@@ -625,7 +501,6 @@ export function runScrubs(): void {
     }
   }
 
-  // Whole-message split must agree with the stream lexer.
   const atStart = splitInlineThinking(T_OPEN + 'deep' + T_CLOSE + ' answer');
   if (atStart.content !== 'answer' || atStart.reasoning !== 'deep') {
     failures += 1;
@@ -648,8 +523,6 @@ export function runScrubs(): void {
     console.error(`  reasoning: ${JSON.stringify(unclosedWhole.reasoning)}`);
   }
 
-  // Thinking-off controls: a reasoning model gets a real switch, a model the
-  // catalog says cannot reason gets nothing invented for it.
   const deepseekBody: Record<string, unknown> = {};
   applyThinkingDisabled(deepseekBody, 'deepseek-v4-pro', 'deepseek');
   if (JSON.stringify(deepseekBody.thinking) !== JSON.stringify({ type: 'disabled' })) {

@@ -3,16 +3,7 @@ import { Router } from 'express';
 import { asyncRoute, HttpError } from '../http.js';
 import { createGoal, deleteGoal, listGoals, updateGoal } from './store.js';
 
-/**
- * REST surface for the Goals panel (the USER side of goals — the AGENT side
- * rides the `goal_*` harness tools). Goals are keyed by the conversation
- * session id the client supplies.
- *
- *   GET    /api/goals?session=…        — goals of one session
- *   POST   /api/goals                  — create { session, title, plan?, todos? }
- *   PATCH  /api/goals/:goalId          — update { session, title?, plan?, status?, todos? }
- *   DELETE /api/goals/:goalId?session=… — remove
- */
+
 export function goalsRouter(): Router {
   const router = Router();
 

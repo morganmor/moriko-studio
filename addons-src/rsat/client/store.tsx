@@ -1,10 +1,4 @@
-/**
- * RSA/T shared board store — versi backend penuh.
- * Sumber kebenaran: rpc('state') (server engine, persist ke
- * .moriko/rsat/prd.rsprd.json). Setiap aksi → rpc → SSE 'rsat.changed'
- * → refresh. Tanpa SEED/demo: PRD & quest dibuat user/agent lewat form.
- * Inventory (file ledger) dari rpc('files') — readAllLedgers server.
- */
+
 import { useEffect, useState } from 'react';
 import { rpc } from './shared.tsx';
 import { toast } from './toast.tsx';
@@ -39,7 +33,7 @@ export type Prd = {
 export type FeedItem = { ic: string; at: number; text: string };
 export type Presence = { sessionId: string; model: string | null; label: string; isSelf?: boolean; agentId?: string | null };
 export type BoardState = {
-  /** true setelah rpc('state') pertama berhasil (mencegah kedip LangGate). */
+  
   ready: boolean;
   language: string;
   prd: Prd | null;
@@ -54,7 +48,7 @@ export type BoardState = {
   workspacePath: string | null;
 };
 
-/** State kosong — papan baru sampai rpc('state') kembali. */
+
 const EMPTY: BoardState = {
   ready: false,
   language: '', prd: null, achs: [], feed: [], injected: null,
@@ -70,11 +64,11 @@ const set = (fn: (s: BoardState) => BoardState) => {
 };
 export const getRsat = (): BoardState => state;
 
-/** Alias untuk board.tsx: muat awal + ikut event SSE. */
+
 export const initRsat = refresh;
 export const refreshRsat = refresh;
 
-/** Event audit server (events.jsonl) → baris feed panel Live. */
+
 const EV_ICON: Record<string, string> = {
   claimed: 'flag', completed: 'check', released: 'x', dropped: 'trash',
   progress: 'activity', review_requested: 'send', review_accepted: 'check',
@@ -93,7 +87,7 @@ function eventLine(o: Record<string, unknown>): FeedItem | null {
   return { ic: EV_ICON[type] ?? 'bell', at, text: `*${by}* · ${type.replace(/_/g, ' ')} *${target}*` };
 }
 
-/** Ledger file (rpc 'files' — readAllLedgers server) → Map quest → FileRow[]. */
+
 function ledgersByQuest(files: unknown[]): Map<string, FileRow[]> {
   const map = new Map<string, FileRow[]>();
   for (const l of files) {
@@ -117,7 +111,7 @@ function ledgersByQuest(files: unknown[]): Map<string, FileRow[]> {
   return map;
 }
 
-/** Event audit server → baris feed (helper — keeps refresh below the limit). */
+
 function feedLines(events: unknown[]): FeedItem[] {
   const feed: FeedItem[] = [];
   for (const e of events) {
@@ -128,7 +122,7 @@ function feedLines(events: unknown[]): FeedItem[] {
   return feed;
 }
 
-/** Muat ulang penuh dari server (rpc 'state' + 'events' + 'files'). */
+
 export async function refresh(): Promise<void> {
   const seq = ++loadSeq;
   try {
@@ -187,13 +181,13 @@ export const prog = (a: Ach) =>
 export const isStale = (a: Ach, now: number) =>
   !!a.claim && now - a.claim.beat > (state.claimTtlSec || 900) * 1000;
 
-/** Jendela heartbeat (ms) untuk komponen Hearts. */
+
 export const ttlMs = () => (state.claimTtlSec || 900) * 1000;
 
-/** Nama aktor aman untuk tampilan. */
+
 export const who = (b: string) => (b === 'U' ? `${state.displayName} (user)` : b);
 
-/** Jalankan RPC + refresh + pesan error ber-tanda. */
+
 async function call(name: string, body: Record<string, unknown>, okMsg?: string): Promise<Record<string, unknown> | null> {
   try {
     const out = (await rpc(name, body)) as Record<string, unknown> | null;
@@ -207,14 +201,14 @@ async function call(name: string, body: Record<string, unknown>, okMsg?: string)
 }
 
 
-/** LangGate: pilihan bahasa persisten (consent eksplisit). */
+
 export function setLang(language: string) {
   const lang = language === 'id' ? 'id' : 'en';
   set((s) => ({ ...s, language: lang }));
   void call('setLanguage', { language: lang });
 }
 
-/** PRD payload → fields rpc createPrd/updatePrd (server shape). */
+
 export type PrdFields = {
   title: string; summary: string; inc: string[]; exc: string[];
   cons: Array<{ t: string; m: string }>; goals: string[];
@@ -226,7 +220,7 @@ export type PrdFields = {
   technicalDecisions?: Array<{ text: string; reason: string }>;
 };
 
-/** Buat PRD baru (rpc createPrd) — hanya kalau belum ada. */
+
 export function createPrd(fields: PrdFields, language: string) {
   void call('createPrd', {
     title: fields.title, summary: fields.summary, language,
@@ -241,7 +235,7 @@ export function createPrd(fields: PrdFields, language: string) {
   }, 'PRD created');
 }
 
-/** Edit PRD (rpc updatePrd) — title/scope/goals/constraints; status lewat togglePrd. */
+
 export function updatePrd(fields: PrdFields) {
   void call('updatePrd', {
     fields: {
@@ -258,7 +252,7 @@ export function updatePrd(fields: PrdFields) {
   }, 'PRD updated');
 }
 
-/** Start/Pause/Resume PRD — status global, user-only (RSAT.txt 6.4). */
+
 export function togglePrd() {
   const { prd } = getRsat();
   if (!prd) return;
@@ -266,7 +260,7 @@ export function togglePrd() {
   void call(name, {});
 }
 
-/** Quest baru (rpc createAchievement — engine yang menentukan id/no/state). */
+
 export function createQuest(q: {
   title: string; kind: string; tier: string; pts: number; dep: string[];
   desc: string; tech: string; ac: string[]; inc: string[];
@@ -281,14 +275,14 @@ export function createQuest(q: {
   }, `${q.title} created`);
 }
 
-/** Toggle satu acceptance box (rpc toggleAcceptance; acId dari server). */
+
 export function toggleAcceptance(id: string, index: number, done: boolean) {
   const a = byId(getRsat().achs, id);
   const acId = a?.acId?.[index] ?? `ac${index + 1}`;
   void call('toggleAcceptance', { id, acceptanceId: acId, done });
 }
 
-/** Aksi quest (drawer): claim/reviewAccept/reviewReject/release/drop/restore. */
+
 export function questAction(name: string, id: string, reason = ''): void {
   const map: Record<string, () => void> = {
     claim: () => void call('claim', { id }, `${id} claimed`),
@@ -305,17 +299,17 @@ export function questAction(name: string, id: string, reason = ''): void {
   map[name]?.();
 }
 
-/** Scope change (widen/narrow) — rpc changeScope. */
+
 export function changeScope(id: string, op: 'widen' | 'narrow', paths: string[], reason: string) {
   void call('changeScope', { id, op, paths, reason });
 }
 
-/** Approve pending scope request (strict mode, user). */
+
 export function approveScope(id: string, index: number) {
   void call('approveScope', { id, index });
 }
 
-/** Guard test (drawer Scope tab) — rpc guardTest, tanpa write. */
+
 export async function guardTest(id: string, path: string): Promise<{ ok: boolean; reason: string; holder: string | null } | null> {
   try {
     const r = (await rpc('guardTest', { id, path })) as Record<string, unknown> | null;
@@ -326,17 +320,17 @@ export async function guardTest(id: string, path: string): Promise<{ ok: boolean
   }
 }
 
-/** Komentar (quest atau PRD — id 'prd'). */
+
 export function comment(id: string, text: string) {
   void call('comment', { id, text });
 }
 
-/** Ringkasan satu baris untuk file ledger quest (rpc setFileSummary). */
+
 export function setFileSummary(id: string, path: string, summary: string) {
   void call('setFileSummary', { id, path, summary });
 }
 
-/** Import RS-PRD (rpc importDoc: dry-run lalu apply merge/replace). */
+
 export async function importDoc(content: string): Promise<boolean> {
   try {
     const dry = (await rpc('importDoc', { content })) as Record<string, unknown> | null;
@@ -360,23 +354,23 @@ export async function importDoc(content: string): Promise<boolean> {
   }
 }
 
-/** Danger zone (user-only): hapus PRD + ledger (arsip tersimpan server). */
+
 export function deletePrd() {
   void call('deletePrd', {}, 'PRD deleted — create a new one in Base camp');
 }
 
-/** Guard mode (Options) — rpc setGuard. */
+
 export function setGuard(mode: string) {
   set((s) => ({ ...s, guardMode: mode }));
   void call('setGuard', { mode });
 }
 
-/** Heartbeat timeout (menit) — rpc setTtl. */
+
 export function setTtl(minutes: number) {
   void call('setTtl', { minutes });
 }
 
-/** Graphics quality Interlinked (Options) — rpc setIlQuality. */
+
 export function setIlQuality(q: string) {
   set((s) => ({ ...s, ilQuality: q }));
   void call('setIlQuality', { q });

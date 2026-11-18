@@ -17,26 +17,21 @@ import {
 import { NoticeCenter, cx } from './ui';
 import { DIcon } from './designIcons';
 import { Popover } from './Popover';
+import { ProcessPanel } from './ProcessPanel';
 import { AddonTopbarButtons } from './AddonTopbarButtons';
 import { useStore } from '../store/useStore';
 import { isSubSession } from '../store/useStore';
 interface TopBarProps {
   title: string;
   onShare: () => void;
-  /** Opens the navigation drawer. Only visible below the md breakpoint. */
+  
   onOpenNav: () => void;
-  /** Workspace crumb pill — opens the native folder picker (design topbar). */
+  
   onPickWorkspace: () => void;
   workspaceLabel?: string;
 }
 
-/**
- * Inline-editable workspace title.
- *
- * Clicking the title (or its pencil affordance) swaps it for a text input so
- * the open chat can be renamed without leaving the thread — right beside the
- * panel buttons. Enter or blur commits, Escape cancels.
- */
+
 function EditableTitle({ title }: { title: string }) {
   const activeId = useStore((state) => state.activeId);
   const renameConversation = useStore((state) => state.renameConversation);
@@ -45,7 +40,7 @@ function EditableTitle({ title }: { title: string }) {
   const [draft, setDraft] = useState(title);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  /** Design's More menu / F2 "Rename" — ask the mounted title to start editing. */
+  
   useEffect(() => {
     if (!activeId) return;
     const onRetitle = () => {
@@ -113,15 +108,7 @@ function EditableTitle({ title }: { title: string }) {
   );
 }
 
-/**
- * COUNCIL SWITCHER (Council Agent addon) — a transparent dropdown directly
- * BELOW the title button. A council is one Main Session containing N Sub
- * Sessions (one per RSAT agent); sub sessions are hidden from the sidebar and
- * history, so this dropdown is the only way between them. The button shows the
- * current member ("Main Session" / the sub's title); the popover lists the main
- * session first, then every sub session, and opens the Council panel to add a
- * member or dispatch another agent.
- */
+
 function CouncilSwitcher() {
   const activeId = useStore((state) => state.activeId);
   const conversations = useStore((state) => state.conversations);
@@ -219,22 +206,8 @@ function CouncilSwitcher() {
   );
 }
 
-/**
- * Sticky workspace header.
- *
- * The left edge carries the sidebar toggle (desktop) or the drawer opener
- * (mobile); the right edge mirrors it for Run settings. Only the title area
- * flexes; every control keeps a fixed 36px hit target so the row never
- * reflows as the title grows or a panel toggles.
- */
-/**
- * Sticky workspace header.
- *
- * The left edge carries the sidebar toggle (desktop) or the drawer opener
- * (mobile); the right edge mirrors it for Run settings. Only the title area
- * flexes; every control keeps a fixed 36px hit target so the row never
- * reflows as the title grows or a panel toggles.
- */
+
+
 export function TopBar({ title, onShare, onOpenNav, onPickWorkspace, workspaceLabel }: TopBarProps) {
   const settingsOpen = useStore((state) => state.settingsOpen);
   const toggleSettings = useStore((state) => state.toggleSettings);
@@ -251,7 +224,7 @@ export function TopBar({ title, onShare, onOpenNav, onPickWorkspace, workspaceLa
   const dismissNotice = useStore((state) => state.dismissNotice);
   const toggleNoticeHistory = useStore((state) => state.toggleNoticeHistory);
   const clearNoticeHistory = useStore((state) => state.clearNoticeHistory);
-  /** Popovers design: the crumb opens "Move to workspace" over the registry. */
+  
   const activeId = useStore((state) => state.activeId);
   const activeWorkspaceId = useStore((state) => state.activeConversation()?.workspaceId);
   const agentWorkspaces = useStore((state) => state.agentWorkspaces);
@@ -260,29 +233,28 @@ export function TopBar({ title, onShare, onOpenNav, onPickWorkspace, workspaceLa
   const [wsMenuOpen, setWsMenuOpen] = useState(false);
   const wsMenuRef = useRef<HTMLDivElement>(null);
 
-  /** Only real conversations are renameable — not the static view titles. */
+  
   const editableTitle = view === 'playground' && hasActiveChat;
   const fileInputRef = useRef<HTMLInputElement>(null);
-  /** The bell anchors BOTH the transient notice stack and the Notices popover. */
+  
   const bellRef = useRef<HTMLButtonElement>(null);
 
-  /**
-   * Secondary actions (theme, share, import, export) live in a LEFT drop
-   * panel so the header row stays clear for the title and its rename input —
-   * the inline rename needs the whole row, and four always-visible icon
-   * buttons were crowding it past the truncate point.
-   */
+  
   const [dropOpen, setDropOpen] = useState(false);
   const dropRef = useRef<HTMLDivElement>(null);
 
-  /** The palette's "Import chats" action reaches the picker via this event. */
+  
+  const [processesOpen, setProcessesOpen] = useState(false);
+  const processesButtonRef = useRef<HTMLButtonElement>(null);
+
+  
   useEffect(() => {
     const onImportChat = () => fileInputRef.current?.click();
     window.addEventListener('moriko:import-chat', onImportChat);
     return () => window.removeEventListener('moriko:import-chat', onImportChat);
   }, []);
 
-  /** Downloads the ACTIVE conversation as a portable single-chat file. */
+  
   const exportActiveChat = () => {
     const conversation = useStore.getState().activeConversation();
     if (!conversation) return;
@@ -303,7 +275,7 @@ export function TopBar({ title, onShare, onOpenNav, onPickWorkspace, workspaceLa
     })();
   };
 
-  /** Reads a single-conversation export file and adds it as a NEW thread. */
+  
   const importChatFile = async (file: File) => {
     try {
       const parsed = JSON.parse(await file.text()) as {
@@ -332,6 +304,13 @@ export function TopBar({ title, onShare, onOpenNav, onPickWorkspace, workspaceLa
   return (
     <header id="moriko-session-bar" className="topbar">
       {}
+      <ProcessPanel
+        open={processesOpen}
+        onClose={() => setProcessesOpen(false)}
+        anchorRef={processesButtonRef}
+        sessionId={activeId || undefined}
+      />
+
       <NoticeCenter
         entries={notices}
         history={noticeHistory}
@@ -372,10 +351,8 @@ export function TopBar({ title, onShare, onOpenNav, onPickWorkspace, workspaceLa
         </div>
       )}
 
-      {/* Addon launch buttons — whitelist-driven (topbar-addons.json). */}
-      <AddonTopbarButtons />
-
       {}
+      <AddonTopbarButtons />
 
       {}
       <div ref={wsMenuRef} style={{ position: 'relative', marginLeft: 4, maxWidth: 220, flexShrink: 0 }}>
@@ -480,6 +457,19 @@ export function TopBar({ title, onShare, onOpenNav, onPickWorkspace, workspaceLa
             {notices.length}
           </span>
         ) : null}
+      </button>
+
+      {}
+      <button
+        type="button"
+        ref={processesButtonRef}
+        className="ib"
+        onClick={() => setProcessesOpen((value) => !value)}
+        aria-label="Processes"
+        aria-haspopup="dialog"
+        aria-expanded={processesOpen}
+      >
+        <DIcon name="term" className="ic" aria-hidden="true" />
       </button>
 
       <div ref={dropRef} style={{ position: 'relative' }}>

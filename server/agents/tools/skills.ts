@@ -1,29 +1,10 @@
-/**
- * agent__skills — the on-demand skill loader (progressive disclosure level 2)
- * AND the sanctioned reader for the whole SKILLS STORAGE.
- *
- *   action "list" : the available-skills catalogue (name, description, scope)
- *   action "load" : full SKILL.md body + recursive companion file list
- *   action "file" : { name, path }  → file inside that skill's folder
- *                   { path }        → ANY file inside the skills storage
- *                                     (workspace .moriko/.agents/.claude
- *                                     skills + harness-home ~/.moriko-studio/
- *                                     ~/.agents/ ~/.claude/ skills) — this is
- *                                     how skills OUTSIDE the active workspace
- *                                     are read without tripping the file-tool
- *                                     workspace jail; the jail is replaced by
- *                                     a strict union-of-skill-roots jail.
- *   action "tree" : { name } → recursive file tree of one skill
- *                   { }       → tree of EVERY skills root (labeled by scope)
- *
- * All reads are text, capped (64 KB/file), path-jailed to the skill roots,
- * and skip dotfolders/node_modules. Nothing outside the skill roots is
- * reachable through this tool — the normal workspace tools stay untouched.
- */
+
 import { defineTool } from './registry.js';
 import type { AgentToolContext, HarnessToolResult } from './shared.js';
 import { str } from './shared.js';
 import { getActiveWorkspace } from '../workspace.js';
+import { requestApproval, type PermissionDecision, type SkillLoadInfo } from '../permissions.js';
+import { skillsDir } from '../../paths.js';
 import {
   listSkills,
   loadSkill,
@@ -32,10 +13,42 @@ import {
   readSkillsStorageFile,
   walkSkillTree,
   skillRoots,
+  type SkillScope,
   type SkillTreeNode,
 } from '../../skills/store.js';
 
-/** Renders a recursive tree as an indented ASCII listing. */
+
+async function gateSkillRead(
+  skill: { name: string; description: string; scope: SkillScope; dir: string },
+  ctx: AgentToolContext,
+  workspaceRoot?: string,
+): Promise<PermissionDecision> {
+  const info: SkillLoadInfo = {
+    name: skill.name,
+    description: skill.description,
+    scope: skill.scope,
+    dir: skill.dir,
+  };
+  return requestApproval(
+    { tool: 'skills', paths: [skill.dir], root: workspaceRoot ?? skillsDir, skill: info },
+    ctx,
+  );
+}
+
+
+function skillDenied(what: string, reason?: string): HarnessToolResult {
+  return {
+    ok: false,
+    isError: true,
+    errorCode: 'permission_denied',
+    text:
+      `PERMISSION DENIED — the user REJECTED ${what}.` +
+      (reason ? ` Their reason: "${reason}".` : ' No reason was given.') +
+      ' Do NOT retry the load and do not substitute the skill\'s instructions — continue without it unless the user explicitly asks again.',
+  };
+}
+
+
 function renderTree(nodes: SkillTreeNode[]): string {
   const lines: string[] = [];
   for (const node of nodes) {
@@ -95,6 +108,8 @@ async function skillsTool(args: Record<string, unknown>, ctx: AgentToolContext):
     if (name) {
       const skill = loadSkill(name, workspaceRoot);
       if (!skill) return { ok: false, isError: true, errorCode: 'not_found', text: `No skill named "${name}". Run action "list" for the catalogue.` };
+      const decision = await gateSkillRead(skill, ctx, workspaceRoot);
+      if (!decision.granted) return skillDenied(`reading "${relPath}" of skill "${skill.name}"`, decision.reason);
       const content = readSkillCompanion(skill.dir, relPath);
       if (content === null) {
         const files = listSkillFiles(skill.dir);
@@ -102,9 +117,13 @@ async function skillsTool(args: Record<string, unknown>, ctx: AgentToolContext):
       }
       return { ok: true, isError: false, text: `# ${skill.name}/${relPath}\n\n${content}` };
     }
-    // Storage-wide read: path is jailed to the union of all skill roots.
     const result = readSkillsStorageFile(relPath, workspaceRoot);
     if (!result.ok) return { ok: false, isError: true, errorCode: 'not_found', text: result.error };
+    const decision = await requestApproval(
+      { tool: 'skills', paths: [result.abs], root: workspaceRoot ?? skillsDir },
+      ctx,
+    );
+    if (!decision.granted) return skillDenied(`reading "${relPath}" from the skills storage`, decision.reason);
     return { ok: true, isError: false, text: `# ${result.abs}\n\n${result.text}` };
   }
 
@@ -115,6 +134,8 @@ async function skillsTool(args: Record<string, unknown>, ctx: AgentToolContext):
       const known = listSkills(workspaceRoot).map((entry) => entry.name).join(', ') || '(none)';
       return { ok: false, isError: true, errorCode: 'not_found', text: `No skill named "${name}". Discovered skills: ${known}.` };
     }
+    const decision = await gateSkillRead(skill, ctx, workspaceRoot);
+    if (!decision.granted) return skillDenied(`loading skill "${skill.name}"`, decision.reason);
     const files = listSkillFiles(skill.dir);
     return {
       ok: true,
@@ -136,7 +157,7 @@ export const skillsSpec = defineTool({
   def: {
     wireName: 'agent__skills',
     description:
-      "Agent skills (open Agent Skills format): load a discovered skill's full instructions on demand AND read the whole skills storage (workspace + harness home) even outside the active workspace. Actions: load { name } — SKILL.md body + companion file list; file { name, path } — one companion file of that skill; file { path } — ANY file inside the skills roots (jailed union read); tree { name? } — recursive file tree of one skill or all skills roots; list — the catalogue. Load a skill when the user's request matches its description (see the AVAILABLE SKILLS injection) or asks for it by name.",
+      "Agent skills (open Agent Skills format): load a discovered skill's full instructions on demand AND read the whole skills storage (workspace + harness home) even outside the active workspace. Actions: load { name } — SKILL.md body + companion file list; file { name, path } — one companion file of that skill; file { path } — ANY file inside the skills roots (jailed union read); tree { name? } — recursive file tree of one skill or all skills roots; list — the catalogue. Load a skill when the user's request matches its description (see the AVAILABLE SKILLS injection) or asks for it by name. IMPORTANT: every content-bearing read (load / file) passes a USER PERMISSION GATE — the call pauses until the user accepts or rejects (possibly with a reason); a rejection is final for that request, respect the reason and continue without the skill.",
     inputSchema: {
       type: 'object',
       properties: {

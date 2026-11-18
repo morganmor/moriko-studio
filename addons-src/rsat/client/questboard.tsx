@@ -1,9 +1,4 @@
-/**
- * RSA/T Quest board — port 1:1 dari design/split/rsat-panel-quest-board.html.
- * Toolbar (search + chip state + tier/sort + New quest) → board grouped per state
- * (order desain baris 279) dengan kartu .pn.ach. Data dari store bersama;
- * "New quest" membuka QuestForm (RSAT.txt butir 1).
- */
+
 import { useState } from 'react';
 import { tr } from './shared.tsx';
 import { useNow } from './toast.tsx';
@@ -27,7 +22,7 @@ function Seg({ pct, n = 10, cls = '' }: { pct: number; n?: number; cls?: string 
   );
 }
 
-/** Wajah holder: logo agent custom bila ada (AgentFace), selain itu sprite. */
+
 function Face({ by, ag }: { by: string; ag?: string | null }) {
   return <AgentFace by={by} ag={ag} />;
 }

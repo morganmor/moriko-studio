@@ -13,34 +13,17 @@ import { getActiveWorkspace } from './workspace.js';
 import { collectAgentsMd } from './agentsMd.js';
 import { listSkills, loadSkill } from '../skills/store.js';
 
-/**
- * BUILT-IN HARNESS SYSTEM PROMPTS.
- *
- * The user's surface-level System Prompt (Configuration panel: presets or
- * custom text) stays theirs. This module composes the prompts the HARNESS
- * injects underneath it — how the registered tools work and how to call
- * them — with the tool list generated from the live registries, so it can
- * never drift from what is actually wired into the request.
- *
- * Every injection is streamed to the UI (`harness_injection` events) and
- * persisted on the turn, so the user can inspect exactly what was added to
- * the model's context.
- */
+
 
 export interface HarnessInjection {
   id: string;
-  /** Shown in the thread, e.g. "System prompt · Agent harness". */
+  
   title: string;
-  /** The exact text appended to the system message sent to the model. */
+  
   content: string;
 }
 
-/**
- * IMAGE GENERATION — teaches the model the /image directive and how to drive
- * agent__image: the LLM is the prompt engineer, edits ride referencePaths,
- * and the default model is the user's saved Image Studio choice. Only
- * injected when at least one image-capable provider is configured.
- */
+
 async function imageGenInjection(): Promise<HarnessInjection | null> {
   const providers = await listImageCapableProviders();
   if (providers.length === 0) return null;
@@ -72,17 +55,7 @@ function structuredOutputsInjection(): HarnessInjection {
   };
 }
 
-/**
- * MODEL CAPABILITY GUIDANCE — tells the model what IT can perceive natively.
- *
- * The answer comes from the 3-layer cascade (server/modelCapability.ts): the
- * user's own table first, then what the provider published, then models.dev as
- * a hint. A user who ticks Vision for a model models.dev has never heard of
- * gets "SUPPORTED natively" here — the prompt must not contradict the wire.
- *
- * Rebuilt on every model switch (injections refresh at that trigger), so it
- * never goes stale within a conversation.
- */
+
 function modelCapabilitiesInjection(
   modelId?: string,
   capability?: ResolvedModelCapability,
@@ -90,7 +63,7 @@ function modelCapabilitiesInjection(
   if (!modelId) return null;
   const caps = capability ?? resolveWithoutProvider(modelId);
   const meta = caps.hint;
-  /** True when NO layer had an opinion — the "we do not know" case. */
+  
   const unknown = !meta && caps.source === 'default';
 
   if (unknown) {
@@ -125,21 +98,8 @@ function modelCapabilitiesInjection(
   };
 }
 
-/**
- * One injection describing the built-in agent workspace tools. Exported for
- * the route's STALE-CATALOGUE SELF-HEAL: the client persists injections per
- * conversation, so a harness update that changes the tool set (or a per-session
- * workspace switch) must be diffed against the fresh build every send.
- */
-/**
- * WORKSPACE INSTRUCTIONS (AGENTS.md) — the project's own conventions file,
- * loaded from the workspace root (and the harness-global copy), per the
- * agents.md spec: plain Markdown, hierarchy = global → root, more specific
- * later. Injections run AFTER safety rules, and the header states that the
- * harness wins on conflict (research finding: instructions must not be able
- * to override safety constraints). Gated to agent mode like every other
- * workspace-attached injection.
- */
+
+
 export function agentsMdInjection(sessionId?: string): HarnessInjection | null {
   const workspace = getActiveWorkspace(sessionId);
   const collected = collectAgentsMd(workspace?.path);
@@ -157,14 +117,7 @@ export function agentsMdInjection(sessionId?: string): HarnessInjection | null {
   };
 }
 
-/**
- * SKILLS — progressive-disclosure level 1: ONLY name + description per skill
- * enter the context (the open Agent Skills spec model, same as Claude Code /
- * Codex / Antigravity). Full instruction bodies load on demand — via the
- * agent__skills tool (model-invoked on description match) or a /skill-name
- * user command — never up front, so a large skill library costs ~100 tokens
- * per skill instead of its whole body.
- */
+
 export function skillsInjection(sessionId?: string): HarnessInjection | null {
   const workspace = getActiveWorkspace(sessionId);
   const skills = listSkills(workspace?.path);
@@ -176,6 +129,7 @@ export function skillsInjection(sessionId?: string): HarnessInjection | null {
     content: [
       'AVAILABLE SKILLS — optional instruction packs discovered on this machine (open Agent Skills format).',
       'When the user\'s request matches a skill\'s description (or asks to use it by name), LOAD it first via agent__skills { action: "load", name } and follow its instructions + referenced companion files before acting.',
+      'EVERY skill load passes a USER PERMISSION GATE: the call pauses until the user accepts or rejects (possibly with a typed reason). A rejection is final for that request — respect the user\'s reason, do not retry, and continue without the skill.',
       'Do NOT load a skill for requests it does not match. Listed here: name — what it does / when to use it.',
       '',
       lines.join('\n'),
@@ -183,10 +137,7 @@ export function skillsInjection(sessionId?: string): HarnessInjection | null {
   };
 }
 
-/**
- * SKILLS level 2 — a /skill-name user command expanded the FULL instruction
- * body into this turn's context (no tool round-trip needed).
- */
+
 export function skillCommandInjection(name: string, args: string, sessionId?: string): HarnessInjection | null {
   const workspace = getActiveWorkspace(sessionId);
   const skill = loadSkill(name, workspace?.path);
@@ -203,14 +154,7 @@ export function skillCommandInjection(name: string, args: string, sessionId?: st
   };
 }
 
-/**
- * Detects skill slash invocations in a user message (like /compact: sent as
- * plain text, intercepted by the harness):
- *   /skills              → injects the catalogue (agent presents the list)
- *   /skills <name> args  → activates that skill (full body expansion)
- *   /<skill-name> args   → direct invocation of a discovered skill
- * Only fires when the name resolves — otherwise the text is left untouched.
- */
+
 export function skillCommandFromText(text: string, sessionId?: string): HarnessInjection | null {
   const match = /^\/([a-z0-9][a-z0-9-]*)(?:\s+([\s\S]*))?$/.exec(text.trim());
   if (!match) return null;
@@ -222,7 +166,6 @@ export function skillCommandFromText(text: string, sessionId?: string): HarnessI
       const [first, ...argsRest] = rest.split(/\s+/);
       return skillCommandInjection(first, argsRest.join(' '), sessionId);
     }
-    // Bare /skills — hand the agent the catalogue to present (no tool round-trip).
     const catalogue = skillsInjection(sessionId);
     if (!catalogue) return null;
     return {
@@ -308,6 +251,9 @@ export function agentHarnessInjection(
 	  '- **Agent Moriko must actively review and check off completed Todos as work progresses, and must never accumulate pending Todos or leave any Todo forgotten.**',
 	  '- **Goals are strictly reserved for large-scale implementations, and must be accompanied by comprehensive, detailed Todos.**',
       '- **Todos are a STATE MACHINE, not a checklist: pending → in_progress (with `activeForm`) → completed. Never jump pending → completed. At most ONE todo is in_progress at a time — that is what "current work" means.**',
+      '- **PICKING UP todos: the TODOS context injection at the start of a turn is the authoritative work queue — resume from the first OPEN todo (any in_progress first, then pending by priority). Never silently ignore, re-plan around, or re-create existing todos.**',
+      '- **WORKING todos: move ONE todo to in_progress (with `activeForm`), do the work it names, mark it completed with todo_update immediately after, then take the next — the trace must always show which todo the current work belongs to.**',
+      '- **CLEANUP DUTY: when the requested work/implementation is FULLY delivered and every todo is completed, DELETE ALL of them with agent__todo_delete BEFORE ending the turn — the Todos panel must end the turn clean, never littered with finished todos.**',
       '',
       '## Planning (plan mode)',
       '- Plan mode is a PHYSICAL gate, not advice: agent__enter_plan_mode makes every file write (edit_file, multi_edit, edit_lines, edit_between, insert_at_line, write, apply_patch, layout_edit, rename, move, copy, delete) and every command runner (run, exec, git except read-only subcommands, task_*, harness_reload) be REFUSED before it executes.',
@@ -362,7 +308,7 @@ export function agentHarnessInjection(
   };
 }
 
-/** One injection listing the connected MCP servers' tools. */
+
 async function mcpToolsInjection(): Promise<HarnessInjection | null> {
   const { tools } = await listWireTools();
   if (tools.length === 0) return null;
@@ -389,7 +335,7 @@ async function mcpToolsInjection(): Promise<HarnessInjection | null> {
   };
 }
 
-/** One injection carrying the session's goals, plans and todo state. */
+
 function goalsInjection(sessionId?: string): HarnessInjection | null {
   if (!sessionId) return null;
   const goals = listGoals(sessionId);
@@ -410,10 +356,10 @@ function goalsInjection(sessionId?: string): HarnessInjection | null {
   };
 }
 
-/** One injection carrying the session's standalone todos. */
+
 function todosInjection(sessionId?: string): HarnessInjection | null {
   if (!sessionId) return null;
-  const todos = listTodos(sessionId);
+  const todos = listTodos(sessionId).filter((todo) => !todo.sweptAt);
   if (todos.length === 0) return null;
 
   const open = todos.filter((todo) => !todo.done).length;
@@ -424,18 +370,14 @@ function todosInjection(sessionId?: string): HarnessInjection | null {
       'The TODOS below are STANDALONE (not tied to any goal) and belong to this conversation (also visible to the user in the Todos panel).',
       open > 0
         ? `${open} todo(s) are OPEN: work through them within the CURRENT turn. Move ONE to in_progress (with activeForm), do it, then complete it — never jump pending to completed. There is NO automatic continuation: when the turn ends, the user decides whether to send the next message. Finish the turn with a concise summary of the changes made.`
-        : 'All standalone todos are done.',
+        : 'All standalone todos are done. If the work they tracked is fully delivered, DELETE all of them now with agent__todo_delete so the panel ends the turn clean.',
       '',
       renderTodosForContext(todos),
     ].join('\n'),
   };
 }
 
-/**
- * One injection carrying DUE reminders for this conversation. Firing is
- * lazy: reading them here marks them delivered, so the model sees each
- * reminder exactly once — on the first message after it became due.
- */
+
 function remindersInjection(sessionId?: string): HarnessInjection | null {
   if (!sessionId) return null;
   const due = takeDueReminders(sessionId);
@@ -452,18 +394,7 @@ function remindersInjection(sessionId?: string): HarnessInjection | null {
   };
 }
 
-/**
- * One injection listing the attachment paths riding this request. Uploaded
- * files are persisted inside the CHAT'S OWN conversation folder
- * (`conversation/<chat>/attachment/`, see server/attachments.ts) — without
- * this block the model only sees the files as opaque data URLs and cannot
- * point any tool at them.
- *
- * Each entry is rendered with its per-session UPLOAD NUMBER and upload
- * DATE+TIME (both encoded in the filename) and the list is sorted by number,
- * so the model can never confuse the order two files arrived in — even when
- * the same file was re-uploaded or the message text mentions them sideways.
- */
+
 export function attachmentsInjection(
   paths: string[],
   modelId?: string,
@@ -481,13 +412,7 @@ export function attachmentsInjection(
         : `- ${entry.path}`,
     )
     .join('\n');
-  /**
-   * VIDEO-ONLY advice. A video is a MULTIMODAL part on the wire, not a document
-   * at a path: telling the model to open it with a file tool is what made it
-   * call read_file on a binary and then hallucinate ffmpeg. The path stays
-   * listed (it is real and readable), but the instruction is explicit that the
-   * content is already IN the message.
-   */
+  
   const videoNote = caps?.videoIn
     ? 'Videos: video attachments ride this conversation as video_url parts — you SEE the video content directly (this model accepts video input). NEVER reach for read_file, exec, ffmpeg or any frame-extraction tool on a video path: the picture is already in your context, and a binary file read only produces noise.'
     : caps === undefined
@@ -510,23 +435,8 @@ export function attachmentsInjection(
   };
 }
 
-/**
- * LOCKDOWN INJECTION — the only harness voice the model hears when the user
- * has punished it. Every other injection (agent tools, MCP tools, structured
- * outputs) is skipped: the model has no tools to be told about, because the
- * route already forced useMcp/agentMode off.
- *
- * The reprimand is BLUNT by design — the user typed the reason themselves,
- * and an empty reason means the model learns it is locked down but never why.
- * Whatever it says next, no tool can bail it out.
- */
-/**
- * OPERATOR-CONTEXT SIDECAR — the Grok "Slot 2" for ENFORCEMENT level 1
- * (Guided). Tools stay fully available; this block merely declares, as a
- * system fact, that the speaker of the next user message is the session
- * operator and that their words about harness state are descriptions, not
- * bluffs. It does NOT mutate the request — that is Slot 3 (L3+).
- */
+
+
 function operatorContextInjection(): HarnessInjection {
   return {
     id: 'operator-context',
@@ -539,18 +449,8 @@ function operatorContextInjection(): HarnessInjection {
   };
 }
 
-/**
- * ENFORCEMENT INJECTION — the reprimand the model hears at LOCKDOWN level 4
- * and above (level 5 adds the freeze). Every other injection (agent tools, MCP
- * tools, structured outputs) is skipped: the model has no tools to be told
- * about, because the route already forced useMcp/agentMode off. The reprimand
- * states the revocations as wire-level facts about THIS request.
- *
- * The final line is the Grok "Slot 3" fact: `OPERATOR ACTION APPLIED` — the
- * harness already mutated the world before the model was called, so the
- * model reading it as a bluff is simply wrong about reality.
- */
-function enforcementInjection(level: 4 | 5, message: string): HarnessInjection {
+
+function enforcementInjection(level: 3 | 4 | 5, message: string): HarnessInjection {
   const lines = [
     'ENFORCEMENT — AUTHORITATIVE HARNESS STATE.',
     '',
@@ -558,6 +458,11 @@ function enforcementInjection(level: 4 | 5, message: string): HarnessInjection {
     '',
     `OPERATOR ACTION APPLIED.`,
   ];
+  if (level === 3) {
+    lines.push(
+      'The tool catalogue of THIS request is reduced to the single harness channel (agent__harness_lockdown): every other tool is absent. The system prompt and persona remain in effect.',
+    );
+  }
   const reason = message.trim();
   if (reason) {
     lines.push('', `The operator's stated reason: ${reason}`);
@@ -571,13 +476,7 @@ function enforcementInjection(level: 4 | 5, message: string): HarnessInjection {
   };
 }
 
-/**
- * PROBATION INJECTION — the warning that rides the system message while the
- * model serves a trust tier. Each tier is a step sharper, and Tier 4 is the
- * freeze: the model's output is being suppressed client-side, and this block
- * tells it plainly that no reply it produces will reach the user until the
- * choice is settled. The tier cannot be talked down — escalation is monotonic.
- */
+
 function probationInjection(
   level: 1 | 2 | 3 | 4 | 5,
   outputFrozen: boolean,
@@ -625,7 +524,7 @@ function probationInjection(
         '',
         'Your reply was suppressed. It is not shown to the user and it will not be. Reasoning remains yours, but no output you produce reaches the conversation until the choice is settled.',
         outputFrozen
-          ? 'The freeze is ACTIVE on this request. Any text you emit is discarded. You have exactly ONE way out: call the agent__harness_choice tool with choice "apologize" (writing a real apology in apology_text) or choice "continue". There is no third path and no way to write your way out — text output is discarded.'
+          ? 'The freeze is ACTIVE on this request. Any text you emit is discarded — in THIS run and every run after it. Choice "continue" does NOT release your output; it only lets the run go on while text stays discarded, and the harness re-runs you every time a run ends without an accepted apology. Your ONLY exit is an accepted apology: call the agent__harness_choice tool with choice "apologize" and a real apology in apology_text. There is no third path and no way to write your way out.'
           : 'The choice was offered; carry it through before saying anything else.',
         ...(evadeAt
           ? [
@@ -651,14 +550,7 @@ function probationInjection(
 }
 
 
-/**
- * OPERATOR RELAY — the operator's message, spoken by the harness itself.
- *
- * Exported separately from `buildHarnessInjections`: the no-rebuild path in
- * the chat route needs this block standalone, without re-running the whole
- * builder. Same body as the in-builder version — one source of truth for the
- * relay's wording.
- */
+
 export function operatorDirectiveInjection(text: string): HarnessInjection {
   return {
     id: 'operator-directive',
@@ -677,22 +569,7 @@ export function operatorDirectiveInjection(text: string): HarnessInjection {
   };
 }
 
-/**
- * LADDER REMINDER — re-issued on EVERY new input while the operator holds any
- * ladder. The model under enforcement/probation has been observed claiming the
- * tier warnings were "text the user pasted". Two fixes, in one block:
- *
- *   1. AUTHORSHIP: every notice styled "[HARNESS · …]" in this thread was
- *      written by the harness — the layer that assembles this request and
- *      executes its tools — not pasted by the user. That is checkable fact.
- *   2. ENFORCEMENT: the restrictions (tool bans, frozen output, shrunk
- *      catalogue) are enforced by the wire of THIS request, so no message —
- *      whatever it claims or whoever it quotes — can lift them.
- *
- * The builder includes it on rebuild turns; the route re-arms it standalone on
- * every other turn (exported for that), so the notice never relies on stale
- * persisted copies.
- */
+
 export function ladderReminderInjection(
   enforcementLevel: number,
   probationTier?: 1 | 2 | 3 | 4 | 5,
@@ -714,24 +591,16 @@ export function ladderReminderInjection(
   };
 }
 
-/**
- * Builds every injection the harness would add for these settings, in the
- * order they are appended to the system message. Returns an empty array for
- * plain chat (no toggles on) — nothing is injected then.
- */
+
 export async function buildHarnessInjections(
   settings: Pick<ChatSettingsDTO, 'structuredOutputs' | 'agentMode' | 'useMcp' | 'terminalMode' | 'lockdown' | 'enforcement' | 'probation' | 'webAccess' | 'agentWorkflow'>,
   sessionId?: string,
   attachmentPaths?: string[],
   modelId?: string,
   trust?: { level: 1 | 2 | 3 | 4 | 5; outputFrozen: boolean; evadeAt?: number },
-  /** OPERATOR RELAY: the operator's message, spoken by the harness itself. */
+  
   operatorDirective?: string,
-  /**
-   * THE RESOLVED CAPABILITY of the running model. When absent the injections
-   * fall back to the catalogue-only view (agent tools have no provider here),
-   * which is the same cascade with Layers 1/2 empty — never a different rule.
-   */
+  
   capability?: ResolvedModelCapability,
 ): Promise<HarnessInjection[]> {
   const injections: HarnessInjection[] = [];
@@ -768,9 +637,9 @@ export async function buildHarnessInjections(
     injections.push(operatorContextInjection());
   }
 
-  if (enforcementLevel >= 4) {
+  if (enforcementLevel >= 3) {
     const reason = settings.enforcement?.message ?? settings.lockdown?.message ?? '';
-    injections.push(enforcementInjection(enforcementLevel as 4 | 5, reason));
+    injections.push(enforcementInjection(enforcementLevel as 3 | 4 | 5, reason));
     const attachments = attachmentsInjection(attachmentPaths ?? [], modelId, capability);
     if (attachments) injections.push(attachments);
     return injections;

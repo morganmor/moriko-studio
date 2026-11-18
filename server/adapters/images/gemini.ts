@@ -1,14 +1,4 @@
-/**
- * Google Gemini image adapter (Nano Banana family).
- *
- * Gemini answers images through `:generateContent` with
- * `responseModalities: ["TEXT", "IMAGE"]`; the picture arrives as an
- * `inlineData` part (base64). The client contract is async, so the synchronous
- * call is wrapped in a server-side local job — same pattern as openai-sync.
- *
- * Reference images ride as `inlineData` parts on the user turn: that is how
- * Nano Banana edits and why `maxReferences` is non-zero here.
- */
+
 
 import { randomUUID } from 'node:crypto';
 
@@ -40,13 +30,13 @@ function rememberJob(id: string, job: LocalJob): void {
   localJobs.set(id, job);
 }
 
-/** Aspect ratios the `ImageConfig.aspectRatio` field accepts. */
+
 const SUPPORTED_RATIOS = new Set([
   '1:1', '1:4', '4:1', '1:8', '8:1', '2:3', '3:2', '3:4',
   '4:3', '4:5', '5:4', '9:16', '16:9', '21:9',
 ]);
 
-/** Longest edge → the `imageSize` bucket Gemini understands. */
+
 function imageSizeFor(width?: number, height?: number): string | undefined {
   if (!width || !height) return undefined;
   const long = Math.max(width, height);
@@ -56,7 +46,7 @@ function imageSizeFor(width?: number, height?: number): string | undefined {
   return '4K';
 }
 
-/** `data:image/png;base64,…` → the inlineData part Gemini expects. */
+
 function toInlineData(dataUrl: string): { inlineData: { mimeType: string; data: string } } | null {
   const match = /^data:([^;,]+);base64,(.*)$/s.exec(dataUrl.trim());
   if (!match) return null;
@@ -200,7 +190,6 @@ export const geminiImageAdapter: ImageAdapter = {
     resultFormat: 'b64',
     maxImages: 1,
     supportsNegativePrompt: false,
-    // Nano Banana edits up to 14 references; 8 is the practical harness cap.
     maxReferences: 8,
   },
 

@@ -1,9 +1,4 @@
-/**
- * Prompt fragments (Addon v2, A3/A4) — the per-session successor of the
- * global context providers (A-09). Addons register a fragment builder; the
- * system prompt asks for fragments FOR ONE SESSION, in order, each within a
- * character budget. Empty fragments never render.
- */
+
 
 export interface PromptFragmentCtx {
   sessionId?: string;
@@ -44,7 +39,7 @@ export interface BuiltFragment {
   truncated: boolean;
 }
 
-/** Build every applicable fragment for one session, each under its budget. */
+
 export async function buildPromptFragments(ctx: PromptFragmentCtx): Promise<BuiltFragment[]> {
   const out: BuiltFragment[] = [];
   for (const fragment of listPromptFragments()) {

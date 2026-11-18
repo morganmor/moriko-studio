@@ -1,21 +1,9 @@
-/**
- * agent__enter_plan_mode / agent__exit_plan_mode — the physical half of the
- * plan-mode gate (6A).
- *
- * `enter` is cheap and reversible: it flips the session posture so every
- * mutation tool is refused before its handler runs. `exit` is the deliberate
- * second decision — it demands a STRUCTURED plan (files, approach,
- * verification) because an exit with nothing behind it teaches the model that
- * the gate is a formality.
- *
- * Both tools stay callable while plan mode is active. A gate with no key is a
- * trap, not a discipline.
- */
+
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, bool } from './shared.js';
 import { enterPlanMode, exitPlanMode, planModeState, rsatLock } from '../plan-mode.js';
 
-/** One-line-per-file rendering shared by the confirmation and the injection. */
+
 export function renderPlanFiles(files: string[]): string {
   return files.map((file) => '  - ' + file).join('\n');
 }
@@ -41,7 +29,7 @@ export async function enterPlanModeTool(
     reason ? 'Reason: ' + reason : 'No reason recorded.',
     '',
     'From now until you exit, these are REFUSED before they execute: every file write ' +
-      '(edit_file, multi_edit, edit_lines, edit_between, insert_at_line, write, apply_patch, ' +
+      '(edit_file, multi_edit, edit_lines, edit_between, insert_at_line, write, overwrite, apply_patch, ' +
       'layout_edit, rename, move, copy, delete, vault_restore, undo) and every command runner ' +
       '(run, exec, git except read-only subcommands, task_*, harness_reload).',
     '',
@@ -87,8 +75,6 @@ export async function exitPlanModeTool(
     };
   }
 
-  // RSAT may still hold the workspace even after the plan flag lifts — say so
-  // now rather than letting the next edit fail with a surprise.
   const lock = rsatLock(ctx.sessionId);
 
   if (dryRun) {
@@ -143,7 +129,7 @@ function renderPlan(
   return lines.join('\n');
 }
 
-/** Read-only status: useful before deciding whether to enter or exit. */
+
 export async function planStatusTool(
   _args: Record<string, unknown>,
   ctx: AgentToolContext,

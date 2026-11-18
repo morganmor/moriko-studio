@@ -1,16 +1,4 @@
-/**
- * agent__todo_create / agent__todo_update / agent__todo_list /
- * agent__todo_delete — STANDALONE todos (not tied to a goal).
- *
- * The agent must create todos whenever it works on user input. Goals are
- * optional (large-scale work only). These tools let the agent track its work
- * without spinning up a full goal.
- *
- * The store enforces the two data invariants (single active focus, no
- * pending-to-completed shortcut). This layer adds the third, which needs to
- * see the BUILD: a todo cannot be completed while a file this session edited
- * still carries a syntax diagnostic the edit introduced.
- */
+
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
 import { str, truncateOutput, requireGoalSession } from './shared.js';
 import {
@@ -50,10 +38,7 @@ export async function todoCreateTool(args: Record<string, unknown>, ctx: AgentTo
   }
 }
 
-/**
- * The build-aware half of the completion gate. Returns a refusal, or null when
- * completing is honest.
- */
+
 function falseCompletionDenial(sessionId: string, todoId: string): string | null {
   const unresolved = listUnresolvedDiagnostics(sessionId);
   if (unresolved.length === 0) return null;
@@ -96,10 +81,8 @@ export async function todoUpdateTool(args: Record<string, unknown>, ctx: AgentTo
     patch.priority = priority as TodoPriority;
   }
 
-  // Resolve the requested state up front so the build check runs BEFORE any
-  // mutation. The data invariants stay in the store — it owns them, and
-  // duplicating them here would let the two drift apart.
   const current = listTodos(sessionId).find((entry) => entry.id === todoId);
+  let completedFromPending = false;
   if (current) {
     let target: TodoState;
     try {
@@ -107,7 +90,8 @@ export async function todoUpdateTool(args: Record<string, unknown>, ctx: AgentTo
     } catch (error) {
       return { ok: false, isError: true, text: error instanceof Error ? error.message : 'todo_update failed.' };
     }
-    if (target === 'completed' && current.state === 'in_progress') {
+    if (target === 'completed' && current.state !== 'completed') {
+      completedFromPending = current.state === 'pending';
       const denial = falseCompletionDenial(sessionId, todoId);
       if (denial) return { ok: false, isError: true, errorCode: 'false_completion_blocked', text: denial };
     }
@@ -116,7 +100,8 @@ export async function todoUpdateTool(args: Record<string, unknown>, ctx: AgentTo
   try {
     const todo = updateTodo(sessionId, todoId, patch);
     ctx.onTodosChanged?.(sessionId);
-    return { ok: true, isError: false, text: 'Todo updated.\n' + renderTodoSummary(todo) };
+    const healed = completedFromPending ? ' (pending → completed: explicit intent, build gate passed)' : '';
+    return { ok: true, isError: false, text: 'Todo updated.' + healed + '\n' + renderTodoSummary(todo) };
   } catch (error) {
     return { ok: false, isError: true, text: error instanceof Error ? error.message : 'todo_update failed.' };
   }

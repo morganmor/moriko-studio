@@ -1,11 +1,4 @@
-/**
- * agent__fetch — read a PUBLIC web page or text resource over http(s) and
- * get its content as text/markdown. Binary responses are rejected (use
- * download for files). Local/private network addresses are blocked.
- *
- * agent__download — download a file from a public http(s) URL INTO the
- * workspace (never overwrites unless overwrite: true).
- */
+
 import { mkdirSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { HarnessToolResult, AgentToolContext } from './shared.js';
